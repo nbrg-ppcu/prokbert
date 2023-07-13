@@ -201,6 +201,15 @@ def get_shift_counts(tokenizer_params, Nm):
     """
     Calculate the number of token required for masking at leasn Nm nucleotide position
 
+    :param tokenizer_params: Dictionary containing tokenization parameters.
+    :type: dict
+
+    :param Nm: Number of masking nucleotides.
+    :type: int
+
+    return: Number of shifts required.
+    :rtype: int
+
     Parameters:
     tokenizer_params (dict): Dictionary containing tokenization parameters.
     Nm (int): Number of masking nucleotides.
@@ -526,23 +535,6 @@ def get_prediction_results_for_segment(act_gene, basename,  act_interval,N_maske
     segment_pred_results = pd.concat(segment_pred_results_ls)
     
     return segment_pred_results
-    
-    
-def get_split_intevals(sequence, segment_length):
-    """
-    Splits the sequence into intervals of specified length.
-
-    Parameters:
-    sequence (str): DNA sequence.
-    segment_length (int): Length of the segment.
-
-    Returns:
-    list: List of tuples where each tuple represents an interval in the sequence.
-    """
-
-    return [(i, min( i+segment_length, len(sequence))) for i in range(0, len(sequence), segment_length)]
-    
-
 
 
 

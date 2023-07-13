@@ -25,7 +25,6 @@ import pathlib
 from distutils.dir_util import copy_tree
 import os
 import pathlib
-from prokbert.dev_pretraining_eval_lib import get_split_intevals
 import torch
 
 def get_non_empty_files(start_path, extension='.fasta'):
@@ -795,6 +794,22 @@ def convert_ids2seq(x, vocabmap, lca_shift, kmer):
         
         seqs.append(act_seq)
     return seqs
+
+def get_split_intevals(sequence, segment_length):
+    """
+    Splits the sequence into intervals of specified length.
+
+    Parameters:
+    sequence (str): DNA sequence.
+    segment_length (int): Length of the segment.
+
+    Returns:
+    list: List of tuples where each tuple represents an interval in the sequence.
+    """
+
+    return [(i, min( i+segment_length, len(sequence))) for i in range(0, len(sequence), segment_length)]
+    
+
 
 ################## Tokeninization of sequences with ids and labels #####################
 
