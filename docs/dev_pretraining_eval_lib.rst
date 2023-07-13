@@ -11,4 +11,4 @@ This part is the eval of pretriain
 Functions
 ~~~~~~~~~~~~~~~~~~~~~~~
 
-.. autosummary:: prokbert.dev_pretraining_eval_lib.get_shift_counts
+.. autofunction:: prokbert.dev_pretraining_eval_lib.get_shift_counts
