@@ -1,0 +1,7 @@
+# Dependencies
+
+pandas
+biopython
+gzip
+intervaltree
+umap-learn
