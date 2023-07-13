@@ -11,3 +11,9 @@ Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor i
 
    Home <self>
    sequtils
+   dnadatacollator
+   dnadatasets
+   dnatokenizer
+   evalutils
+   preproclib
+   dev_pretraining_eval_lib
