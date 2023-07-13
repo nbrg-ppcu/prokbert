@@ -202,10 +202,10 @@ def get_shift_counts(tokenizer_params, Nm):
     Calculate the number of token required for masking at leasn Nm nucleotide position
 
     :param tokenizer_params: Dictionary containing tokenization parameters.
-    :type: dict
+    :type tokenizer_params: dict
 
     :param Nm: Number of masking nucleotides.
-    :type: int
+    :type Nm: int
 
     return: Number of shifts required.
     :rtype: int
