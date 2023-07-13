@@ -16,9 +16,8 @@ requires-python = ">=3.7"
 dependencies = [
   "biopython>=1.79",
   "pandas>=1.4.4",
-  "gzip",
-  "intervaltree",
-  "umap-learn",
+  "intervaltree>=0.0.1",
+  "umap-learn>=0.0.1",
 ]
 classifiers = [
     "Programming Language :: Python :: 3",
