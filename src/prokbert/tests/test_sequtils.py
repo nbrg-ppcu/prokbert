@@ -23,6 +23,25 @@ class TestSeqUtils(unittest.TestCase):
         SeqIO.write(self.sequences, self.test_fasta_filename, "fasta")
         with gzip.open(self.test_fasta_gz_filename, 'wt') as f_out:
             SeqIO.write(self.sequences, f_out, "fasta")
+        
+        # Define test parameters
+        self.params1 = {
+            'segmentation': {
+                'segmentation_type': 'contigous',
+                'shifts': 2,
+                'kmer': 5,
+                'minLs': 10
+            }
+        }
+        
+        self.params2 = {
+            'segmentation': {
+                'segmentation_type': 'covering',
+                'shifts': 2,
+                'kmer': 5,
+                'minLs': 10
+            }
+        }
 
     def tearDown(self):
         # Remove the test fasta file
@@ -95,6 +114,31 @@ class TestSeqUtils(unittest.TestCase):
         self.assertEqual(len(sequences), 4)  # 2 sequences * 2 (forward + reverse complement)
         self.assertEqual(sequences.iloc[0]['sequence'], "ATGC")
         self.assertEqual(sequences.iloc[1]['sequence'], "GCAT")  # Reverse complement of "ATGC"
+
+    
+    def test_segmentate_single_sequence(self):
+        # Test with a single sequence without header, contigous
+        sequence = "ATGCGATCGTAGCTAGCTAGC"
+        segments = segmentate_single_sequence(sequence, self.params1, AddedHeader=False)
+        expected_segments = ["ATGCG", "ATCGT", "AGCTA", "GCTAG"]
+        self.assertEqual(segments, expected_segments)
+        
+        # Test with a single sequence without header, covering
+        sequence = "ATGCGATCGTAGCTAGCTAGC"
+        segments = segmentate_single_sequence(sequence, self.params2, AddedHeader=False)
+        expected_segments = ['ATGCG', 'GCGAT', 'GATCG', 'TCGTA', 'GTAGC', 'AGCTA', 'CTAGC', 'AGCTA', 'CTAGC']
+        self.assertEqual(segments, expected_segments)
+
+        # Test with a single sequence with header
+        sequence_with_header = ['test', 'test sequence', 'test.fasta', 'ATGCGATCGTAGCTAGCTAGC', 'forward']
+        segments_with_header = segmentate_single_sequence(sequence_with_header, self.params1, AddedHeader=True)
+        expected_segments_with_header = ["ATGCG", "ATCGT", "AGCTA", "GCTAG"]
+        self.assertEqual(segments_with_header, expected_segments_with_header)
+
+        # Test with a single sequence that doesn't meet the length constraint
+        short_sequence = "ATGC"
+        segments_short_sequence = segmentate_single_sequence(short_sequence, self.params1)
+        self.assertEqual(segments_short_sequence, [])
 
 
 if __name__ == '__main__':
