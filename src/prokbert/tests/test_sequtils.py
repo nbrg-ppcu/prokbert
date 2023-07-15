@@ -7,9 +7,10 @@ import gzip
 import sys
 
 from os.path import join
-prokbert_base_path = '/home/ligeti/gitrepos/prokbert'
-sys.path.insert(0,join(prokbert_base_path))
-from prokbert.sequtils import *
+#prokbert_base_path = '/home/ligeti/gitrepos/prokbert'
+#sys.path.insert(0,join(prokbert_base_path))
+#from prokbert.sequtils import *
+from sequtils import *
 
 #from ..sequtils import *
 
@@ -140,6 +141,31 @@ class TestSeqUtils(unittest.TestCase):
         segments_short_sequence = segmentate_single_sequence(short_sequence, self.params1)
         self.assertEqual(segments_short_sequence, [])
 
+    def test_segmentate_sequences_from_list(self):
+        # Test with a list of sequences without header
+        sequences = ["ATGCGATCGTAGCTAGCTAGC", "CGTAGCTAGCTAGCTAGCTA"]
+        segmentated_sequences = segmentate_sequences_from_list(sequences, self.params1)
+        expected_segmentated_sequences = [["ATGCG", "ATCGT", "AGCTA", "GCTAG"],
+                                          ["CGTAG", "CTAGC", "TAGCT", "AGCTA"]]
+        self.assertEqual(segmentated_sequences, expected_segmentated_sequences)
+
+        # Test with a list of sequences with header
+        sequences_with_header = [['test1', 'test sequence 1', 'test1.fasta', 'ATGCGATCGTAGCTAGCTAGC', 'forward'],
+                                 ['test2', 'test sequence 2', 'test2.fasta', 'CGTAGCTAGCTAGCTAGCTA', 'reverse']]
+        segmentated_sequences_with_header = segmentate_sequences_from_list(sequences_with_header, self.params2, AddedHeader=True)
+        expected_segmentated_sequences_with_header = [['ATGCG', 'GCGAT', 'GATCG', 'TCGTA', 'GTAGC', 'AGCTA', 'CTAGC', 'AGCTA', 'CTAGC'],
+                                                     ["CGTAG", "TAGCT", "GCTAG", "TAGCT", "GCTAG", "TAGCT", "GCTAG", "TAGCT"]]
+        self.assertEqual(segmentated_sequences_with_header, expected_segmentated_sequences_with_header)
+
+        # Test with a list of sequences that doesn't meet the length constraint
+        short_sequences = ["ATGC", "CGT"]
+        segmentated_short_sequences = segmentate_sequences_from_list(short_sequences, self.params1)
+        self.assertEqual(segmentated_short_sequences, [])
+
+        # Test with a list of sequences that doesn't meet the length constraint
+        short_sequences = ["ATGC", "CGT", "ATGCGATCGTAGCTAGCTAGC"]
+        segmentated_short_sequences = segmentate_sequences_from_list(short_sequences, self.params1)
+        self.assertEqual(segmentated_short_sequences, [["ATGCG", "ATCGT", "AGCTA", "GCTAG"]])
 
 if __name__ == '__main__':
     unittest.main()
