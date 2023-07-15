@@ -166,142 +166,59 @@ def segmentate_single_sequence(sequence, params, AddedHeader=False): #  1 db sze
 #1db szegmens tokenizalasra fuggveny aztan kiterjeszteni
 #konnyu teszteles
 
-'''
-def segmentation_sequences_from_list_contigous(sequences, segm_params, fix_len=True, AddedHeader=False, minLs=80):
+
+def segmentate_sequences_from_list(sequences, params, AddedHeader=False):
     """ 
-    Cuts sequences from a list of sequences.
+    Cuts sequences into segments.
 
     Parameters:
     sequences (list): List of sequences. Each sequence is represented as a string if AddedHeader is False, or as a list[fasta_id, description, source_file, sequence, orientation] if AddedHeader is True.
-    segmentation_type (string): type of segmentation: contigous, covering, random
-    coverage (int): Number of characters to be covered in neighboring segments.
-    shifts (int): Number of characters to shift with to the next segment.
-    kmer (int): length of segments. If fix_len is False, used as a max length.
-    fix_len (bool, optional): If True, the lengths of the kmers are fix (kmer). Defaults to True.
+    segmentation_type (string): type of segmentation: contigous, covering
+    shifts (int): Number of characters to shift with to the next segment. Covered chars in neighbouring segmens = kmer-shifts
+    kmer (int): fix length of segments
     AddedHeader (bool, optional): If True, the fasta ID and description in the input is included. Defaults to False.
-    minLS (int, optional): minimum length of each sequence, the shorter ones will be ignored. Defaults to 80.
+    minLS (int, optional): minimum length (char) of each sequence, the shorter ones will be ignored. Defaults to 80.
 
     Returns:
-    list: The segmentated sequences. Each sequence is represented as a string.
+    list<list>: List of segmentated sequences, each represented as a list of segments.
     """
-    segmentation_type = segm_params['segmentation']['segmentation_type']
-    shifts = segm_params['segmentation']['shifts']
-    kmer = segm_params['segmentation']['kmer']
-    minLs = segm_params['segmentation']['minLs']
+    segmentation_type = params['segmentation']['segmentation_type']
+    shifts = params['segmentation']['shifts']
+    kmer = params['segmentation']['kmer']
+    minLs = params['segmentation']['minLs']
     
+    for v in params['segmentation']:
+        print(v, ': ', params['segmentation'][v])
+
     segmentated_sequences = []
-    for sequence in sequences:
+    
+    for sequence in sequences:   
         if AddedHeader:
             act_seq = sequence[3]  # Get the sequence from the input list
         else:
             act_seq = sequence
+        segments = []
     
         if len(act_seq) >= minLs:
-            segments = []
-            if (kmer - shifts-coverage*2) != 0:
-                raise ValueError("Kmer size, shifts, and coverage do not match. (kmer - shifts - 2*coverage) should be 0.")
-
-            if segmentation_type == 'covering':
-                if fix_len:
-                    first_segment = 'X' * coverage + act_seq[:kmer - coverage]
-                    segments.append(first_segment)
-                    for i in range(coverage, len(act_seq) - kmer + 1, shifts+coverage):
-                        if i + kmer + coverage > len(act_seq):
-                            last_segment = act_seq[i + kmer - shifts:] + 'X' * (kmer-len(act_seq[i + kmer - shifts:]))
-                            segments.append(last_segment)
-                            break
-                        segment = act_seq[i:i + kmer]
-                        segments.append(segment)
-                else:
-                    i = 0
-                    while (i < len(act_seq) - 3 + 1): #padding?
-                        segment_length = random.randint(3, kmer)  # Random length between 3 and kmer
-                        if i + segment_length > len(act_seq):
-                            segment = act_seq[i:]
-                        else: 
-                            segment = act_seq[i:i + segment_length]
-                        segments.append(segment)
-                        i += segment_length-coverage
-
-            elif segmentation_type == 'contigous': #no coverage
-                if fix_len:
-                    first_segment = 'X' * (kmer-kmer%2)/2 + act_seq[:(kmer-kmer%2)/2] #pad first kmer - necessary?
-                    segments.append(first_segment)
-                    for i in range((kmer-kmer%2)/2, len(act_seq) - 1, kmer):
-                        if i + kmer > len(act_seq):
-                            last_segment = act_seq[i:] + 'X' * (kmer-len(act_seq[i:])) #pad last segment to kmer size
-                            segments.append(last_segment)
-                            break
-                        segment = act_seq[i:i + kmer]
-                        segments.append(segment)
-                else:
-                    act_kmer = random.randint(3, kmer)
-                    for i in range(0, len(act_seq) - 1, act_kmer):
-                        if i + act_kmer > len(act_seq):
-                            last_segment = act_seq[i:]
-                            segments.append(last_segment)
-                            break
-                        segment = act_seq[i:i + act_kmer]
-                        act_kmer = random.randint(3, kmer)
-                        segments.append(segment)
-
-            elif segmentation_type == 'random':
-                if fix_len:
-                    first_X = random.randint(1, kmer-1)
-                    first_segment = 'X' * first_X + act_seq[:kmer - first_X]
-                    segments.append(first_segment)
-                    i = kmer - first_X
-                    while (i < len(act_seq) - kmer + 1):
-                        segment = act_seq[i:i + kmer]
-                        segments.append(segment)
-                        i += random.randint(1, kmer-1)
-                        if i + kmer > len(act_seq):
-                            segment = act_seq[i:] + 'X' * (i - len(act_seq) + kmer)
-                            segments.append(segment)
-                            break
-                else:
-                    act_kmer = random.randint(3, kmer)
-                    first_X = random.randint(1, act_kmer-1)
-                    first_segment = 'X' * first_X + act_seq[:act_kmer - first_X] #pad first kmer randomly
-                    segments.append(first_segment)
-                    i = act_kmer - first_X
-                    act_kmer = random.randint(3, kmer)
-                    while (i < len(act_seq) - act_kmer + 1):
-                        segment = act_seq[i:i + act_kmer]
-                        segments.append(segment)
-                        i += random.randint(1, act_kmer-1)
-                        act_kmer = random.randint(3, kmer)
-                        if i + act_kmer > len(act_seq):
-                            segment = act_seq[i:] + 'X' * (i - len(act_seq) + act_kmer) #pad last segment to kmer size
-                            segments.append(segment)
-                            break
-                            
+            if segmentation_type == 'contigous':
+                for i in range(0, len(act_seq) - kmer + 1, kmer):
+                    #if (i+kmer>len(act_seq))
+                    segment = act_seq[i:i + kmer]
+                    segments.append(segment)
+                        
+            elif segmentation_type == 'covering':
+                for i in range(0, len(act_seq) - kmer + 1, shifts):
+                    segment = act_seq[i:i + kmer]
+                    segments.append(segment)
+                    
             segmentated_sequences.append(segments)
-
+        
         else:
             print("Sequence ignored due to length constraint:", act_seq)
-
+    
     return segmentated_sequences
-
-def cut_sequences_from_list(sequences, params, fix_len=True, AddedHeader=False, minLs=80):
-    """ 
-    Cuts sequences from a DataFrame.
-
-    Parameters:
-    sequences (list): List of sequences. Each sequence is represented as a string if AddedHeader is False, or as a list[fasta_id, description, source_file, sequence, orientation] if AddedHeader is True.
-    segmentation_type (string): type of segmentation: contigous, covering, random
-    coverage (int): Number of characters to be covered in neighboring segments.
-    shifts (int): Number of characters to shift with to the next segment.
-    kmer (int): length of segments. If fix_len is False, used as a max length.
-    fix_len (bool, optional): If True, the lengths of the kmers are fix (kmer). Defaults to True.
-    AddedHeader (bool, optional): If True, the fasta ID and description in the input is included. Defaults to False.
-    minLS (int, optional): minimum length of each sequence, the shorter ones will be ignored. Defaults to 80.
-
-    Returns:
-    list: The segmentated sequences. Each sequence is represented as a string.
-    """
-    return segmentated_sequences
-
+    
+'''
 def process_line(line, kmer_size, Ls=512, max_prob=1):
     line_length = len(line)
     cuts = get_segment_sizes_without_overlap(length=line_length, kmer=kmer_size,max_prob=max_prob, max_length=Ls)
