@@ -116,11 +116,8 @@ def segmentate_single_sequence(sequence, params, AddedHeader=False): #  1 db sze
 
     Parameters:
     sequences (string/list): Each sequence is represented as a string if AddedHeader is False, or as a list[fasta_id, description, source_file, sequence, orientation] if AddedHeader is True.
-    segmentation_type (string): type of segmentation: contigous, covering
-    shifts (int): Number of characters to shift with to the next segment. Covered chars in neighbouring segmens = kmer-shifts
-    kmer (int): fix length of segments
+    params (dict): dictionary with parameters.
     AddedHeader (bool, optional): If True, the fasta ID and description in the input is included. Defaults to False.
-    minLS (int, optional): minimum length (char) of each sequence, the shorter ones will be ignored. Defaults to 80.
 
     Returns:
     list: The segmentated sequence, represented as a string.
@@ -173,11 +170,8 @@ def segmentate_sequences_from_list(sequences, params, AddedHeader=False):
 
     Parameters:
     sequences (list): List of sequences. Each sequence is represented as a string if AddedHeader is False, or as a list[fasta_id, description, source_file, sequence, orientation] if AddedHeader is True.
-    segmentation_type (string): type of segmentation: contigous, covering
-    shifts (int): Number of characters to shift with to the next segment. Covered chars in neighbouring segmens = kmer-shifts
-    kmer (int): fix length of segments
+    params (dict): dictionary with parameters.
     AddedHeader (bool, optional): If True, the fasta ID and description in the input is included. Defaults to False.
-    minLS (int, optional): minimum length (char) of each sequence, the shorter ones will be ignored. Defaults to 80.
 
     Returns:
     list<list>: List of segmentated sequences, each represented as a list of segments.
@@ -217,6 +211,61 @@ def segmentate_sequences_from_list(sequences, params, AddedHeader=False):
             print("Sequence ignored due to length constraint:", act_seq)
     
     return segmentated_sequences
+    
+    
+    
+def tokenize_sentence(sequences, params):
+    """ 
+    Tokenizes segmentated sequences.
+
+    Parameters:
+    sequences (list): List of sequences. Each sequence is represented as a list of kmers.
+    params (dict): dictionary with parameters.
+
+    Returns:
+    list<list>: List of segmentated sequences, each represented as a list of segments.
+    """
+    
+    vocabmap = params['tokenization']['vocabmap']
+    sentence_length = params['tokenization']['sentence_length']
+    min_sentence_size = params['tokenization']['min_sentence_size']
+    unkwon_tsh = params['tokenization']['unkwon_tsh']
+    
+    sentence_tokens = []
+    unkw_tsh_count = int(sentence_length*unkwon_tsh)
+    print(unkw_tsh_count)
+    for act_seq in sequences:
+        sentence = [vocabmap['[CLS]']]
+        unkcount=0
+        unkw_tsh_count = int(len(act_seq)*unkwon_tsh)
+
+        if len(act_seq) < min_sentence_size:
+            print('too short sent')
+            continue
+        for kmer in act_seq:
+            try:
+                sentence.append(vocabmap[kmer.upper()])
+            except KeyError:
+                sentence.append(vocabmap['[UNK]'])
+                unkcount+=1
+        if unkcount > unkw_tsh_count:
+            #print('skip sentence')
+            #print(act_seq)
+            continue
+        sentence.append(vocabmap['[SEP]'])
+        if len(act_seq) < sentence_length-2:
+            extra_padding_tokens_ct = sentence_length - len(act_seq) -2
+            for j in range(extra_padding_tokens_ct):
+                sentence.append(vocabmap['[PAD]'])
+        sentence_tokens.append(sentence)
+    return sentence_tokens
+    
+    
+    
+    
+    
+    
+    
     
 '''
 def process_line(line, kmer_size, Ls=512, max_prob=1):
