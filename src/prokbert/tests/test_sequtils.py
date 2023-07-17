@@ -5,6 +5,7 @@ from Bio.SeqRecord import SeqRecord
 from Bio import SeqIO
 import gzip
 import sys
+import collections
 
 from os.path import join
 #prokbert_base_path = '/home/ligeti/gitrepos/prokbert'
@@ -24,7 +25,17 @@ class TestSeqUtils(unittest.TestCase):
         SeqIO.write(self.sequences, self.test_fasta_filename, "fasta")
         with gzip.open(self.test_fasta_gz_filename, 'wt') as f_out:
             SeqIO.write(self.sequences, f_out, "fasta")
+            
+        self.kmers = [['AAAATC', 'AAAATG', 'AAAACA'], ['AAAAGA', 'AAAAGC', 'AAAAGT']]
         
+        self.vocab_file = 'vocab.txt'
+        self.vocab = collections.OrderedDict()
+        with open(self.vocab_file, "r", encoding="utf-8") as reader:
+            self.tokens = reader.readlines()
+        for index, token in enumerate(self.tokens):
+            token = token.rstrip("\n")
+            self.vocab[token] = index
+            
         # Define test parameters
         self.params1 = {
             'segmentation': {
@@ -32,6 +43,12 @@ class TestSeqUtils(unittest.TestCase):
                 'shifts': 2,
                 'kmer': 5,
                 'minLs': 10
+            },
+            'tokenization': {
+                'vocabmap': self.vocab,
+                'sentence_length': 8,
+                'min_sentence_size': 2,
+                'unkwon_tsh': 0.3
             }
         }
         
@@ -41,6 +58,12 @@ class TestSeqUtils(unittest.TestCase):
                 'shifts': 2,
                 'kmer': 5,
                 'minLs': 10
+            },
+            'tokenization': {
+                'vocabmap': self.vocab,
+                'sentence_length': 8,
+                'min_sentence_size': 2,
+                'unkwon_tsh': 0.3
             }
         }
 
@@ -166,6 +189,16 @@ class TestSeqUtils(unittest.TestCase):
         short_sequences = ["ATGC", "CGT", "ATGCGATCGTAGCTAGCTAGC"]
         segmentated_short_sequences = segmentate_sequences_from_list(short_sequences, self.params1)
         self.assertEqual(segmentated_short_sequences, [["ATGCG", "ATCGT", "AGCTA", "GCTAG"]])
+        
+        
+        
+    def test_tokenize_sentence(self):
+        # Call the function to tokenize the sequences
+        sentence_tokens = tokenize_sentence(self.kmers, self.params1)
+
+        # Assert the expected tokens
+        expected_tokens = [[2, 11, 12, 13, 3, 0, 0, 0], [2, 17, 19, 18, 3, 0, 0, 0]]
+        self.assertEqual(sentence_tokens, expected_tokens)
 
 if __name__ == '__main__':
     unittest.main()
