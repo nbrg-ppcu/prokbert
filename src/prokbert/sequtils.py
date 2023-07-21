@@ -2,24 +2,11 @@
 
 """ Library for sequence processing """
 
-#segmentation: -continuous
-# -random
-# -covering
-# -fix, continuous
-#params: length, max unknown tokens, type (covering, continuous, random), random: fix/random length
-#LCA: local context-aware tokenization
-#k-mer length, shift params
-#Ls - tokenre ertve, jobb nev
-#minLs - nucleotidra, jobb nev
-
 #KERDESEK
-#segmentation - padding? covering+fix_len ok, contigous+fix_len? random+fix_len? any non-fix_len?
-#
+#-
 
-#szegmentalas from list ok, szegmentalas from DataFrame ma
-#tokenizalas ma
-#Futtathato/importalhato?
-
+#TODO
+#def for getting params
 
 import os
 import sys
@@ -156,14 +143,6 @@ def segmentate_single_sequence(sequence, params, AddedHeader=False): #  1 db sze
     return segments
 
 
-#parameter fixalas
-#fuggveny irasa default parameterek eloallitasa
-#kulon szegmentalas es tokenizalas aprameter
-#szegmentalas onmagaban tokenizalas nelkul
-#1db szegmens tokenizalasra fuggveny aztan kiterjeszteni
-#konnyu teszteles
-
-
 def segmentate_sequences_from_list(sequences, params, AddedHeader=False):
     """ 
     Cuts sequences into segments.
@@ -214,7 +193,7 @@ def segmentate_sequences_from_list(sequences, params, AddedHeader=False):
     
     
     
-def tokenize_sentence(sequences, params):
+def tokenize_sentence_from_list(sequences, params):
     """ 
     Tokenizes segmentated sequences.
 
