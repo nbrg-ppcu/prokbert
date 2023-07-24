@@ -207,7 +207,7 @@ def get_shift_counts(tokenizer_params, Nm):
     :param Nm: Number of masking nucleotides.
     :type Nm: int
 
-    return: Number of shifts required.
+    :return: Number of shifts required.
     :rtype: int
 
     Parameters:
