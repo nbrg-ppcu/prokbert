@@ -2,11 +2,19 @@
 
 """ Library for sequence processing """
 
+#sequence: whole, not-segmented DNA sequence
+#sentence: sequence block/chunk - 512, 1024, etc
+#kmer: token
+#tokenizes: vectorized 
+
 #KERDESEK
 #-
 
 #TODO
 #def for getting params
+#KESZ  - segmentate- DataFrame-s is legyen!
+#KESZ  - shift=2 eseten 2 tokenizalt vector! 0, 1 start.poz!
+#tokenization default padding=False
 
 import os
 import sys
@@ -18,23 +26,13 @@ from os.path import join, isfile, splitext
 from os import listdir
 import random
 from Bio import SeqIO
-import random
 import numpy as np
-import h5py
 import math
 import gzip
 from mimetypes import guess_type
 from functools import partial
 import operator
-
-import os
 import pathlib
-
-from mimetypes import guess_type
-from functools import partial
-import gzip
-
-import pandas as pd
 
 VOCAB_FILES_NAMES = {"vocab_file": "vocab.txt"}
 
@@ -97,60 +95,78 @@ def load_contigs(fasta_files_list, adding_reverse_complement=True, IsAddHeader=F
     
     return sequences
 
-def segmentate_single_sequence(sequence, params, AddedHeader=False): #  1 db szekvencia, test esettel
+def segmentate_single_sequence(sequence, params, AsDataFrame=False):
     """ 
     Cuts a single sequence into segments.
 
     Parameters:
-    sequences (string/list): Each sequence is represented as a string if AddedHeader is False, or as a list[fasta_id, description, source_file, sequence, orientation] if AddedHeader is True.
+    sequences (string/list): Each sequence is represented as a string or as a list[fasta_id, description, source_file, sequence, orientation].
     params (dict): dictionary with parameters.
-    AddedHeader (bool, optional): If True, the fasta ID and description in the input is included. Defaults to False.
+    AsDataFrame (bool, optional): If True, return the segments as a pandas DataFrame. Defaults to False.
 
     Returns:
-    list: The segmentated sequence, represented as a string.
+    list<list> or DataFrame: The segmentated sequences, represented as lists if AsDataFrame is False, 
+                       or if AsDataFrame is True, and the input is a list, the segments are returned as a DataFrame with columns corresponding to the elements of the input list and the last columns with the segments.
     """
     segmentation_type = params['segmentation']['segmentation_type']
     shifts = params['segmentation']['shifts']
     kmer = params['segmentation']['kmer']
-    minLs = params['segmentation']['minLs']
+    minSeqLen = params['segmentation']['minSeqLen']
+    df_cols = ['fasta_id', 'description', 'source_file', 'sequence', 'orientation', 'segments']
     
     for v in params['segmentation']:
         print(v, ': ', params['segmentation'][v])
         
-    if AddedHeader:
+    if isinstance(sequence, str):
+        act_seq = sequence
+    elif isinstance(sequence, list):
         act_seq = sequence[3]  # Get the sequence from the input list
     else:
-        act_seq = sequence
-    segments = []
+        raise ValueError("Invalid input type. The input should be either a string or a list.")
 
-    if len(act_seq) >= minLs:
+    all_segments = []
+
+    if len(act_seq) >= minSeqLen:
 
         if segmentation_type == 'contigous':
-            for i in range(0, len(act_seq) - kmer + 1, kmer):
-                #if (i+kmer>len(act_seq))
-                segment = act_seq[i:i + kmer]
-                segments.append(segment)
+            for i in range(kmer):
+                segments = []
+                for i in range(i, len(act_seq) - kmer + 1, kmer):
+                    segment = act_seq[i:i + kmer]
+                    segments.append(segment)
+                all_segments.append(segments)
                     
         elif segmentation_type == 'covering':
-            for i in range(0, len(act_seq) - kmer + 1, shifts):
-                segment = act_seq[i:i + kmer]
-                segments.append(segment)
+            for shift in range(shifts): #segmentating with diffferent starting positions
+                segments = []
+                for i in range(shift, len(act_seq) - kmer + 1, shifts):
+                    segment = act_seq[i:i + kmer]
+                    segments.append(segment)
+                all_segments.append(segments)
+        
+        if AsDataFrame:
+            # Convert the segments to a DataFrame
+            print('Are you sure you want to use DataFrame for the list of sequences?')
+            if isinstance(sequence, str):
+                all_segments = pd.DataFrame({'segments': [all_segments]})
+            else:
+                all_segments = pd.DataFrame([sequence + [all_segments]], columns = df_cols)
 
     else:
         print("Sequence ignored due to length constraint:", act_seq)
 
+    
+    return all_segments
 
-    return segments
 
-
-def segmentate_sequences_from_list(sequences, params, AddedHeader=False):
+def segmentate_sequences_from_list(sequences, params, AsDataFrame=False):
     """ 
     Cuts sequences into segments.
 
     Parameters:
     sequences (list): List of sequences. Each sequence is represented as a string if AddedHeader is False, or as a list[fasta_id, description, source_file, sequence, orientation] if AddedHeader is True.
     params (dict): dictionary with parameters.
-    AddedHeader (bool, optional): If True, the fasta ID and description in the input is included. Defaults to False.
+    AsDataFrame (bool, optional): If True, return the sequences as a pandas DataFrame. Defaults to False.
 
     Returns:
     list<list>: List of segmentated sequences, each represented as a list of segments.
@@ -158,39 +174,60 @@ def segmentate_sequences_from_list(sequences, params, AddedHeader=False):
     segmentation_type = params['segmentation']['segmentation_type']
     shifts = params['segmentation']['shifts']
     kmer = params['segmentation']['kmer']
-    minLs = params['segmentation']['minLs']
+    minSeqLen = params['segmentation']['minSeqLen']
     
     for v in params['segmentation']:
         print(v, ': ', params['segmentation'][v])
 
     segmentated_sequences = []
-    
+   
     for sequence in sequences:   
-        if AddedHeader:
+        if isinstance(sequence, str):
+            act_seq = sequence
+        elif isinstance(sequence, list):
             act_seq = sequence[3]  # Get the sequence from the input list
         else:
-            act_seq = sequence
-        segments = []
+            raise ValueError("Invalid input type. The input should be either a string or a list.")
+
     
-        if len(act_seq) >= minLs:
+        if len(act_seq) >= minSeqLen:
+            all_segments = []
             if segmentation_type == 'contigous':
-                for i in range(0, len(act_seq) - kmer + 1, kmer):
-                    #if (i+kmer>len(act_seq))
-                    segment = act_seq[i:i + kmer]
-                    segments.append(segment)
-                        
+                for i in range(kmer):
+                    segments = []
+                    for i in range(i, len(act_seq) - kmer + 1, kmer):
+                        segment = act_seq[i:i + kmer]
+                        segments.append(segment)
+                    all_segments.append(segments)
+
             elif segmentation_type == 'covering':
-                for i in range(0, len(act_seq) - kmer + 1, shifts):
-                    segment = act_seq[i:i + kmer]
-                    segments.append(segment)
-                    
-            segmentated_sequences.append(segments)
-        
+                for shift in range(shifts): #segmentating with diffferent starting positions
+                    segments = []
+                    for i in range(shift, len(act_seq) - kmer + 1, shifts):
+                        segment = act_seq[i:i + kmer]
+                        segments.append(segment)
+                    all_segments.append(segments)
+
+            segmentated_sequences.append(all_segments)
+
+
         else:
             print("Sequence ignored due to length constraint:", act_seq)
-    
+
+    if AsDataFrame:
+        # Convert the segments to a DataFrame
+        print('Are you sure you want to use DataFrame for the list of sequences?')
+        if isinstance(sequence, str):
+            segmentated_sequences = pd.DataFrame({'segments': [segmentated_sequences]})
+        else:
+            df_cols = ['fasta_id', 'description', 'source_file', 'sequence', 'orientation', 'segments']
+            df_sequence = pd.DataFrame([seq for seq in sequences if len(seq[3])>minSeqLen], columns=df_cols[:-1])
+            df_sequence['segments'] = segmentated_sequences
+            segmentated_sequences = df_sequence
+
+            #segmentated_sequences = df_sequence
+            
     return segmentated_sequences
-    
     
     
 def tokenize_sentence_from_list(sequences, params):
@@ -239,74 +276,6 @@ def tokenize_sentence_from_list(sequences, params):
         sentence_tokens.append(sentence)
     return sentence_tokens
     
-    
-    
-    
-    
-    
-    
-    
-'''
-def process_line(line, kmer_size, Ls=512, max_prob=1):
-    line_length = len(line)
-    cuts = get_segment_sizes_without_overlap(length=line_length, kmer=kmer_size,max_prob=max_prob, max_length=Ls)
-    start = 0
-    tokenized_outputs = []
-    for cut in cuts:
-        new_line = line[start:start+cut]
-        sentence = get_kmer_sentence_list(new_line, kmer=kmer_size)
-        #sentence = DnaBertlib.get_kmer_sentence(new_line, kmer=kmer_size)
-        start += cut
-        tokenized_outputs.append(sentence)
-    return tokenized_outputs      
-
-
-def tokenize_sentence(sequences):
-    """ 
-    Tokenizes sentences.
-
-    Parameters:
-    sequences (list<list>): List of sequences. Each sequence is represented as a list containing the previously got kmers.
-    
-    vocabmap (map):
-    Ls (int, optional):
-    minLS (int, optional): minimum length of each sequence, the shorter ones will be ignored. Defaults to 80.
-    unknown_tsh (float, optional):
-    Returns:
-    list: The tokenized sequences.
-    """
-    
-    vocabmap = params['tokenization']['vocabmap']
-    Ls = params['tokenization']['Ls']
-    minLs = params['tokenization']['minLs']
-    unknown_tsh = params['tokenization']['unknown_tsh']
-    
-    sentence_tokens = []
-    unkw_tsh_count = int(sentence_length*unknown_tsh)
-    for kmer_sentence in kmers:
-        sentence = [vocabmap['[CLS]']]
-        unkcount=0
-        unkw_tsh_count = int(len(kmer_sentence)*unknown_tsh)
-
-        if len(kmer_sentence) < min_sentence_size:
-            continue
-        for kmer in kmer_sentence:
-            try:
-                sentence.append(vocabmap[kmer.upper()])
-            except KeyError:
-                sentence.append(vocabmap['[UNK]'])
-                unkcount+=1
-        if unkcount > unkw_tsh_count:
-            #print('skip sentence')
-            #print(kmer_sentence)
-            continue
-        sentence.append(vocabmap['[SEP]'])
-        if len(kmer_sentence) < sentence_length-2:
-            extra_padding_tokens_ct = sentence_length - len(kmer_sentence) -2
-            for j in range(extra_padding_tokens_ct):
-                sentence.append(vocabmap['[PAD]'])
-        sentence_tokens.append(sentence)
-    return sentence_tokens
         
     
 def load_vocab(vocab_file):
@@ -319,177 +288,133 @@ def load_vocab(vocab_file):
         vocab[token] = index
     return vocab
 
+def pretty_print_overlapping_sequence(segment, segment_kmers, params):
+    """
+    Format the sequence for pretty printing with overlapping k-mers.
 
-def process_batch_tokenize_hdf5(output_folder, kmer_size,vocabmap, act_batch_id, genome_batches,Ls=512, train_prob=1, max_prob=1):
+    Parameters:
+    segment (str): DNA sequence.
+    segment_kmers (list): List of k-mers in the segment.
+    tokenizer_params (dict): Dictionary containing tokenization parameters.
+
+    Returns:
+    list: List of formatted strings representing the sequence with overlapping k-mers.
+    """
+        
+    shift = params['segmentation']['shifts']
+    k = params['segmentation']['kmer']
+    sep_c = 2
+    lines = []
+    base_offset = len(str( int((k+3)/shift))) + 3
+    first_line = ' '*base_offset + segment
+    lines.append(first_line)
+    nr_lines = int(np.ceil((k+sep_c)/shift))
+    print('Nr. line to cover the seq:  {0}'.format(nr_lines))
+
+    for line_id in range(nr_lines):
+
+        line_mers = [k_mer for j, k_mer in enumerate(segment_kmers) if j%nr_lines== line_id]
+        act_line = str(line_id) + '.  ' + ' '*(line_id*shift)  + (' '*(sep_c)).join(line_mers)
+        lines.append(act_line)
+    lines = '\n'.join(lines)
+    return lines
+
+
+
+def get_default_segmentation_params(params):
+    print('Get default parameters for a segmentation')
+
+    kmer = get_default_value(params['segmentation'], 'kmer', 6)
+    #prokbert_base_path = get_default_value(actparams, 'prokbert_base_path', '.')
+    minSeqLen = get_default_value(params['segmentation'], 'minSeqLen', 10)
+    shifts = get_default_value(params['segmentation'], 'shifts', 2)
+    segmenetation_type = get_default_value(params['segmentation'], 'segmenetation_type', 'contigous')
+
+    params['segmentation'] = {'kmer' : kmer,
+                    'minSeqLen': minSeqLen,
+                    'shifts': shifts,
+                    'segmenetation_type': segmenetation_type}
     
+    return params
+
+def get_default_tokenization_params(params):
+    print('Get default parameters for tokenization')
+
+    sentence_length = get_default_value(params['tokenization'], 'sentence_length', 512)
+    min_sentence_size = get_default_value(params['tokenization'], 'min_sentence_size', 2)
+    unknown_tsh = get_default_value(params['tokenization'], 'unknown_tsh', 0)
+    prokbert_base_path = get_default_lca_tokenizer_get_default_value(params['tokenization'], 'prokbert_base_path', '.')
     
-    if random.random()>train_prob:
-        tt_prefix = 'test'
+    token_vocab_file = join(prokbert_base_path, 'data/tokenizer/vocabs/bert-base-dna{0}/vocab.txt'.format(kmer))
+    vocabmap = {line.strip(): i for i, line in enumerate(open(token_vocab_file))}
+
+    
+    params['tokenization'] = {'vocabmap' : vocabmap,
+                    'sentence_length': sentence_length,
+                    'min_sentence_size': min_sentence_size,
+                    'unknown_tsh': unknown_tsh,
+                    'prokbert_base_path': prokbert_base_path}
+    
+    return params
+
+def get_default_value(tokenizer_params, var_name, var_def_value = None):
+    if var_name in tokenizer_params:
+        var_value=tokenizer_params[var_name]
     else:
-        tt_prefix = 'train'
+        var_value=var_def_value
+    return var_value
+
+
+
+def get_default_lca_tokenizer_get_default_tokenizer_params(actparams):
+    print('Get default parameters for a tokenizer and its preprocessor')
+
+    Ls = get_default_lca_tokenizer_get_default_value(actparams, 'Ls', 1024)
+    kmer = get_default_lca_tokenizer_get_default_value(actparams, 'kmer', 6)
+    prokbert_base_path = get_default_lca_tokenizer_get_default_value(actparams, 'prokbert_base_path', '.')
+    lca_shift = get_default_lca_tokenizer_get_default_value(actparams, 'lca_shift', 1)
+    minSeqLen = get_default_lca_tokenizer_get_default_value(actparams, 'minSeqLen', 2)
+    unkwon_tsh = get_default_lca_tokenizer_get_default_value(actparams, 'unkwon_tsh', 0)
+    shifts = get_default_lca_tokenizer_get_default_value(actparams, 'shifts', [0])
+    nr_repetation = get_default_lca_tokenizer_get_default_value(actparams, 'nr_repetation', 1)
+    coverage = get_default_lca_tokenizer_get_default_value(actparams, 'coverage', 1)
+    P_short = get_default_lca_tokenizer_get_default_value(actparams, 'P_short', 0)
+    tokenization_method = get_default_lca_tokenizer_get_default_value(actparams, 'tokenization_method', 'lcas')
+    lca_shift = get_default_lca_tokenizer_get_default_value(actparams, 'lca_shift', 1)
+    segmenetation_type = get_default_lca_tokenizer_get_default_value(actparams, 'segmenetation_type', 'random')
+    lca_left = get_default_lca_tokenizer_get_default_value(actparams, 'lca_left', 0)
+    lca_right = get_default_lca_tokenizer_get_default_value(actparams, 'lca_right', 0)
+
+    token_vocab_file = join(prokbert_base_path, 'data/tokenizer/vocabs/bert-base-dna{0}/vocab.txt'.format(kmer))
+    vocabmap = {line.strip(): i for i, line in enumerate(open(token_vocab_file))}
+    max_sentence_length = kmer + (Ls-2)*lca_shift
+
+    tokenization_params = {'kmer' : kmer,
+                    'Ls' : Ls,
+                    'minSeqLen': minSeqLen,
+                    'unkwon_tsh': unkwon_tsh,
+                    'token_vocab_file': token_vocab_file,
+                    'vocabmap': vocabmap,
+                    'shifts': shifts,
+                    'nr_repetation': nr_repetation,
+                    'coverage': coverage,
+                    'P_short': P_short,
+                    'tokenization_method': tokenization_method,
+                    'lca_shift': lca_shift,
+                    'segmenetation_type': segmenetation_type,
+                    'lca_left' : lca_left,
+                    'lca_right': lca_right,
+                    'max_sentence_length': max_sentence_length}
     
-    output_tokenized_padded_file = join(output_folder, tt_prefix + '_test_tokenized_batch_{0}.txt'.format(act_batch_id))
-
-    act_batch = genome_batches[act_batch_id]
-    #print(act_batch[0:2])
-    
-    print('Tokeneizing batch {0}'.format(act_batch_id))
-    print(' output file: {0}'.format(output_tokenized_padded_file))
-
-    print('Parsing genome data!')
-    shuffled_seqs = load_contigs(act_batch)
-    print('K-merization and tokenization fist round!!')
-    tokenized_outputs_all = kmerize_contigs(shuffled_seqs,vocabmap,kmer_size=kmer_size, nr_shuffling=1, Ls=Ls,max_prob=max_prob )
-  
-    print('Collecting info!')
-    nr_tokens = sum([len(sentence) for sentence in tokenized_outputs_all])
-    nr_lines = len(tokenized_outputs_all)
-    
-    print('Number of tokens: {0}'.format(nr_tokens))
-    print('Number of lines: {0}'.format(nr_lines))
-    tokenized_outputs_all_array = np.array(tokenized_outputs_all,dtype="uint16")
-    hdf_file = h5py.File(output_tokenized_padded_file_hdf, 'a')
-    
-
-
-######## Non-overlapping part ############
-
-
-def generate_random_intervals_with_length(act_seq, params):
-    Lc = len(act_seq)
-    Ls = params['tokenization']['Ls'] 
-    kmer = params['tokenization']['kmer']
-
-    L = kmer*(Ls-2) #
-    #Mi van akkor, ha a szekvencia rövidebb, mint a a lehetséges ablak
-    if L >= Lc:
-        sampled_intervals = [(0,Lc)]
-        return sampled_intervals
- 
-    minLs = params['tokenization']['minLs'] 
-    coverage = params['tokenization']['coverage'] 
-    P_short = params['tokenization']['P_short'] 
-    P_full = 1 - P_short
-    expected_sentence_length = P_short*( (L- minLs*kmer)*0.5) + P_full*L
-    N = math.ceil((coverage * Lc)/expected_sentence_length)
-
-    sampled_intervals = [] 
-    for i in range(N):
-        start_pos = int((Lc-L)*random.random())
-        if random.random() > P_short:
-            end_pos = start_pos + L+4
-        else:
-            end_pos = start_pos + int((Ls-2)*random.random())*kmer
-        sampled_intervals.append( [start_pos, end_pos])
-    return sorted(sampled_intervals, key=operator.itemgetter(0))
-
-
-
-def get_lca_tokenized_segments(act_seq,sampling_intervals, params):
-    k = params['tokenization']['kmer']
-    lca_left = params['tokenization']['lca_left']
-    lca_right = params['tokenization']['lca_right']
-    minLs = params['tokenization']['minLs']
-    IsAddingFlanking = True
-    contig_kmers = []
-    for act_interval in sampling_intervals:
-        if IsAddingFlanking:
-            act_segment = 'AA' + act_seq[act_interval[0]:act_interval[1]]
-        else:
-            act_segment = act_seq[act_interval[0]:act_interval[1]]
-        Ntok = int((len(act_segment)-lca_left-lca_right)/3)
-        #tokenized_segment = [act_segment[0+i*k-3:(i+1)*k+1] for i in range(1,Ntok+1)]
-        tokenized_segment = [act_segment[0+i*k-3:(i+1)*k+1] for i in range(1,Ntok+1)]
-        if len(tokenized_segment) > minLs:
-            contig_kmers.append(tokenized_segment)
-    return contig_kmers
-
-
-
-#### LCA #####
-def lca_tokenize_contig_contigous(act_seq, params):
-
-    #print('Processing segment: {0}'.format(len(act_seq)))
-    k = params['tokenization']['kmer']
-    start_pos = 0
-    act_shift = params['tokenization']['lca_shift']
-    max_prob =  1-params['tokenization']['P_short']
-    Ls = params['tokenization']['Ls']
-    vocabmap = params['tokenization']['vocabmap']
-    minLs = params['tokenization']['minLs']
-    unknown_tsh = params['tokenization']['unknown_tsh']
-    max_length = (Ls-1)*act_shift + k-act_shift
-    cuts = get_segment_sizes_without_overlap(len(act_seq), k, max_prob=max_prob, max_length=max_length)
-    tokenized_outputs = []
-    kmers_list = []
-    Lseq=len(act_seq)
-    for act_cut in cuts:
-        for window in range(act_shift):
-            act_segment=act_seq[start_pos+window:min(start_pos+window+act_cut,Lseq)]
-            L = len(act_segment)
-            expected_length = L-1*(k-act_shift)
-            Ns = math.floor((L-1*(k-act_shift))/act_shift)
-            kmers = [act_segment[i+i*(act_shift-1):i+i*(act_shift-1)+k] for i in range(Ns)]
-            kmers_list.append(kmers)
-        start_pos+=act_cut
-    tokenized = tokenize_sentence(kmers_list, vocabmap, sentence_length = Ls, min_sentence_size = minLs, unknown_tsh = unknown_tsh)
-    return tokenized, kmers_list
-
-def lca_tokenize_contigs(contigs, params):
-    
-    tokenized_ds = []
-    for act_seq in contigs:
-        tokenized,kmers_list = lca_tokenize_contig_contigous(act_seq, params)
-        tokenized_ds.extend(tokenized)
-    
-    print('Randomizing the tokenized segments!')
-    random.shuffle(tokenized_ds)
-    print('Finished')
-    return tokenized_ds
+    return tokenization_params
 
 
 
 
 
-"""
-def process_batch_tokenize(output_folder, kmer_size, act_batch_id, genome_batches, train_prob=0.5):
-    
-    
-    if random.random()>train_prob:
-        tt_prefix = 'test'
-    else:
-        tt_prefix = 'train'
-    
-    output_tokenized_padded_file = join(output_folder, tt_prefix + '_test_tokenized_batch_{0}.txt'.format(act_batch_id))
-    output_tokenized_padded_info_file = join(output_folder, 'info_' + tt_prefix + 'test_tokenized_batch_{0}.txt'.format(act_batch_id))
-    
-    act_batch = genome_batches[act_batch_id]
-    
-    print(act_batch[0:2])
-    
-    print('Tokeneizing batch {0}'.format(act_batch_id))
-    print(' output file: {0}'.format(output_tokenized_padded_file))
 
-    print('Parsing genome data!')
-    shuffled_seqs = load_contigs(act_batch)
-    print('K-merization and tokenization fist round!!')
-    tokenized_outputs_all = kmerize_contigs(shuffled_seqs, nr_shuffling=2)
-    print('Finished')
-
-    print('Collecting info!')
-    nr_tokens = sum([len(sentence) for sentence in tokenized_outputs_all])
-    nr_lines = len(tokenized_outputs_all)
-    with open(output_tokenized_padded_info_file, 'w') as fout:
-        fout.write('{0},{1}\n'.format(nr_tokens, nr_lines))
-    
-    
-    
-    print('Writing into file!')
-    with open(output_tokenized_padded_file, 'w') as fout:
-        fout.write('\n'.join([' '.join([str(token) for token in sentence]) for sentence in tokenized_outputs_all]))
-    fout.close()
-"""'''
 '''
+
 class BertTokenizer(PreTrainedTokenizer):
     r"""
     Construct a BERT tokenizer. Based on WordPiece.
@@ -685,8 +610,9 @@ class BertTokenizer(PreTrainedTokenizer):
                 writer.write(token + "\n")
                 index += 1
         return (vocab_file,)
+'''
 
-
+'''
 class BasicTokenizer(object):
     """
     Constructs a BasicTokenizer that will run basic tokenization ().
