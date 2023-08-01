@@ -209,13 +209,6 @@ def get_shift_counts(tokenizer_params, Nm):
 
     :return: Number of shifts required.
     :rtype: int
-
-    Parameters:
-    tokenizer_params (dict): Dictionary containing tokenization parameters.
-    Nm (int): Number of masking nucleotides.
-
-    Returns:
-    int: Number of shifts required.
     """
     #tokenizer_params['lca_shift']*1*X-tokenizer_params['kmer']=Nm
     nr_shifts = (Nm+tokenizer_params['kmer']) / (tokenizer_params['lca_shift'])-1
