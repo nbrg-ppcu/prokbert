@@ -42,16 +42,22 @@ def load_contigs(fasta_files_list, adding_reverse_complement=True, IsAddHeader=F
     """ 
     Load contigs from a list of fasta files.
 
-    Parameters:
-    fasta_files_list (list): List of paths to fasta files. Compressed (gz) fasta files are accepted as well.
-    adding_reverse_complement (bool, optional): If True, add the reverse complement of each sequence. Defaults to True.
-    IsAddHeader (bool, optional): If True, include the fasta ID and description in the output. Defaults to False.
-    AsDataFrame (bool, optional): If True, return the sequences as a pandas DataFrame. Defaults to False.
+    :param fasta_files_list: List of paths to fasta files. Compressed (gz) fasta files are accepted as well.
+    :type fasta_files_list: list
 
-    Returns:
-    list or DataFrame: The loaded sequences. Each sequence is represented as a string if IsAddHeader is False, 
-    or as a list [fasta_id, description, source_file, sequence, orientation] if IsAddHeader is True. 
-    If AsDataFrame is True, the sequences are returned as a DataFrame.
+    :param adding_reverse_complement: If True, add the reverse complement of each sequence. Defaults to True.
+    :type adding_reverse_complement: bool, optional
+
+    :param IsAddHeader: If True, include the fasta ID and description in the output. Defaults to False.
+    :type IsAddHeader: bool, optional
+
+    :param AsDataFrame: If True, return the sequences as a pandas DataFrame. Defaults to False.
+    :type AsDataFrame: bool, optional
+
+    :return: The loaded sequences. Each sequence is represented as a string if IsAddHeader is False,
+             or as a list [fasta_id, description, source_file, sequence, orientation] if IsAddHeader is True.
+             If AsDataFrame is True, the sequences are returned as a DataFrame.
+    :rtype: list or DataFrame
     """
     
     print('Loading sequence data into memory!')
@@ -97,16 +103,22 @@ def load_contigs(fasta_files_list, adding_reverse_complement=True, IsAddHeader=F
 
 def segmentate_single_sequence(sequence, params, AsDataFrame=False):
     """ 
+
     Cuts a single sequence into segments.
 
-    Parameters:
-    sequences (string/list): Each sequence is represented as a string or as a list[fasta_id, description, source_file, sequence, orientation].
-    params (dict): dictionary with parameters.
-    AsDataFrame (bool, optional): If True, return the segments as a pandas DataFrame. Defaults to False.
+    :param sequences: Each sequence is represented as a string or as a list [fasta_id, description, source_file, sequence, orientation].
+    :type sequences: string or list
 
-    Returns:
-    list<list> or DataFrame: The segmentated sequences, represented as lists if AsDataFrame is False, 
-                       or if AsDataFrame is True, and the input is a list, the segments are returned as a DataFrame with columns corresponding to the elements of the input list and the last columns with the segments.
+    :param params: Dictionary with parameters.
+    :type params: dict
+
+    :param AsDataFrame: If True, return the segments as a pandas DataFrame. Defaults to False.
+    :type AsDataFrame: bool, optional
+
+    :return: The segmented sequences, represented as lists if AsDataFrame is False,
+             or if AsDataFrame is True and the input is a list, the segments are returned as a DataFrame
+             with columns corresponding to the elements of the input list and the last columns with the segments.
+    :rtype: list<list> or DataFrame
     """
     segmentation_type = params['segmentation']['segmentation_type']
     shifts = params['segmentation']['shifts']

@@ -22,6 +22,3 @@ Functions
    prokbert.dev_pretraining_eval_lib.get_mask_predictions
    prokbert.dev_pretraining_eval_lib.get_metric_for_masking_position
    prokbert.dev_pretraining_eval_lib.get_prediction_results_for_segment
-   
-
-.. autofunction:: prokbert.dev_pretraining_eval_lib.get_shift_counts
