@@ -13,7 +13,6 @@ from os.path import expanduser
 localhome = expanduser("~")
 print(localhome)
 from copy import deepcopy
-from prokbert.DataCollatorForDNA import *
 #import prokbert.dnadatasets
 #import prokbert.dnatokenizer 
 
