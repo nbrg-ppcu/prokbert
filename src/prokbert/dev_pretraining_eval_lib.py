@@ -223,12 +223,14 @@ def get_kmers_for_seq_positions(tokenizer_params, position):
     """
     Determine the starting and ending positions of tokens (k-mers) that covers a certain position in the sequence. (Only works for symmetric, invariant tokenization params!)
 
-    Parameters:
-    tokenizer_params (dict): Dictionary containing tokenization parameters.
-    position (int): Position in the sequence.
+    :param tokenizer_params: Dictionary containing tokenization parameters.
+    :type tokenizer_params: dict
 
-    Returns:
-    tuple: Starting and ending positions of k-mers in the sequence.
+    :param position: Position in the sequence.
+    :type position: int
+
+    :return: Starting and ending positions of k-mers in the sequence.
+    :rtype: tuple
     """
         
     k=tokenizer_params['kmer']
@@ -245,13 +247,17 @@ def pretty_print_overlapping_sequence(segment, segment_kmers, tokenizer_params):
     """
     Format the sequence for pretty printing with overlapping k-mers.
 
-    Parameters:
-    segment (str): DNA sequence.
-    segment_kmers (list): List of k-mers in the segment.
-    tokenizer_params (dict): Dictionary containing tokenization parameters.
+    :param segment: DNA sequence.
+    :type segment: str
 
-    Returns:
-    list: List of formatted strings representing the sequence with overlapping k-mers.
+    :param segment_kmers: List of k-mers in the segment.
+    :type segment_kmers: list
+
+    :param tokenizer_params: Dictionary containing tokenization parameters.
+    :type tokenizer_params: dict
+
+    :return: List of formatted strings representing the sequence with overlapping k-mers.
+    :rtype: list
     """
         
     k=tokenizer_params['kmer']
@@ -275,14 +281,23 @@ def get_all_masked_vectors(act_segment,act_segment_kmers, tokenizer, N_masked_to
     """
     Generate masked vectors for the sequence, at all possible positions. It covers at least N_masked_token
 
-    Parameters:
-    act_segment (str): DNA sequence.
-    act_segment_kmers (list): List of k-mers in the segment.
-    tokenizer (Tokenizer): Tokenizer object.
-    N_masked_token (int): Number of masking nucleoiteds.
+    :param act_segment: DNA sequence.
+    :type act_segment: str
 
-    Returns:
-    tuple: Array of masked vectors, DataFrame with information about masked vectors, actual segment sequence.
+    :param act_segment_kmers: List of k-mers in the segment.
+    :type act_segment_kmers: list
+
+    :param tokenizer: Tokenizer object.
+    :type tokenizer: Tokenizer
+
+    :param N_masked_token: Number of masking nucleoiteds.
+    :type N_masked_token: int
+
+    :param tokenizer_params: Dictionary containing tokenization parameters.
+    :type tokenizer_params: dict
+
+    :return: Array of masked vectors, DataFrame with information about masked vectors, actual segment sequence.
+    :rtype: tuple
     """
     masked_token_id = tokenizer.mask_token_id
     k = tokenizer_params['kmer']
@@ -334,14 +349,16 @@ def get_all_masked_vectors(act_segment,act_segment_kmers, tokenizer, N_masked_to
 
 def get_pretraining_evaluation_batch_size_megatron_bert_eval_load_model(model_path, device):
     """
-    Load Megatron BERT model and prepare for evaluation.
+    Load Megatron BERT model and prepare it for evaluation.
 
-    Parameters:
-    model_path (str): Path to the model.
-    device (str): Device to load the model onto.
+    :param model_path: Path to the model.
+    :type model_path: str
 
-    Returns:
-    MegatronBertForMaskedLM: Loaded model.
+    :param device: Device to load the model onto.
+    :type device: str
+
+    :return: Loaded model.
+    :rtype: transformers.MegatronBertForMaskedLM
     """
     torch.cuda.empty_cache()
     model = MegatronBertForMaskedLM.from_pretrained(model_path, output_attentions=False)
@@ -360,13 +377,17 @@ def get_mask_predictions(model, masked_vectors, batch_size=128):
     """
     Get predictions for masked vectors.
 
-    Parameters:
-    model (MegatronBertForMaskedLM): Loaded model.
-    masked_vectors (array): Array of masked vectors.
-    batch_size (int, optional): Batch size for the DataLoader. Defaults to 128.
+    :param model: Loaded Megatron BERT model.
+    :type model: transformers.MegatronBertForMaskedLM
 
-    Returns:
-    array: Final logits from the model.
+    :param masked_vectors: Array of masked vectors.
+    :type masked_vectors: array
+
+    :param batch_size: Batch size for the DataLoader. Defaults to 128.
+    :type batch_size: int, optional
+
+    :return: Final logits from the model.
+    :rtype: array
     """
     torch.cuda.empty_cache()
     dataset = TensorDataset(masked_vectors)
@@ -393,16 +414,22 @@ def get_mask_predictions(model, masked_vectors, batch_size=128):
 
 def get_metric_for_masking_position(act_segment, masked_vectors, final_logits, id2token):
     """
-    Compute metrics for each masking position in the sequence.
+    Compute metrics for each masking position in the DNA sequence.
 
-    Parameters:
-    act_segment (str): DNA sequence.
-    masked_vectors (array): Array of masked vectors.
-    final_logits (array): Array of final logits from the model.
-    id2token (dict): Dictionary mapping token IDs to tokens.
+    :param act_segment: DNA sequence.
+    :type act_segment: str
 
-    Returns:
-    DataFrame: DataFrame containing prediction results.
+    :param masked_vectors: Array of masked vectors.
+    :type masked_vectors: array
+
+    :param final_logits: Array of final logits from the model.
+    :type final_logits: array
+
+    :param id2token: Dictionary mapping token IDs to tokens.
+    :type id2token: dict
+
+    :return: DataFrame containing prediction results.
+    :rtype: DataFrame
     """
         
     prediction_results = []
@@ -453,22 +480,40 @@ def get_prediction_results_for_segment(act_gene, basename,  act_interval,N_maske
     """
     Get prediction results for a specific segment of the DNA sequence.
 
-    Parameters:
-    act_gene (str): DNA sequence.
-    basename (str): Base name for identification.
-    act_interval (tuple): Interval to consider in the sequence.
-    N_masked_token (int): Number of masking tokens.
-    class_params (dict): Dictionary containing class parameters.
-    model (MegatronBertForMaskedLM): Loaded model.
-    tokenizer (Tokenizer): Tokenizer object.
-    batch_size (int): Batch size for the DataLoader.
-    model_name (str): Name of the model used for prediction.
-    cp (str): Checkpoint for the model.
+    :param act_gene: DNA sequence.
+    :type act_gene: str
 
-    Returns:
-    DataFrame: DataFrame containing prediction results. The columns include information about the masked vectors, 
-    actual sequence, masked positions, ID of the segment, starting and ending interval, positional offset, absolute
-    positions of the masked sequence, context size, model name, checkpoint, k-mer size, and LCA shift.
+    :param basename: Base name for identification.
+    :type basename: str
+
+    :param act_interval: Interval to consider in the sequence.
+    :type act_interval: tuple
+
+    :param N_masked_token: Number of masking tokens.
+    :type N_masked_token: int
+
+    :param class_params: Dictionary containing class parameters.
+    :type class_params: dict
+
+    :param model: Loaded Megatron BERT model.
+    :type model: transformers.MegatronBertForMaskedLM
+
+    :param tokenizer: Tokenizer object.
+    :type tokenizer: Tokenizer
+
+    :param batch_size: Batch size for the DataLoader.
+    :type batch_size: int
+
+    :param model_name: Name of the model used for prediction.
+    :type model_name: str
+
+    :param cp: Checkpoint for the model.
+    :type cp: str
+
+    :return: DataFrame containing prediction results. The columns include information about the masked vectors,
+             actual sequence, masked positions, ID of the segment, starting and ending interval, positional offset,
+             absolute positions of the masked sequence, context size, model name, checkpoint, k-mer size, and LCA shift.
+    :rtype: DataFrame
     """
     # Your code
     masked_token_id = tokenizer.mask_token_id
