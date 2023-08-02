@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "prokbert"
-version = "0.0.10"
+version = "0.0.11"
 authors = [
   { name="nbrg-ppcu", email="nbrg@itk.ppke.hu" },
 ]

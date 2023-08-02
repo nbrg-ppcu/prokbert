@@ -9,3 +9,4 @@ ProkDataset
    :toctree: api
 
    prokbert.dnadatasets.ProkDataset
+   prokbert.dnadatasets.DnaDatasetID
