@@ -31,6 +31,7 @@ extensions = [
     "sphinx.ext.doctest",
     "sphinx.ext.autodoc",
     "sphinx.ext.autosummary",
+    'sphinx.ext.autosectionlabel',
 ]
 
 intersphinx_mapping = {
@@ -65,5 +66,5 @@ html_static_path = ["_static"]
 html_logo = "prokbert_logo.png"
 html_theme_options = {
     'logo_only': True,
-    'display_version': False,
+    'display_version': True,
 }
