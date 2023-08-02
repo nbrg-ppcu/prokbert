@@ -175,13 +175,18 @@ def segmentate_sequences_from_list(sequences, params, AsDataFrame=False):
     """ 
     Cuts sequences into segments.
 
-    Parameters:
-    sequences (list): List of sequences. Each sequence is represented as a string if AddedHeader is False, or as a list[fasta_id, description, source_file, sequence, orientation] if AddedHeader is True.
-    params (dict): dictionary with parameters.
-    AsDataFrame (bool, optional): If True, return the sequences as a pandas DataFrame. Defaults to False.
+    :param sequences: List of sequences. Each sequence is represented as a string if AddedHeader is False,
+                      or as a list [fasta_id, description, source_file, sequence, orientation] if AddedHeader is True.
+    :type sequences: list
 
-    Returns:
-    list<list>: List of segmentated sequences, each represented as a list of segments.
+    :param params: Dictionary with parameters.
+    :type params: dict
+
+    :param AsDataFrame: If True, return the sequences as a pandas DataFrame. Defaults to False.
+    :type AsDataFrame: bool, optional
+
+    :return: List of segmented sequences, each represented as a list of segments.
+    :rtype: list<list>
     """
     segmentation_type = params['segmentation']['segmentation_type']
     shifts = params['segmentation']['shifts']
@@ -246,12 +251,14 @@ def tokenize_sentence_from_list(sequences, params):
     """ 
     Tokenizes segmentated sequences.
 
-    Parameters:
-    sequences (list): List of sequences. Each sequence is represented as a list of kmers.
-    params (dict): dictionary with parameters.
+    :param sequences: List of sequences. Each sequence is represented as a list of kmers.
+    :type sequences: list
 
-    Returns:
-    list<list>: List of segmentated sequences, each represented as a list of segments.
+    :param params: Dictionary with parameters.
+    :type params: dict
+
+    :return: List of tokenized sequences, each represented as a list of tokens (segmented sequences).
+    :rtype: list<list>
     """
     
     vocabmap = params['tokenization']['vocabmap']
@@ -304,13 +311,17 @@ def pretty_print_overlapping_sequence(segment, segment_kmers, params):
     """
     Format the sequence for pretty printing with overlapping k-mers.
 
-    Parameters:
-    segment (str): DNA sequence.
-    segment_kmers (list): List of k-mers in the segment.
-    tokenizer_params (dict): Dictionary containing tokenization parameters.
+    :param segment: DNA sequence.
+    :type segment: str
 
-    Returns:
-    list: List of formatted strings representing the sequence with overlapping k-mers.
+    :param segment_kmers: List of k-mers in the segment.
+    :type segment_kmers: list
+
+    :param tokenizer_params: Dictionary containing tokenization parameters.
+    :type tokenizer_params: dict
+
+    :return: List of formatted strings representing the sequence with overlapping k-mers.
+    :rtype: list
     """
         
     shift = params['segmentation']['shifts']
