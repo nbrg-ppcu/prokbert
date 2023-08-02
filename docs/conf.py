@@ -31,6 +31,7 @@ extensions = [
     "sphinx.ext.doctest",
     "sphinx.ext.autodoc",
     "sphinx.ext.autosummary",
+    "shpinx.ext.automodule",
     'sphinx.ext.autosectionlabel',
 ]
 
