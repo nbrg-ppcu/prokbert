@@ -18,7 +18,7 @@ from transformers import (
 class ProkDataset(torch.utils.data.Dataset):
     """
     A custom PyTorch Dataset for processing tokenized sequences and labels.
-    
+
     """    
     def __init__(self, tokenized_seqs, labels, token_type_ids=None, attention_mask=None, device=None):
         """
@@ -83,8 +83,25 @@ class ProkDataset(torch.utils.data.Dataset):
 class DnaDatasetID(Dataset):
     """
     DNA Dataset Dataset
+
+    This class represents a custom PyTorch Dataset for DNA sequences.
     """
     def __init__(self, input_file, tokenizer, max_len, randomization=False):
+        """
+        Constructor
+
+        :param input_file: Path to the input file containing DNA sequences as token IDs.
+        :type input_file: str
+
+        :param tokenizer: Tokenizer object used to tokenize the DNA sequences.
+        :type tokenizer: Tokenizer
+
+        :param max_len: Maximum length of the tokenized sequences.
+        :type max_len: int
+
+        :param randomization: If True, the data will be randomized. Defaults to False.
+        :type randomization: bool, optional
+        """
         self.tokenizer = tokenizer
         self.input_file= input_file
         self.max_len = max_len
@@ -92,6 +109,9 @@ class DnaDatasetID(Dataset):
         self._load_data_from_file()
 
     def _load_data_from_file(self):
+        """
+        Load DNA sequences from the input file and tokenize them.
+        """
         print('Loading data from file: {0}'.format(self.input_file))
         self.data = []
         with open(self.input_file) as fin:
@@ -104,10 +124,24 @@ class DnaDatasetID(Dataset):
             random.shuffle(self.data)
         
     def __len__(self):
+        """
+        Get the total number of sequences in the dataset.
+
+        :return: The total number of sequences in the dataset.
+        :rtype: int
+        """
         return len(self.data)
 
     def __getitem__(self, index):
-        # 
+        """
+        Get the data item (tokenized sequence) at the specified index.
+
+        :param index: Index of the data item to retrieve.
+        :type index: int
+
+        :return: Tokenized DNA sequence as a tensor of token IDs.
+        :rtype: torch.Tensor
+        """
         return torch.tensor(self.data[index], dtype=torch.long)
     
 
