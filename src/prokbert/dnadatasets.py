@@ -16,7 +16,32 @@ from transformers import (
 )
 
 class ProkDataset(torch.utils.data.Dataset):
-    
+    """
+    A custom PyTorch Dataset for processing tokenized sequences and labels.
+
+    :param tokenized_seqs: Tokenized sequences represented as a tensor.
+    :type tokenized_seqs: torch.Tensor
+
+    :param labels: Labels corresponding to each tokenized sequence.
+    :type labels: torch.Tensor
+
+    :param token_type_ids: Token type IDs corresponding to each tokenized sequence. Defaults to None.
+    :type token_type_ids: torch.Tensor, optional
+
+    :param attention_mask: Attention mask corresponding to each tokenized sequence. Defaults to None.
+    :type attention_mask: torch.Tensor, optional
+
+    :param device: Device to move the tensors onto. If provided, the tensors are moved to the specified device.
+                   Defaults to None.
+    :type device: str, optional
+
+    Methods:
+        __getitem__(idx):
+            Get the data item at the specified index.
+
+        __len__():
+            Get the total number of samples in the dataset.
+    """    
     def __init__(self, tokenized_seqs, labels, token_type_ids=None, attention_mask=None, device=None):
         self.tokenized_seqs = tokenized_seqs
         self.labels = labels
@@ -31,6 +56,15 @@ class ProkDataset(torch.utils.data.Dataset):
             self.token_type_ids.to(device)
 
     def __getitem__(self, idx):
+        """
+        Get the data item at the specified index.
+
+        :param idx: Index of the item to retrieve.
+        :type idx: int
+
+        :return: A dictionary containing 'input_ids', 'labels', 'token_type_ids', and 'attention_mask' tensors.
+        :rtype: dict
+        """
         #item = {key: torch.tensor(val[idx]) for key, val in self.encodings.items()}
         item={'input_ids' : self.tokenized_seqs[idx,:]}
         item['labels'] = self.labels[idx]
@@ -40,6 +74,12 @@ class ProkDataset(torch.utils.data.Dataset):
         return item
     
     def __len__(self):
+        """
+        Get the total number of samples in the dataset.
+
+        :return: The total number of samples in the dataset.
+        :rtype: int
+        """
         return len(self.labels)
 
 
