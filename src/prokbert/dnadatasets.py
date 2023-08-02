@@ -18,11 +18,12 @@ from transformers import (
 class ProkDataset(torch.utils.data.Dataset):
     """
     A custom PyTorch Dataset for processing tokenized sequences and labels.
+    
     """    
     def __init__(self, tokenized_seqs, labels, token_type_ids=None, attention_mask=None, device=None):
         """
         Constructor
-        
+
         :param tokenized_seqs: Tokenized sequences represented as a tensor.
         :type tokenized_seqs: torch.Tensor
 
