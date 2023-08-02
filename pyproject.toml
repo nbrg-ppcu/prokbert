@@ -1,30 +1,21 @@
 [build-system]
-requires = ["setuptools>=45", "setuptools_scm[toml]>=6.2"]
+requires = [ "setuptools>=45", "setuptools_scm[toml]>=6.2",]
 build-backend = "setuptools.build_meta"
-
-[tool.setuptools_scm]
 
 [project]
 name = "prokbert"
-version = "0.0.14"
-authors = [
-  { name="nbrg-ppcu", email="nbrg@itk.ppke.hu" },
-]
+version = "0.0.16"
 description = "ProkBERT"
 readme = "README.md"
 requires-python = ">=3.7"
-dependencies = [
-  "biopython>=1.79",
-  "pandas>=1.4.4",
-  "intervaltree>=0.0.1",
-  "umap-learn>=0.0.1",
-]
-classifiers = [
-    "Programming Language :: Python :: 3",
-    "License :: OSI Approved :: MIT License",
-    "Operating System :: OS Independent",
-]
+dependencies = [ "biopython>=1.79", "pandas>=1.4.4", "intervaltree>=0.0.1", "umap-learn>=0.0.1",]
+classifiers = [ "Programming Language :: Python :: 3", "License :: OSI Approved :: MIT License", "Operating System :: OS Independent",]
+[[project.authors]]
+name = "nbrg-ppcu"
+email = "nbrg@itk.ppke.hu"
 
 [project.urls]
-"Homepage" = "https://github.com/nbrg-ppcu/prokbert"
+Homepage = "https://github.com/nbrg-ppcu/prokbert"
 "Bug Tracker" = "https://github.com/nbrg-ppcu/prokbert/issues"
+
+[tool.setuptools_scm]
