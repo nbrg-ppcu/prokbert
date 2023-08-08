@@ -17,6 +17,13 @@ segmentation:
     description: "The maximum allowable segment length."
     constraints:
       min: 0
+  coverage:
+    default: 1.0
+    type: "float"
+    description: "The expected number of times that segmen covers the original sequence. It is only valid for type=random. Beaware, that it is sampled from uniform distribution, therefore the at the two ends of the sueqnce the coverage will differ."
+    constraints:
+      min: 0.0
+      max: 100.0 # Too much coverage 
 
 tokenization:
   type:
@@ -37,17 +44,26 @@ tokenization:
     description: "The k-mer shift parameter. Default is 1. "
     constraints:
       min: 0
-  max_segment_length:
+  max_segment_length: #
     default: 
     type: "integer"
-    description: "The k-mer shift parameter. Default is 1. "
+    description: "The maximum number of characters in the segment. It should be aligned with the language model. This pramrter is interchangable with token_limit"
     constraints:
       min: 6
-      max: 1027 # max_token_counts
-  max_token:
+      max: 1027 #(max_token_counts-3)*shift + kmer
+  token_limit: 
     default: 
     type: "integer"
-    description: "The k-mer shift parameter. Default is 1. "
+    description: "The maximum number of tokens that the the LM could handle. It includes the special tokens such as CLS and SEP This pramrter is interchangable with max_segment_length."
     constraints:
-      min: 6
-      max: 1027    
+      min: 1
+      max: 1024 # That's our current limit
+  max_unknown_token_proportion: 
+    default: 
+    type: "float"
+    description: "The maximum proportion of unknown tokens in a max length sequence."
+    constraints:
+      min: 0
+      max: 1
+
+      

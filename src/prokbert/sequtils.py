@@ -103,15 +103,62 @@ def load_contigs(fasta_files_list, adding_reverse_complement=True, IsAddHeader=F
     return sequences
 
 
-def segment_sequence(sequence, params,  AsDataFrame=False):
+def get_segment_sizes_without_overlap():
+    """ Ret
+    """
 
-    segmentation_type = params['type']
+
+def segment_sequence_contiguous(sequence, params):
+    """ Creating a set of end-to-end, disjoint sections of the sequence without overlaps. 
+    Those segments that are smaller than, the predifined minunimum will be discarded.
+    This function returns with a list of segments with their positions in the original sequence. 
+
+    """
+
+    
     min_segment_len = params['min_length']
     max_segment_len = params['max_length']
     if isinstance(sequence, str):
         act_seq = sequence
+    L = len(sequence)
     
+    segments = [] 
+    for i in range(0, L, max_segment_len):
+        act_start_pos = i
+        act_end_pos = min(i+max_segment_len, )
+        act_segment = sequence[act_start_pos:act_end_pos]
+
+        if act_end_pos- act_start_pos > min_segment_len:
+
+            new_record = {'segment': act_segment,
+                        'segment_start' : act_start_pos,
+                        'segment_end' : act_end_pos}
+            segments.append(new_record)
     
+    return segments
+
+
+def segment_sequences(sequences, params, AsDataFrame=False):
+    """ We assume that the sequence is quality controlled and preprocessed i.e. is a valid nucleotide sequence, etc
+    """
+    segmentation_type = params['type']
+    
+
+    if segmentation_type == 'contiguous':
+        segments = segment_sequence_contiguous(sequence, params)
+    elif segmentation_type == 'random':
+        print('TODO ....')
+        segments = []
+    
+    if 
+    
+
+
+
+
+
+    #cuts = get_segment_sizes_without_overlap(len(act_seq), k, max_prob=max_prob, max_length=max_length)
+
 
 
 
