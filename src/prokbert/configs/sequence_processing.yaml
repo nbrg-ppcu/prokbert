@@ -1,0 +1,53 @@
+segmentation:
+  type:
+    default: contiguous
+    type: "string"
+    description: "The segmentation type. 'contiguous' refers to end-to-end, disjoint sections of the sequence without overlaps."
+    constraints:
+      options: ["contiguous", "random"]
+  min_length:
+    default: 0
+    type: "integer"
+    description: "The minimum length of a segment. Segments shorter than this value will be discarded."
+    constraints:
+      min: 0
+  max_length:
+    default: 512
+    type: "integer"
+    description: "The maximum allowable segment length."
+    constraints:
+      min: 0
+
+tokenization:
+  type:
+    default: lca
+    type: "string"
+    description: "The tokenization solution. The default is the LCA (Local Context Aware) tokenization."
+    constraints:
+      options: ["lca"]
+  kmer:
+    default: 6
+    type: "integer"
+    description: "The k-mer size used during the tokenization process."
+    constraints:
+      options: [1, 2, 3, 4, 5, 6, 7, 8, 9]
+  shift:
+    default: 1
+    type: "integer"
+    description: "The k-mer shift parameter. Default is 1. "
+    constraints:
+      min: 0
+  max_segment_length:
+    default: 
+    type: "integer"
+    description: "The k-mer shift parameter. Default is 1. "
+    constraints:
+      min: 6
+      max: 1027 # max_token_counts
+  max_token:
+    default: 
+    type: "integer"
+    description: "The k-mer shift parameter. Default is 1. "
+    constraints:
+      min: 6
+      max: 1027    
