@@ -6,14 +6,11 @@ from Bio import SeqIO
 import gzip
 import sys
 import collections
-
 from os.path import join
-#prokbert_base_path = '/home/ligeti/gitrepos/prokbert'
-#sys.path.insert(0,join(prokbert_base_path))
-#from prokbert.sequtils import *
-from sequtils import *
 
-#from ..sequtils import *
+# The test should be run from the project root directory as: 
+
+from sequtils import *
 
 class TestSeqUtils(unittest.TestCase):
     def setUp(self):
