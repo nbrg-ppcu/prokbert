@@ -425,6 +425,10 @@ def segmentate_single_sequence(sequence, params, AsDataFrame=False):
     return all_segments
 
 
+def lca_tokenize_segment(segment, params):
+    """ Tokenization of one segment. 
+    
+    """
 
 
 def segmentate_sequences_from_list(sequences, params, AsDataFrame=False):
@@ -501,7 +505,9 @@ def segmentate_sequences_from_list(sequences, params, AsDataFrame=False):
             #segmentated_sequences = df_sequence
             
     return segmentated_sequences
-    
+
+
+  
     
 def tokenize_sentence_from_list(sequences, params):
     """ 

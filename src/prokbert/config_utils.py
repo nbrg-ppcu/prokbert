@@ -3,6 +3,7 @@ import yaml
 import pathlib
 from os.path import join
 import os
+import numpy as np
 
 class SeqConfig:
     """Class to manage and validate sequence processing configurations."""
@@ -18,7 +19,9 @@ class SeqConfig:
         self.parameters['tokenization']['shift']['constraints']['max'] = self.parameters['tokenization']['kmer']['default']-1
         # Ha valaki update-li a k-mer paramter-t, akkor triggerelni kellene, hogy mi legyen. 
 
-        self.segmentation_params = self.get_segmentation_parameters()
+        self.get_segmentation_parameters()
+        self.get_and_set_tokenization_params()
+
 
         
 
@@ -31,6 +34,7 @@ class SeqConfig:
         """
         current_path = pathlib.Path(__file__).parent
         prokbert_seq_config_file = join(current_path, 'configs', 'sequence_processing.yaml')
+        self.current_path = current_path
 
         try:
             # Attempt to read the environment variable
@@ -160,6 +164,47 @@ class SeqConfig:
         # Updating the other parameters if necesseary, i.e. if k-mer has-been changed, then the shift is updated and we run a parameter check at the end
 
         tokenization_params = {k: self.get_parameter('tokenization', k) for k in self.parameters['tokenization']}
+        for param, param_value in parameters.items():
+            if param not in tokenization_params:
+                raise ValueError(f"The provided {param} is an INVALID tokenization parameter! The valid parameters are: {list(tokenization_params.keys())}")
+            self.validate('tokenization', param, param_value)
+            tokenization_params[param] = param_value
+
+        # Loading and check the vocab file. It is assumed that its ordered dictionary
+        vocabfile=tokenization_params['vocabfile']
+        act_kmer = tokenization_params['kmer']
+        if vocabfile=='auto':
+            print(self.current_path)
+            vocabfile_path = join(self.current_path, 'data/prokbert_vocabs/', f'prokbert-base-dna{act_kmer}')
+            tokenization_params['vocabfile'] = vocabfile_path
+        # Loading the vocab
         
 
-        pass
+
+        self.tokenization_params = tokenization_params
+
+        return tokenization_params
+
+    def get_maximum_segment_length_from_token_count(self):
+        """Calculating the maximum length of the segment from the token count """
+
+        max_token_counts = self.tokenization_params['token_limit']
+        shift = self.tokenization_params['shift']
+        kmer = self.tokenization_params['kmer']
+                                         
+        max_segment_length = (max_token_counts-3)*shift + kmer
+
+        return max_segment_length
+
+    def get_maximum_token_count_from_max_length(self):
+        """Calculating the maximum length of the segment from the token count """
+
+
+        max_segment_length = self.tokenization_params['max_segment_length']
+        shift = self.tokenization_params['shift']
+        kmer = self.tokenization_params['kmer']
+                                         
+        max_token_count = int(np.ceil((max_segment_length - kmer)/shift+3))
+
+        return max_token_count
+    

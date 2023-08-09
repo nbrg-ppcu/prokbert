@@ -45,25 +45,30 @@ tokenization:
     constraints:
       min: 0
   max_segment_length: #
-    default: 
+    default: 1027
     type: "integer"
     description: "The maximum number of characters in the segment. It should be aligned with the language model. This pramrter is interchangable with token_limit"
     constraints:
       min: 6
       max: 1027 #(max_token_counts-3)*shift + kmer
   token_limit: 
-    default: 
+    default: 1024
     type: "integer"
     description: "The maximum number of tokens that the the LM could handle. It includes the special tokens such as CLS and SEP This pramrter is interchangable with max_segment_length."
     constraints:
       min: 1
       max: 1024 # That's our current limit
   max_unknown_token_proportion: 
-    default: 
+    default: 0 
     type: "float"
-    description: "The maximum proportion of unknown tokens in a max length sequence."
+    description: "The maximum proportion of unknown tokens in a sequence. I.e. if the 10% of the tokens (max_unknown_token_proportion=0.1) are uknwon then the segment is not tokenized. "
     constraints:
       min: 0
       max: 1
+  vocabfile:
+    default: auto
+    type: "str"
+    description: "The path to the vocab. If it is auto, then the default vocab is used. Recommended"
+    constraints:
 
       
