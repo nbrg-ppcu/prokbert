@@ -175,36 +175,46 @@ class SeqConfig:
         act_kmer = tokenization_params['kmer']
         if vocabfile=='auto':
             print(self.current_path)
-            vocabfile_path = join(self.current_path, 'data/prokbert_vocabs/', f'prokbert-base-dna{act_kmer}')
+            vocabfile_path = join(self.current_path, 'data/prokbert_vocabs/', f'prokbert-base-dna{act_kmer}', 'vocab.txt')
             tokenization_params['vocabfile'] = vocabfile_path
+        vocabmap = {line.strip(): i for i, line in enumerate(open(vocabfile_path))}
+        tokenization_params['vocabmap'] = vocabmap
+
         # Loading the vocab
-        
-
-
         self.tokenization_params = tokenization_params
-
         return tokenization_params
+    
 
-    def get_maximum_segment_length_from_token_count(self):
+    def get_maximum_segment_length_from_token_count_from_params(self):
         """Calculating the maximum length of the segment from the token count """
-
         max_token_counts = self.tokenization_params['token_limit']
         shift = self.tokenization_params['shift']
         kmer = self.tokenization_params['kmer']
-                                         
-        max_segment_length = (max_token_counts-3)*shift + kmer
+        return self.get_maximum_segment_length_from_token_count(max_token_counts, shift, kmer)
 
-        return max_segment_length
-
-    def get_maximum_token_count_from_max_length(self):
+    def get_maximum_token_count_from_max_length_from_params(self):
         """Calculating the maximum length of the segment from the token count """
 
 
         max_segment_length = self.tokenization_params['max_segment_length']
         shift = self.tokenization_params['shift']
-        kmer = self.tokenization_params['kmer']
-                                         
-        max_token_count = int(np.ceil((max_segment_length - kmer)/shift+3))
+        kmer = self.tokenization_params['kmer']          
+        max_token_count = self.get_maximum_token_count_from_max_length(max_segment_length, shift, kmer)
 
         return max_token_count
-    
+
+    @staticmethod
+    def get_maximum_segment_length_from_token_count(max_token_counts, shift, kmer):
+        """Calcuates how long sequence can be covered
+        """
+
+        max_segment_length = (max_token_counts-3)*shift + kmer
+        return max_segment_length
+
+    @staticmethod
+    def get_maximum_token_count_from_max_length(max_segment_length, shift, kmer):
+        """Calcuates how long sequence can be covered
+        """
+        max_token_count = int(np.ceil((max_segment_length - kmer)/shift+3))
+        return max_token_count
+

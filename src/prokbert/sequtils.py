@@ -427,8 +427,31 @@ def segmentate_single_sequence(sequence, params, AsDataFrame=False):
 
 def lca_tokenize_segment(segment, params):
     """ Tokenization of one segment. 
-    
+    Thist should be fast
     """
+
+    print('Tokenizing a segment')
+    shift = params['shift']
+    max_segment_length = params['max_segment_length']
+    max_unknown_token_proportion = params['max_unknown_token_proportion']
+    kmer = params['kmer']
+    token_limit = params['token_limit']
+
+    kmers_offset = []
+    for offset in range(shift):
+        kmers = [segment[i:i + kmer] for i in range(shift, len(segment) - kmer + 1, shift)]
+        kmers_offset.append(kmers)
+    
+    
+
+
+
+
+
+
+
+
+
 
 
 def segmentate_sequences_from_list(sequences, params, AsDataFrame=False):

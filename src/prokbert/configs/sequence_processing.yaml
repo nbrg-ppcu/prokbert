@@ -70,5 +70,12 @@ tokenization:
     type: "str"
     description: "The path to the vocab. If it is auto, then the default vocab is used. Recommended"
     constraints:
+  isPaddingToMaxLength:
+    default: False
+    type: "bool"
+    description: "Whether to pad with [PAD] tokens the sentence vector to get fixed length vectors"
+    constraints:
+      options: [True, False]
+
 
       
