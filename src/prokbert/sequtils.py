@@ -34,6 +34,7 @@ from functools import partial
 import operator
 import pathlib
 
+from general_utils import *
 # Ezt a felhasználónak kellene biztosatania 
 # VOCAB_FILES_NAMES = {"vocab_file": "vocab.txt"}
 
@@ -62,6 +63,11 @@ def load_contigs(fasta_files_list, adding_reverse_complement=True, IsAddHeader=F
     """
     
     print('Loading sequence data into memory!')
+    if isinstance(fasta_files_list, str):
+        print('Since the fasta_files_list is a string, not list, we convert to a list.')
+        fasta_files_list = [fasta_files_list]
+
+
     sequences = []
     df_cols = ['fasta_id', 'description', 'source_file', 'sequence', 'orientation']
     for act_assembly in fasta_files_list:
@@ -103,21 +109,37 @@ def load_contigs(fasta_files_list, adding_reverse_complement=True, IsAddHeader=F
     return sequences
 
 
-def get_segment_sizes_without_overlap():
-    """ Ret
+def segment_sequence_contiguous(sequence, params, sequence_id=np.NaN):
     """
+    Create end-to-end, disjoint segments of a sequence without overlaps.
 
+    Segments smaller than the predefined minimum length will be discarded. 
+    This function returns a list of segments along with their positions in the original sequence.
 
-def segment_sequence_contiguous(sequence, params):
-    """ Creating a set of end-to-end, disjoint sections of the sequence without overlaps. 
-    Those segments that are smaller than, the predifined minunimum will be discarded.
-    This function returns with a list of segments with their positions in the original sequence. 
+    Parameters
+    ----------
+    sequence : str
+        The input nucleotide sequence to be segmented.
+    params : dict
+        Dictionary containing the segmentation parameters. Must have 'min_length' 
+        and 'max_length' keys specifying the minimum and maximum lengths of the segments, respectively.
+    sequence_id : numeric, optional
+        An identifier for the sequence. Defaults to NaN.
+
+    Returns
+    -------
+    list of dict
+        Each dictionary in the list represents a segment and contains the segment's sequence, 
+        start position, end position, and sequence ID.
+
 
     """
-
     
+    # Extract segmentation parameters
     min_segment_len = params['min_length']
     max_segment_len = params['max_length']
+    
+    # Ensure the sequence is treated as a string
     if isinstance(sequence, str):
         act_seq = sequence
     L = len(sequence)
@@ -125,39 +147,126 @@ def segment_sequence_contiguous(sequence, params):
     segments = [] 
     for i in range(0, L, max_segment_len):
         act_start_pos = i
-        act_end_pos = min(i+max_segment_len, )
+        act_end_pos = min(i + max_segment_len, L)
         act_segment = sequence[act_start_pos:act_end_pos]
 
-        if act_end_pos- act_start_pos > min_segment_len:
 
-            new_record = {'segment': act_segment,
-                        'segment_start' : act_start_pos,
-                        'segment_end' : act_end_pos}
+
+        # Add segment to the list if it's longer than the minimum length
+        if len(act_segment) >= min_segment_len:
+            new_record = {
+                'segment': act_segment,
+                'segment_start': act_start_pos,
+                'segment_end': act_end_pos,
+                'sequence_id': sequence_id
+            }
             segments.append(new_record)
     
     return segments
 
 
+ 
+
 def segment_sequences(sequences, params, AsDataFrame=False):
-    """ We assume that the sequence is quality controlled and preprocessed i.e. is a valid nucleotide sequence, etc
+    """
+    Segment sequences based on the provided parameters.
+    
+    We assume that the sequence is quality controlled and preprocessed, 
+    i.e., is a valid nucleotide sequence, etc. If sequences are provided 
+    as a DataFrame, then it is assumed that there is a "sequence_id" and 
+    a "sequence" attribute. The "sequence_id" should be a valid primary key. 
+    If the output is requested as a DataFrame, then the IDs are added as well.
+
+    Parameters
+    ----------
+    sequences : list or pd.DataFrame
+        A list of sequences or a DataFrame containing sequences. 
+        If a DataFrame, it must have "sequence_id" and "sequence" attributes.
+    params : dict
+        Dictionary containing the segmentation parameters. 
+        The 'type' key in the dictionary can be 'contiguous' or 'random'.
+    AsDataFrame : bool, optional
+        If True, the output will be a DataFrame. If False, it will be a list. 
+        Defaults to False.
+
+    Returns
+    -------
+    list or pd.DataFrame
+        List of segmented sequences or a DataFrame with segmented sequences 
+        and their corresponding information based on the `AsDataFrame` parameter.
+
+    Raises
+    ------
+    ValueError
+        If the provided sequences DataFrame does not have the required attributes.
+    ValueError
+        If the "sequence_id" column is not a valid primary key.
+
+    Notes
+    -----
+    If the segmentation type is 'random', the functionality is yet to be implemented.
+
+    Examples
+    --------
+    TODO: Add examples after finalizing the function's behavior and output.
+
     """
     segmentation_type = params['type']
-    
 
+    # Checking for primary key and sequence attribute???
+    expected_attributes = ['sequence_id', 'sequence']
+    return_cols = ['segment_id', 'sequence_id', 'segment_start', 'segment_end', 'segment']
+
+
+    if isinstance(sequences, list):
+        print('Sequences is a list, therefore ignoring ids and tracking information. ')
+        IsSequenceId = None
+        IsSeqList = True
+    elif isinstance(sequences, pd.DataFrame):
+        print('Sequences is a list, therefore adding tracking information.')
+        print('Checking input DataFrame!')
+        check_expected_columns(sequences, expected_attributes)
+        print('Checking input sequence_id is valid primary key in the DataFrame')
+        is_valid_primary_key(sequences, 'sequence_id')
+
+        IsSequenceId = True
+        IsSeqList=False
+
+    segments = []
     if segmentation_type == 'contiguous':
-        segments = segment_sequence_contiguous(sequence, params)
+        if IsSeqList:
+            if IsSequenceId:
+                for act_seq_id, seq in enumerate(sequences):
+                    act_segments = segment_sequence_contiguous(seq, params, act_seq_id)
+                    segments.extend(act_segments)
+            else:
+                for seq in sequences:
+                    act_segments = segment_sequence_contiguous(seq, params)
+                    segments.extend(act_segments)
+        else:
+            for _, rec in sequences.iterrows():
+                act_seq = rec['sequence']
+                act_seq_id = rec['sequence_id']
+                act_segments = segment_sequence_contiguous(act_seq, params, act_seq_id)
+                segments.extend(act_segments)
+        
     elif segmentation_type == 'random':
         print('TODO ....')
         segments = []
+
     
-    if 
     
+    if AsDataFrame:
+        print('Creating a DataFrame from the segments. ')
+        segment_db = pd.DataFrame(segments)
+        segment_ids = list(range(len(segment_db)))
+        segment_db['segment_id'] = segment_ids
+        segment_db = segment_db[return_cols]
 
+    else:
+        segment_db = [seg['segment'] for seg in segments]
 
-
-
-
-    #cuts = get_segment_sizes_without_overlap(len(act_seq), k, max_prob=max_prob, max_length=max_length)
+    return segment_db
 
 
 
@@ -424,74 +533,6 @@ def get_default_segmentation_params(params):
     
     return params
 
-def get_default_tokenization_params(params):
-    print('Get default parameters for tokenization')
 
-    sentence_length = get_default_value(params['tokenization'], 'sentence_length', 512)
-    min_sentence_size = get_default_value(params['tokenization'], 'min_sentence_size', 2)
-    unknown_tsh = get_default_value(params['tokenization'], 'unknown_tsh', 0)
-    prokbert_base_path = get_default_lca_tokenizer_get_default_value(params['tokenization'], 'prokbert_base_path', '.')
-    
-    token_vocab_file = join(prokbert_base_path, 'data/tokenizer/vocabs/bert-base-dna{0}/vocab.txt'.format(kmer))
-    vocabmap = {line.strip(): i for i, line in enumerate(open(token_vocab_file))}
-
-    
-    params['tokenization'] = {'vocabmap' : vocabmap,
-                    'sentence_length': sentence_length,
-                    'min_sentence_size': min_sentence_size,
-                    'unknown_tsh': unknown_tsh,
-                    'prokbert_base_path': prokbert_base_path}
-    
-    return params
-
-def get_default_value(tokenizer_params, var_name, var_def_value = None):
-    if var_name in tokenizer_params:
-        var_value=tokenizer_params[var_name]
-    else:
-        var_value=var_def_value
-    return var_value
-
-
-
-def get_default_lca_tokenizer_get_default_tokenizer_params(actparams):
-    print('Get default parameters for a tokenizer and its preprocessor')
-
-    Ls = get_default_lca_tokenizer_get_default_value(actparams, 'Ls', 1024)
-    kmer = get_default_lca_tokenizer_get_default_value(actparams, 'kmer', 6)
-    prokbert_base_path = get_default_lca_tokenizer_get_default_value(actparams, 'prokbert_base_path', '.')
-    lca_shift = get_default_lca_tokenizer_get_default_value(actparams, 'lca_shift', 1)
-    minSeqLen = get_default_lca_tokenizer_get_default_value(actparams, 'minSeqLen', 2)
-    unkwon_tsh = get_default_lca_tokenizer_get_default_value(actparams, 'unkwon_tsh', 0)
-    shifts = get_default_lca_tokenizer_get_default_value(actparams, 'shifts', [0])
-    nr_repetation = get_default_lca_tokenizer_get_default_value(actparams, 'nr_repetation', 1)
-    coverage = get_default_lca_tokenizer_get_default_value(actparams, 'coverage', 1)
-    P_short = get_default_lca_tokenizer_get_default_value(actparams, 'P_short', 0)
-    tokenization_method = get_default_lca_tokenizer_get_default_value(actparams, 'tokenization_method', 'lcas')
-    lca_shift = get_default_lca_tokenizer_get_default_value(actparams, 'lca_shift', 1)
-    segmenetation_type = get_default_lca_tokenizer_get_default_value(actparams, 'segmenetation_type', 'random')
-    lca_left = get_default_lca_tokenizer_get_default_value(actparams, 'lca_left', 0)
-    lca_right = get_default_lca_tokenizer_get_default_value(actparams, 'lca_right', 0)
-
-    token_vocab_file = join(prokbert_base_path, 'data/tokenizer/vocabs/bert-base-dna{0}/vocab.txt'.format(kmer))
-    vocabmap = {line.strip(): i for i, line in enumerate(open(token_vocab_file))}
-    max_sentence_length = kmer + (Ls-2)*lca_shift
-
-    tokenization_params = {'kmer' : kmer,
-                    'Ls' : Ls,
-                    'minSeqLen': minSeqLen,
-                    'unkwon_tsh': unkwon_tsh,
-                    'token_vocab_file': token_vocab_file,
-                    'vocabmap': vocabmap,
-                    'shifts': shifts,
-                    'nr_repetation': nr_repetation,
-                    'coverage': coverage,
-                    'P_short': P_short,
-                    'tokenization_method': tokenization_method,
-                    'lca_shift': lca_shift,
-                    'segmenetation_type': segmenetation_type,
-                    'lca_left' : lca_left,
-                    'lca_right': lca_right,
-                    'max_sentence_length': max_sentence_length}
-    
-    return tokenization_params
+#### Kind of general utils
 

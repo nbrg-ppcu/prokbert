@@ -219,6 +219,94 @@ class TestSeqUtils(unittest.TestCase):
         expected_tokens = [[2, 11, 12, 13, 3, 0, 0, 0], [2, 17, 19, 18, 3, 0, 0, 0]]
         self.assertEqual(sentence_tokens, expected_tokens)
 
+class TestSegmentSequenceContiguous(unittest.TestCase):
+
+    def setUp(self):
+        self.sequences = [
+            'TAGAAATGTCCGCGACCTTTCATACATACCACCGGTACGCCCTGGAGATG',
+            'ATAATGCTAAATCGTAACCCCACTGCTTAAATGAGCCTTCTGTAAATTTCGTAGTACGTA',
+            'GTGACCGGGGTCAGGTTCTCGGCGGCGGCGCGCATCACGTGCTTGCCGACATGCTAGCATG'
+        ]
+        self.default_params = {
+            'type': 'contiguous',
+            'min_length': 0,
+            'max_length': 512,
+            'coverage': 1.0
+        }
+
+    def test_basic_segmentation(self):
+        for seq in self.sequences:
+            result = segment_sequence_contiguous(seq, self.default_params)
+            # Since max_length is 512 and all sequences are shorter than that, 
+            # each sequence should result in a single segment.
+            self.assertEqual(len(result), 1)
+            self.assertEqual(result[0]['segment'], seq)
+            self.assertEqual(result[0]['segment_start'], 0)
+            self.assertEqual(result[0]['segment_end'], len(seq))
+
+    def test_short_sequence(self):
+        short_sequence = 'TAGAA'
+        params = {'type': 'contiguous', 'min_length': 0, 'max_length': 4, 'coverage': 1.0}
+        result = segment_sequence_contiguous(short_sequence, params)
+        self.assertEqual(len(result), 2)
+        self.assertEqual(result[0]['segment'], 'TAGA')
+        self.assertEqual(result[1]['segment'], 'A')
+
+    def test_segment_smaller_than_min_length(self):
+        sequence = 'TAGAATAG'
+        params = {'type': 'contiguous', 'min_length': 5, 'max_length': 6, 'coverage': 1.0}
+        result = segment_sequence_contiguous(sequence, params)
+        # Here, the segments 'AG' will be discarded since its length 
+        # is shorter than min_length, so only one segment should be returned.
+        self.assertEqual(len(result), 1)
+
+    def test_with_sequence_id(self):
+        sequence_id = 1001
+        result = segment_sequence_contiguous(self.sequences[0], self.default_params, sequence_id=sequence_id)
+        self.assertEqual(result[0]['sequence_id'], sequence_id)
+
+class TestSegmentSequences(unittest.TestCase):
+
+    def setUp(self):
+        self.sequences_df = pd.DataFrame({
+            "sequence_id": {0: 0, 1: 1, 2: 2},
+            "sequence": {
+                0: "TAGAAATGTCCGCGACCTTTCATACATACCACCGGTACGCCCTGGAGATG",
+                1: "ATAATGCTAAATCGTAACCCCACTGCTTAAATGAGCCTTCTGTAAATTTC",
+                2: "GTGACCGGGGTCAGGTTCTCGGCGGCGGCGCGCATCACGTGCTTGCCGAC"
+            }
+        })
+        self.default_params = {
+            'type': 'contiguous',
+            'min_length': 0,
+            'max_length': 512,
+            'coverage': 1.0
+        }
+
+    def test_basic_functionality_with_df(self):
+        result = segment_sequences(self.sequences_df, self.default_params)
+        # Since max_length is 512 and all sequences are shorter than that, 
+        # each sequence should result in a single segment.
+        self.assertEqual(len(result), 3)
+
+    def test_output_as_dataframe(self):
+        result = segment_sequences(self.sequences_df, self.default_params, AsDataFrame=True)
+        self.assertIsInstance(result, pd.DataFrame)
+        self.assertEqual(len(result), 3)
+
+    def test_sequences_as_list(self):
+        sequences_list = self.sequences_df['sequence'].tolist()
+        result = segment_sequences(sequences_list, self.default_params)
+        self.assertEqual(len(result), 3)
+
+    def test_missing_columns(self):
+        df_missing_columns = self.sequences_df.drop('sequence_id', axis=1)
+        with self.assertRaises(ValueError) as context:
+            segment_sequences(df_missing_columns, self.default_params)
+        self.assertTrue("The following columns are missing: ['sequence_id']" in str(context.exception))
+
+
+
 if __name__ == '__main__':
     unittest.main()
     
