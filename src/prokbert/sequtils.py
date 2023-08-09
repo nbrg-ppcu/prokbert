@@ -164,8 +164,84 @@ def segment_sequence_contiguous(sequence, params, sequence_id=np.NaN):
     
     return segments
 
+def segment_sequences_random(sequences, params):
+    """
+    Randomly segment the input sequences.
 
- 
+    The input can be a list of sequences or a DataFrame containing sequences.
+    If a DataFrame is provided, it's assumed to be preprocessed: 
+    the "sequence" column stores the sequences to be segmented, and "sequence_id" is a valid primary key.
+    
+    The actual coverage might differ from the expected one. 
+    The output is a list of dictionaries. Note that segment IDs are not generated in this function.
+
+    Parameters
+    ----------
+    sequences : pd.DataFrame
+        DataFrame containing sequences in the "sequence" column and their associated IDs in "sequence_id".
+    params : dict
+        Dictionary containing segmentation parameters including 'coverage', 'min_length', and 'max_length'.
+
+    Returns
+    -------
+    list of dict
+        Each dictionary contains information about a segment including its sequence, start position, 
+        end position, associated sequence ID, and a segment ID.
+
+    Notes
+    -----
+    The actual number of segments might differ from the expected number due to the random sampling nature 
+    and the presence of sequences shorter than the segment size.
+
+    """
+    
+    # Calculate sequence lengths and cumulative sum of lengths
+    sequences['seq_lengths'] = sequences.apply(lambda x: len(x['sequence']), axis=1)
+    sequences['lenght_cum_sum'] = sequences['seq_lengths'].cumsum()
+    Lseqs = sum(sequences['seq_lengths'])
+    
+    # Calculate the number of segments to sample based on expected coverage.
+    # Note: The actual number might be biased if many sequences are "short" compared to the segment sizes.
+    N_segments = int(np.ceil(params['coverage'] * Lseqs / params['max_length']))
+    print(f'Sampling {N_segments} segments from {len(sequences)} sequences.')
+    
+    # Generate random starting coordinates for segments
+    start_coords = list(np.sort(np.int64(np.random.uniform(0, sequences['lenght_cum_sum'].max(), N_segments))))
+    segmentdb = []
+    
+    for sid, act_sampling_coord in enumerate(start_coords):
+
+        diff = act_sampling_coord - sequences['lenght_cum_sum']
+
+        # Find the sequence in which the current segment starts
+        for i in range(len(sequences['lenght_cum_sum'])):
+            if diff[i] < 0:
+                break
+
+        act_sequence_id = sequences['sequence_id'].iloc[i]
+        rel_coord = act_sampling_coord - sequences['lenght_cum_sum'].iloc[i] + sequences['seq_lengths'].iloc[i]
+        
+        segment_end = min(rel_coord + params['max_length'], sequences['seq_lengths'].iloc[i])
+        
+        # Skip the segment if it's shorter than the minimum segment length
+        if segment_end - rel_coord < params['min_length']:
+            print('Too short segment, skip!')
+            continue
+        
+        new_segment = sequences['sequence'].iloc[i][rel_coord:segment_end]
+        new_record = {
+            'sequence_id': act_sequence_id,
+            'segment_start': rel_coord,
+            'segment_end': segment_end,
+            'segment': new_segment,
+            'segment_id': str(sid)
+        }
+        
+        segmentdb.append(new_record)
+
+    return segmentdb
+
+
 
 def segment_sequences(sequences, params, AsDataFrame=False):
     """
@@ -251,8 +327,15 @@ def segment_sequences(sequences, params, AsDataFrame=False):
                 segments.extend(act_segments)
         
     elif segmentation_type == 'random':
-        print('TODO ....')
-        segments = []
+        if IsSeqList:
+            seqeunce_df = pd.DataFrame(sequences,
+                                        columns = ['sequence'])
+            seqeunce_df['sequence_id'] = list(range(len(sequences)))
+            segments = segment_sequences_random(seqeunce_df, params)
+
+        else:
+            segments = segment_sequences_random(sequences, params)
+
 
     
     

@@ -305,6 +305,63 @@ class TestSegmentSequences(unittest.TestCase):
             segment_sequences(df_missing_columns, self.default_params)
         self.assertTrue("The following columns are missing: ['sequence_id']" in str(context.exception))
 
+class TestSegmentSequencesRandom(unittest.TestCase):
+
+    def setUp(self):
+        self.sequences_df = pd.DataFrame({
+            "sequence_id": {0: 0, 1: 1, 2: 2},
+            "sequence": {
+                0: "TAGAAATGTCCGCGACCTTTCATACATACCACCGGTACGCCCTGGAGATG",
+                1: "ATAATGCTAAATCGTAACCCCACTGCTTAAATGAGCCTTCTGTAAATTTC",
+                2: "GTGACCGGGGTCAGGTTCTCGGCGGCGGCGCGCATCACGTGCTTGCCGAC"
+            }
+        })
+        self.default_params = {
+            'type': 'random',
+            'min_length': 10,
+            'max_length': 30,
+            'coverage': 0.5
+        }
+
+    def test_basic_functionality_with_df(self):
+        result = segment_sequences_random(self.sequences_df, self.default_params)
+        self.assertTrue(isinstance(result, list))
+        for segment in result:
+            self.assertTrue(isinstance(segment, dict))
+
+    def test_segment_length(self):
+        result = segment_sequences_random(self.sequences_df, self.default_params)
+        for segment in result:
+            self.assertGreaterEqual(len(segment['segment']), self.default_params['min_length'])
+            self.assertLessEqual(len(segment['segment']), self.default_params['max_length'])
+
+    def test_coverage(self):
+        result = segment_sequences_random(self.sequences_df, self.default_params)
+        total_sequence_length = sum(self.sequences_df['sequence'].apply(len))
+        sampled_length = sum([len(segment['segment']) for segment in result])
+        expected_sampled_length = total_sequence_length * self.default_params['coverage']
+        # Given the randomness, we might not get exact coverage, so we allow a small margin of error
+        margin = expected_sampled_length * 0.2  # 10% margin
+
+        print(f'expected_sampled_length: {expected_sampled_length}')
+
+        self.assertGreaterEqual(sampled_length, expected_sampled_length - margin)
+        self.assertLessEqual(sampled_length, expected_sampled_length + margin)
+
+    def test_output_structure(self):
+        result = segment_sequences_random(self.sequences_df, self.default_params)
+        for segment in result:
+            self.assertIn('sequence_id', segment)
+            self.assertIn('segment_start', segment)
+            self.assertIn('segment_end', segment)
+            self.assertIn('segment', segment)
+            self.assertIn('segment_id', segment)
+
+    def test_short_sequences(self):
+        self.sequences_df.at[0, 'sequence'] = 'TAGAA'  # This is shorter than min_length
+        result = segment_sequences_random(self.sequences_df, self.default_params)
+        sequence_ids = [segment['sequence_id'] for segment in result]
+        self.assertNotIn(0, sequence_ids)
 
 
 if __name__ == '__main__':
