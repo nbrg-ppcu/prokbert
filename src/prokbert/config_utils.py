@@ -177,7 +177,8 @@ class SeqConfig:
             print(self.current_path)
             vocabfile_path = join(self.current_path, 'data/prokbert_vocabs/', f'prokbert-base-dna{act_kmer}', 'vocab.txt')
             tokenization_params['vocabfile'] = vocabfile_path
-        vocabmap = {line.strip(): i for i, line in enumerate(open(vocabfile_path))}
+        with open(vocabfile_path) as vocabfile_in:
+            vocabmap = {line.strip(): i for i, line in enumerate(vocabfile_in)}
         tokenization_params['vocabmap'] = vocabmap
 
         # Loading the vocab

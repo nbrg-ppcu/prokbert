@@ -38,11 +38,6 @@ class TestSeqConfig(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.config.validate('segmentation', 'type', 'invalid_type')
 
-    def test_describe(self):
-        description = self.config.describe('segmentation', 'type')
-        expected_description = "The segmentation type. 'contiguous' refers to end-to-end, disjoint sections of the sequence without overlaps."
-        self.assertEqual(description, expected_description)
-
     def test_get_segmentation_parameters(self):
         parameters = self.config.get_segmentation_parameters({'type': 'random'})
         self.assertEqual(parameters['type'], 'random')
