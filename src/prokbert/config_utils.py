@@ -9,6 +9,11 @@ from multiprocessing import cpu_count
 class SeqConfig:
     """Class to manage and validate sequence processing configurations."""
 
+    numpy_dtype_mapping = {1: np.uint8,
+                           2: np.uint16,
+                           8: np.uint64,
+                           4: np.uint32}
+
     def __init__(self):
         """
         Initialize the configuration, loading default parameters from the YAML file.
@@ -191,14 +196,16 @@ class SeqConfig:
         """ Reading and validating the computational paramters
         """
 
-        computational_params = {k: self.get_parameter('computatition', k) for k in self.parameters['computatition']}
+        computational_params = {k: self.get_parameter('computation', k) for k in self.parameters['computation']}
         core_count = cpu_count()
 
         if computational_params['cpu_cores_for_segmentation'] == -1:
             computational_params['cpu_cores_for_segmentation'] = core_count
 
         if computational_params['cpu_cores_for_tokenization'] == -1:
-            computational_params['cpu_cores_for_tokenization'] = core_count    
+            computational_params['cpu_cores_for_tokenization'] = core_count
+
+        
 
         for param, param_value in parameters.items():
             if param not in computational_params:
@@ -206,6 +213,8 @@ class SeqConfig:
             self.validate('computatition', param, param_value)
             computational_params[param] = param_value
 
+        np_tokentype= SeqConfig.numpy_dtype_mapping[computational_params['numpy_token_integer_prec_byte']]
+        computational_params['np_tokentype'] = np_tokentype
         self.computational_params = computational_params
         return computational_params
 

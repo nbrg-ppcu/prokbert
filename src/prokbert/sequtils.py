@@ -476,7 +476,7 @@ def tokenize_kmerized_segment_list(kmerized_segments, vocabmap, token_limit, max
     
     return tokenized_segments
 
-def process_batch_tokenize_segments_with_ids(segments, segment_ids, tokenization_params):
+def process_batch_tokenize_segments_with_ids(segments, segment_ids, tokenization_params, np_token_type=np.uint16):
     """
     Tokenizes a batch of segments and associates them with their provided IDs.
 
@@ -519,11 +519,11 @@ def process_batch_tokenize_segments_with_ids(segments, segment_ids, tokenization
             raise(ValueError(f'The segment is longer {len(segment)} then the maximum allowed segment length ({max_segment_length}). '))
         
         tokenized_segment,_ = lca_tokenize_segment(segment, tokenization_params)
-        tokenized_segment = [np.array(act_segment, dtype=np.uint32) for act_segment in tokenized_segment]
+        tokenized_segment = [np.array(act_segment, dtype=np_token_type) for act_segment in tokenized_segment]
         tokenized_segments_with_ids[act_id] = tokenized_segment
     return tokenized_segments_with_ids
    
-def batch_tokenize_segments_with_ids(segment_data, tokenization_params, num_cores=1, batch_size = 10000):
+def batch_tokenize_segments_with_ids(segment_data, tokenization_params, num_cores=1, batch_size = 10000, np_token_type=np.uint16):
     """ Parallel tokenization of segments. If the segments are provided as DataFrame then it is splitted into junks specified in the paramaters
     The default number of cores are the maximum available ones. If the segment data is a tuple, then it is expected the first element is the list segments, while the second elements are the ids.
     Please note that the segment_ids should be unique. The segments should quality controlloed. 
@@ -542,7 +542,8 @@ def batch_tokenize_segments_with_ids(segment_data, tokenization_params, num_core
     batch_intervals = [(i, min( i+batch_size, Ndata)) for i in range(0, Ndata, batch_size)]
     params = [(segments[interval[0]:interval[1]], 
                segment_ids[interval[0]:interval[1]],
-               tokenization_params) for interval in batch_intervals]
+               tokenization_params,
+               np_token_type) for interval in batch_intervals]
     with Pool(processes=num_cores) as pool:
         result_list = pool.starmap(process_batch_tokenize_segments_with_ids, params)
 
@@ -554,10 +555,37 @@ def batch_tokenize_segments_with_ids(segment_data, tokenization_params, num_core
     return tokenized_sets
 
 
-    
+def get_rectangular_array_from_tokenized_dataset(tokenized_segments_data, shift, max_token_count, truncate_zeros=True, randomize=True, numpy_dtype=np.uint16):
+    """ Creates and returns with a numpy array, which can be the input of an LM. The input is a dictionary, in which the keys are the segment ids and the values are the list of possible lca tokenized vectors.
+    The function also returns with a descriptor dataframe that contains which row vector correspondss to which segment and it's lca offset. 
+    Optinally the function randomize and truncate the arrays if necceseary. 
 
-   
-   
+    """
+
+    expected_length = len(tokenized_segments_data)*shift
+    X=np.full((expected_length,max_token_count),0, dtype=numpy_dtype)
+    torch_db = [] 
+    torch_id = 0
+    for segment_id, tokenized_vectors in tokenized_segments_data.items():
+        for offset in range(shift):
+            segment_vector = tokenized_vectors[offset]
+            X[torch_id,0:segment_vector.shape[0]] = segment_vector
+            torch_db.append([torch_id, segment_id, offset])
+            torch_id+=1
+    torch_tokenized_segment_db = pd.DataFrame(torch_db,
+                                            columns = ['torch_id', 'segment_id', 'offset'])
+    
+    if randomize:
+        logging.info('Doing randomization!')
+        perm = np.random.permutation(expected_length)        
+        X = X[perm,:]
+        torch_tokenized_segment_db.rename({'torch_id': 'original_torch_id'}, axis=1, inplace=True)
+        torch_tokenized_segment_db = torch_tokenized_segment_db.iloc[perm,:].reset_index().drop('index', axis=1).reset_index().rename({'index' : 'torch_id'}, axis=1)
+
+    if truncate_zeros:
+        logging.info('Tuncating all zeros column')
+    X = truncate_zero_columns(X)
+    return X, torch_tokenized_segment_db
 
         
 def pretty_print_overlapping_sequence(segment, segment_kmers, params):
