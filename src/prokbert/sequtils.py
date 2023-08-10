@@ -1,3 +1,7 @@
+
+import logging
+
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 # coding=utf-8
 
 """ Library for sequence processing """
@@ -64,9 +68,9 @@ def load_contigs(fasta_files_list, adding_reverse_complement=True, IsAddHeader=F
     :rtype: list or DataFrame
     """
     
-    print('Loading sequence data into memory!')
+    logging.info('Loading sequence data into memory!')
     if isinstance(fasta_files_list, str):
-        print('Since the fasta_files_list is a string, not list, we convert to a list.')
+        logging.info('Since the fasta_files_list is a string, not list, we convert to a list.')
         fasta_files_list = [fasta_files_list]
 
 
@@ -105,7 +109,7 @@ def load_contigs(fasta_files_list, adding_reverse_complement=True, IsAddHeader=F
         if IsAddHeader:
             sequences = pd.DataFrame(sequences, columns = df_cols)
         else:
-            print('Are you sure do you want to use DataFrame for the list of sequences?')
+            logging.info('Are you sure do you want to use DataFrame for the list of sequences?')
             sequences = pd.DataFrame(sequences, columns = ['sequence'])
     
     return sequences
@@ -205,7 +209,7 @@ def segment_sequences_random(sequences, params):
     # Calculate the number of segments to sample based on expected coverage.
     # Note: The actual number might be biased if many sequences are "short" compared to the segment sizes.
     N_segments = int(np.ceil(params['coverage'] * Lseqs / params['max_length']))
-    print(f'Sampling {N_segments} segments from {len(sequences)} sequences.')
+    logging.info(f'Sampling {N_segments} segments from {len(sequences)} sequences.')
     
     # Generate random starting coordinates for segments
     start_coords = list(np.sort(np.int64(np.random.uniform(0, sequences['lenght_cum_sum'].max(), N_segments))))
@@ -227,7 +231,7 @@ def segment_sequences_random(sequences, params):
         
         # Skip the segment if it's shorter than the minimum segment length
         if segment_end - rel_coord < params['min_length']:
-            print('Too short segment, skip!')
+            logging.info('Too short segment, skip!')
             continue
         
         new_segment = sequences['sequence'].iloc[i][rel_coord:segment_end]
@@ -296,14 +300,14 @@ def segment_sequences(sequences, params, AsDataFrame=False):
     return_cols = ['segment_id', 'sequence_id', 'segment_start', 'segment_end', 'segment']
 
     if isinstance(sequences, list):
-        print('Sequences is a list, therefore ignoring ids and tracking information. ')
+        logging.info('Sequences is a list, therefore ignoring ids and tracking information. ')
         IsSequenceId = None
         IsSeqList = True
     elif isinstance(sequences, pd.DataFrame):
-        #print('Sequences is a list, therefore adding tracking information.')
-        print('Checking input DataFrame!')
+        #logging.info('Sequences is a list, therefore adding tracking information.')
+        logging.info('Checking input DataFrame!')
         check_expected_columns(sequences, expected_attributes)
-        print('Checking input sequence_id is valid primary key in the DataFrame')
+        logging.info('Checking input sequence_id is valid primary key in the DataFrame')
         is_valid_primary_key(sequences, 'sequence_id')
         IsSequenceId = True
         IsSeqList=False
@@ -336,7 +340,7 @@ def segment_sequences(sequences, params, AsDataFrame=False):
         else:
             segments = segment_sequences_random(sequences, params)
     if AsDataFrame:
-        #print('Creating a DataFrame from the segments. ')
+        #logging.info('Creating a DataFrame from the segments. ')
         segment_db = pd.DataFrame(segments)
         segment_ids = list(range(len(segment_db)))
         segment_db['segment_id'] = segment_ids
@@ -385,7 +389,7 @@ def lca_tokenize_segment(segment, params):
     ([[2, 4, 5, 6, 7, 3]], [['TCTTT', 'CTTTG', 'TTTGC', 'TTGCT']])
     """
 
-    #print('Tokenizing a segment')
+    #logging.info('Tokenizing a segment')
     shift = params['shift']
     max_segment_length = params['max_segment_length']
     max_unknown_token_proportion = params['max_unknown_token_proportion']
@@ -454,7 +458,7 @@ def tokenize_kmerized_segment_list(kmerized_segments, vocabmap, token_limit, max
         if len(act_kmer_list)+2 > token_limit:
             raise(ValueError(f'The expected number of tokens in the segment ({L_kmerized_segment+2}) is larger, then the maximum allowed number of tokens = ({token_limit}). '))
         if L_kmerized_segment == 0:
-            print('Its and empty sentence')
+            logging.info('Its and empty sentence')
             tokenized_kmerized_segment = empty_sentence
             tokenized_segments.append(empty_sentence)
             continue
@@ -505,7 +509,7 @@ def batch_tokenize_segments_with_ids(segments, segment_ids, tokenization_params)
         If the length of a segment exceeds the maximum permissible segment length defined in `tokenization_params`.
 
     """
-    print('Tokenization of a list of segments')
+    logging.info('Tokenization of a list of segments')
     tokenized_segments_with_ids = {}
     for i, segment in enumerate(segments):
         act_id = segment_ids[i]
@@ -546,7 +550,7 @@ def pretty_print_overlapping_sequence(segment, segment_kmers, params):
     first_line = ' '*base_offset + segment
     lines.append(first_line)
     nr_lines = int(np.ceil((k+sep_c)/shift))
-    print('Nr. line to cover the seq:  {0}'.format(nr_lines))
+    logging.info('Nr. line to cover the seq:  {0}'.format(nr_lines))
 
     for line_id in range(nr_lines):
 
