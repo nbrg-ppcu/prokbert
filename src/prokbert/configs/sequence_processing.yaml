@@ -1,0 +1,108 @@
+segmentation:
+  type:
+    default: contiguous
+    type: "string"
+    description: "Defines the segmentation type. 'contiguous' means non-overlapping sections of the sequence are selected end-to-end. In 'random' segmentation, fragments are uniformly sampled from the original sequence."
+    constraints:
+      options: ["contiguous", "random"]
+  min_length:
+    default: 0
+    type: "integer"
+    description: "Sets the minimum length for a segment. Any segment shorter than this will be discarded."
+    constraints:
+      min: 0
+  max_length:
+    default: 512
+    type: "integer"
+    description: "Specifies the maximum length a segment can have."
+    constraints:
+      min: 0
+  coverage:
+    default: 1.0
+    type: "float"
+    description: "Indicates the expected average coverage of any position in the sequence by segments. This is only applicable for type=random. Note that because segments are uniformly sampled, the coverage might vary, especially at the sequence ends."
+    constraints:
+      min: 0.0
+      max: 100.0
+
+tokenization:
+  type:
+    default: lca
+    type: "string"
+    description: "Describes the tokenization approach. By default, the LCA (Local Context Aware) method is used."
+    constraints:
+      options: ["lca"]
+  kmer:
+    default: 6
+    type: "integer"
+    description: "Determines the k-mer size for the tokenization process."
+    constraints:
+      options: [1, 2, 3, 4, 5, 6, 7, 8, 9]
+  shift:
+    default: 1
+    type: "integer"
+    description: "Represents the shift parameter in k-mer. The default value is 1."
+    constraints:
+      min: 0
+  max_segment_length:
+    default: 1027
+    type: "integer"
+    description: "Gives the maximum number of characters in a segment. This should be consistent with the language model's capability. It can be alternated with token_limit."
+    constraints:
+      min: 6
+      max: 1027
+  token_limit:
+    default: 1024
+    type: "integer"
+    description: "States the maximum token count that the language model can process, inclusive of special tokens like CLS and SEP. This is interchangeable with max_segment_length."
+    constraints:
+      min: 1
+      max: 1024
+  max_unknown_token_proportion:
+    default: 0
+    type: "float"
+    description: "Defines the maximum allowed proportion of unknown tokens in a sequence. For instance, if 10% of the tokens are unknown (when max_unknown_token_proportion=0.1), the segment won't be tokenized."
+    constraints:
+      min: 0
+      max: 1
+  vocabfile:
+    default: auto
+    type: "str"
+    description: "Path to the vocabulary file. If set to 'auto', the default vocabulary is utilized."
+  isPaddingToMaxLength:
+    default: False
+    type: "bool"
+    description: "Determines if the tokenized sentence should be padded with [PAD] tokens to produce vectors of a fixed length."
+    constraints:
+      options: [True, False]
+computation:
+  cpu_cores_for_segmentation:
+    default: 10
+    type: "integer"
+    description: "Specifies the number of CPU cores allocated for the segmentation process."
+    constraints:
+      min: 1
+  cpu_cores_for_tokenization:
+    default: -1
+    type: "integer"
+    description: "Allocates a certain number of CPU cores for the k-mer tokenization process."
+    constraints:
+      min: 1
+  batch_size_tokenization:
+    default: 10000
+    type: "integer"
+    description: "Determines the number of segments a single core processes at a time. The input segment list will be divided into chunks of this size."
+    constraints:
+      min: 1
+  batch_size_fasta_segmentation:
+    default: 3
+    type: "integer"
+    description: "Sets the number of fasta files processed in a single batch, useful when dealing with a large number of fasta files."
+    constraints:
+      min: 1
+  numpy_token_integer_prec_byte:
+    default: 2
+    type: "integer"
+    description: "The type of integer to be used during the vectorization. The default is 2, if you want to work larger k-mers then increase it to 4. 1: np.uint8, 2:np.uint16. 4:np.uint32. 8: np.uint64"
+    constraints:
+      options: [1, 2, 4, 8]

@@ -1,3 +1,7 @@
+
+import logging
+
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 # coding=utf-8
 
 """ Library for sequence processing """
@@ -34,8 +38,11 @@ from functools import partial
 import operator
 import pathlib
 
+from general_utils import *
 # Ezt a felhasználónak kellene biztosatania 
 # VOCAB_FILES_NAMES = {"vocab_file": "vocab.txt"}
+
+import logging
 
 
 
@@ -61,7 +68,12 @@ def load_contigs(fasta_files_list, adding_reverse_complement=True, IsAddHeader=F
     :rtype: list or DataFrame
     """
     
-    print('Loading sequence data into memory!')
+    logging.info('Loading sequence data into memory!')
+    if isinstance(fasta_files_list, str):
+        logging.info('Since the fasta_files_list is a string, not list, we convert to a list.')
+        fasta_files_list = [fasta_files_list]
+
+
     sequences = []
     df_cols = ['fasta_id', 'description', 'source_file', 'sequence', 'orientation']
     for act_assembly in fasta_files_list:
@@ -97,233 +109,520 @@ def load_contigs(fasta_files_list, adding_reverse_complement=True, IsAddHeader=F
         if IsAddHeader:
             sequences = pd.DataFrame(sequences, columns = df_cols)
         else:
-            print('Are you sure do you want to use DataFrame for the list of sequences?')
+            logging.info('Are you sure do you want to use DataFrame for the list of sequences?')
             sequences = pd.DataFrame(sequences, columns = ['sequence'])
     
     return sequences
 
 
-def segment_sequence(sequence, params,  AsDataFrame=False):
+def segment_sequence_contiguous(sequence, params, sequence_id=np.NaN):
+    """
+    Create end-to-end, disjoint segments of a sequence without overlaps.
 
-    segmentation_type = params['type']
+    Segments smaller than the predefined minimum length will be discarded. 
+    This function returns a list of segments along with their positions in the original sequence.
+
+    Parameters
+    ----------
+    sequence : str
+        The input nucleotide sequence to be segmented.
+    params : dict
+        Dictionary containing the segmentation parameters. Must have 'min_length' 
+        and 'max_length' keys specifying the minimum and maximum lengths of the segments, respectively.
+    sequence_id : numeric, optional
+        An identifier for the sequence. Defaults to NaN.
+
+    Returns
+    -------
+    list of dict
+        Each dictionary in the list represents a segment and contains the segment's sequence, 
+        start position, end position, and sequence ID.
+
+
+    """
+    
+    # Extract segmentation parameters
     min_segment_len = params['min_length']
     max_segment_len = params['max_length']
+    
+    # Ensure the sequence is treated as a string
     if isinstance(sequence, str):
         act_seq = sequence
+    L = len(sequence)
     
+    segments = [] 
+    for i in range(0, L, max_segment_len):
+        act_start_pos = i
+        act_end_pos = min(i + max_segment_len, L)
+        act_segment = sequence[act_start_pos:act_end_pos]
+
+
+
+        # Add segment to the list if it's longer than the minimum length
+        if len(act_segment) >= min_segment_len:
+            new_record = {
+                'segment': act_segment,
+                'segment_start': act_start_pos,
+                'segment_end': act_end_pos,
+                'sequence_id': sequence_id
+            }
+            segments.append(new_record)
     
+    return segments
 
-
-
-
-def segmentate_single_sequence(sequence, params, AsDataFrame=False):
-    """ 
-
-    Cuts a single sequence into segments.
-
-    :param sequences: Each sequence is represented as a string or as a list [fasta_id, description, source_file, sequence, orientation].
-    :type sequences: string or list
-
-    :param params: Dictionary with parameters.
-    :type params: dict
-
-    :param AsDataFrame: If True, return the segments as a pandas DataFrame. Defaults to False.
-    :type AsDataFrame: bool, optional
-
-    :return: The segmented sequences, represented as lists if AsDataFrame is False,
-             or if AsDataFrame is True and the input is a list, the segments are returned as a DataFrame
-             with columns corresponding to the elements of the input list and the last columns with the segments.
-    :rtype: list<list> or DataFrame
+def segment_sequences_random(sequences, params):
     """
-    segmentation_type = params['segmentation']['segmentation_type']
-    shifts = params['segmentation']['shifts']
-    kmer = params['segmentation']['kmer']
-    minSeqLen = params['segmentation']['minSeqLen']
-    df_cols = ['fasta_id', 'description', 'source_file', 'sequence', 'orientation', 'segments']
+    Randomly segment the input sequences.
+
+    The input can be a list of sequences or a DataFrame containing sequences.
+    If a DataFrame is provided, it's assumed to be preprocessed: 
+    the "sequence" column stores the sequences to be segmented, and "sequence_id" is a valid primary key.
     
-    for v in params['segmentation']:
-        print(v, ': ', params['segmentation'][v])
+    The actual coverage might differ from the expected one. 
+    The output is a list of dictionaries. Note that segment IDs are not generated in this function.
+
+    Parameters
+    ----------
+    sequences : pd.DataFrame
+        DataFrame containing sequences in the "sequence" column and their associated IDs in "sequence_id".
+    params : dict
+        Dictionary containing segmentation parameters including 'coverage', 'min_length', and 'max_length'.
+
+    Returns
+    -------
+    list of dict
+        Each dictionary contains information about a segment including its sequence, start position, 
+        end position, associated sequence ID, and a segment ID.
+
+    Notes
+    -----
+    The actual number of segments might differ from the expected number due to the random sampling nature 
+    and the presence of sequences shorter than the segment size.
+
+    """
+    
+    # Calculate sequence lengths and cumulative sum of lengths
+    sequences['seq_lengths'] = sequences.apply(lambda x: len(x['sequence']), axis=1)
+    sequences['lenght_cum_sum'] = sequences['seq_lengths'].cumsum()
+    Lseqs = sum(sequences['seq_lengths'])
+    
+    # Calculate the number of segments to sample based on expected coverage.
+    # Note: The actual number might be biased if many sequences are "short" compared to the segment sizes.
+    N_segments = int(np.ceil(params['coverage'] * Lseqs / params['max_length']))
+    logging.info(f'Sampling {N_segments} segments from {len(sequences)} sequences.')
+    
+    # Generate random starting coordinates for segments
+    start_coords = list(np.sort(np.int64(np.random.uniform(0, sequences['lenght_cum_sum'].max(), N_segments))))
+    segmentdb = []
+    
+    for sid, act_sampling_coord in enumerate(start_coords):
+
+        diff = act_sampling_coord - sequences['lenght_cum_sum']
+
+        # Find the sequence in which the current segment starts
+        for i in range(len(sequences['lenght_cum_sum'])):
+            if diff[i] < 0:
+                break
+
+        act_sequence_id = sequences['sequence_id'].iloc[i]
+        rel_coord = act_sampling_coord - sequences['lenght_cum_sum'].iloc[i] + sequences['seq_lengths'].iloc[i]
         
-    if isinstance(sequence, str):
-        act_seq = sequence
-    elif isinstance(sequence, list):
-        act_seq = sequence[3]  # Get the sequence from the input list
-    else:
-        raise ValueError("Invalid input type. The input should be either a string or a list.")
-
-    all_segments = []
-
-    if len(act_seq) >= minSeqLen:
-
-        if segmentation_type == 'contigous':
-            for i in range(kmer):
-                segments = []
-                for i in range(i, len(act_seq) - kmer + 1, kmer):
-                    segment = act_seq[i:i + kmer]
-                    segments.append(segment)
-                all_segments.append(segments)
-                    
-        elif segmentation_type == 'covering':
-            for shift in range(shifts): #segmentating with diffferent starting positions
-                segments = []
-                for i in range(shift, len(act_seq) - kmer + 1, shifts):
-                    segment = act_seq[i:i + kmer]
-                    segments.append(segment)
-                all_segments.append(segments)
+        segment_end = min(rel_coord + params['max_length'], sequences['seq_lengths'].iloc[i])
         
-        if AsDataFrame:
-            # Convert the segments to a DataFrame
-            print('Are you sure you want to use DataFrame for the list of sequences?')
-            if isinstance(sequence, str):
-                all_segments = pd.DataFrame({'segments': [all_segments]})
-            else:
-                all_segments = pd.DataFrame([sequence + [all_segments]], columns = df_cols)
-
-    else:
-        print("Sequence ignored due to length constraint:", act_seq)
-
-    
-    return all_segments
-
-
-
-
-def segmentate_sequences_from_list(sequences, params, AsDataFrame=False):
-    """ 
-    Cuts sequences into segments.
-
-    :param sequences: List of sequences. Each sequence is represented as a string if AddedHeader is False,
-                      or as a list [fasta_id, description, source_file, sequence, orientation] if AddedHeader is True.
-    :type sequences: list
-
-    :param params: Dictionary with parameters.
-    :type params: dict
-
-    :param AsDataFrame: If True, return the sequences as a pandas DataFrame. Defaults to False.
-    :type AsDataFrame: bool, optional
-
-    :return: List of segmented sequences, each represented as a list of segments.
-    :rtype: list<list>
-    """
-    segmentation_type = params['segmentation']['segmentation_type']
-    shifts = params['segmentation']['shifts']
-    kmer = params['segmentation']['kmer']
-    minSeqLen = params['segmentation']['minSeqLen']
-    
-    for v in params['segmentation']:
-        print(v, ': ', params['segmentation'][v])
-
-    segmentated_sequences = []
-   
-    for sequence in sequences:   
-        if isinstance(sequence, str):
-            act_seq = sequence
-        elif isinstance(sequence, list):
-            act_seq = sequence[3]  # Get the sequence from the input list
-        else:
-            raise ValueError("Invalid input type. The input should be either a string or a list.")
-
-    
-        if len(act_seq) >= minSeqLen:
-            all_segments = []
-            if segmentation_type == 'contigous':
-                for i in range(kmer):
-                    segments = []
-                    for i in range(i, len(act_seq) - kmer + 1, kmer):
-                        segment = act_seq[i:i + kmer]
-                        segments.append(segment)
-                    all_segments.append(segments)
-
-            elif segmentation_type == 'covering':
-                for shift in range(shifts): #segmentating with diffferent starting positions
-                    segments = []
-                    for i in range(shift, len(act_seq) - kmer + 1, shifts):
-                        segment = act_seq[i:i + kmer]
-                        segments.append(segment)
-                    all_segments.append(segments)
-
-            segmentated_sequences.append(all_segments)
-
-
-        else:
-            print("Sequence ignored due to length constraint:", act_seq)
-
-    if AsDataFrame:
-        # Convert the segments to a DataFrame
-        print('Are you sure you want to use DataFrame for the list of sequences?')
-        if isinstance(sequence, str):
-            segmentated_sequences = pd.DataFrame({'segments': [segmentated_sequences]})
-        else:
-            df_cols = ['fasta_id', 'description', 'source_file', 'sequence', 'orientation', 'segments']
-            df_sequence = pd.DataFrame([seq for seq in sequences if len(seq[3])>minSeqLen], columns=df_cols[:-1])
-            df_sequence['segments'] = segmentated_sequences
-            segmentated_sequences = df_sequence
-
-            #segmentated_sequences = df_sequence
-            
-    return segmentated_sequences
-    
-    
-def tokenize_sentence_from_list(sequences, params):
-    """ 
-    Tokenizes segmentated sequences.
-
-    :param sequences: List of sequences. Each sequence is represented as a list of kmers.
-    :type sequences: list
-
-    :param params: Dictionary with parameters.
-    :type params: dict
-
-    :return: List of tokenized sequences, each represented as a list of tokens (segmented sequences).
-    :rtype: list<list>
-    """
-    
-    vocabmap = params['tokenization']['vocabmap']
-    sentence_length = params['tokenization']['sentence_length']
-    min_sentence_size = params['tokenization']['min_sentence_size']
-    unkwon_tsh = params['tokenization']['unkwon_tsh']
-    
-    sentence_tokens = []
-    unkw_tsh_count = int(sentence_length*unkwon_tsh)
-    print(unkw_tsh_count)
-    for act_seq in sequences:
-        sentence = [vocabmap['[CLS]']]
-        unkcount=0
-        unkw_tsh_count = int(len(act_seq)*unkwon_tsh)
-
-        if len(act_seq) < min_sentence_size:
-            print('too short sent')
+        # Skip the segment if it's shorter than the minimum segment length
+        if segment_end - rel_coord < params['min_length']:
+            logging.info('Too short segment, skip!')
             continue
-        for kmer in act_seq:
+        
+        new_segment = sequences['sequence'].iloc[i][rel_coord:segment_end]
+        new_record = {
+            'sequence_id': act_sequence_id,
+            'segment_start': rel_coord,
+            'segment_end': segment_end,
+            'segment': new_segment,
+            'segment_id': str(sid)
+        }
+        
+        segmentdb.append(new_record)
+
+    return segmentdb
+
+
+
+def segment_sequences(sequences, params, AsDataFrame=False):
+    """
+    Segment sequences based on the provided parameters.
+    
+    We assume that the sequence is quality controlled and preprocessed, 
+    i.e., is a valid nucleotide sequence, etc. If sequences are provided 
+    as a DataFrame, then it is assumed that there is a "sequence_id" and 
+    a "sequence" attribute. The "sequence_id" should be a valid primary key. 
+    If the output is requested as a DataFrame, then the IDs are added as well.
+
+    Parameters
+    ----------
+    sequences : list or pd.DataFrame
+        A list of sequences or a DataFrame containing sequences. 
+        If a DataFrame, it must have "sequence_id" and "sequence" attributes.
+    params : dict
+        Dictionary containing the segmentation parameters. 
+        The 'type' key in the dictionary can be 'contiguous' or 'random'.
+    AsDataFrame : bool, optional
+        If True, the output will be a DataFrame. If False, it will be a list. 
+        Defaults to False.
+
+    Returns
+    -------
+    list or pd.DataFrame
+        List of segmented sequences or a DataFrame with segmented sequences 
+        and their corresponding information based on the `AsDataFrame` parameter.
+
+    Raises
+    ------
+    ValueError
+        If the provided sequences DataFrame does not have the required attributes.
+    ValueError
+        If the "sequence_id" column is not a valid primary key.
+
+    Notes
+    -----
+    If the segmentation type is 'random', the functionality is yet to be implemented.
+
+    Examples
+    --------
+    TODO: Add examples after finalizing the function's behavior and output.
+
+    """
+    segmentation_type = params['type']
+
+    # Checking for primary key and sequence attribute???
+    expected_attributes = ['sequence_id', 'sequence']
+    return_cols = ['segment_id', 'sequence_id', 'segment_start', 'segment_end', 'segment']
+
+    if isinstance(sequences, list):
+        logging.info('Sequences is a list, therefore ignoring ids and tracking information. ')
+        IsSequenceId = None
+        IsSeqList = True
+    elif isinstance(sequences, pd.DataFrame):
+        #logging.info('Sequences is a list, therefore adding tracking information.')
+        logging.info('Checking input DataFrame!')
+        check_expected_columns(sequences, expected_attributes)
+        logging.info('Checking input sequence_id is valid primary key in the DataFrame')
+        is_valid_primary_key(sequences, 'sequence_id')
+        IsSequenceId = True
+        IsSeqList=False
+
+    segments = []
+    if segmentation_type == 'contiguous':
+        if IsSeqList:
+            if IsSequenceId:
+                for act_seq_id, seq in enumerate(sequences):
+                    act_segments = segment_sequence_contiguous(seq, params, act_seq_id)
+                    segments.extend(act_segments)
+            else:
+                for seq in sequences:
+                    act_segments = segment_sequence_contiguous(seq, params)
+                    segments.extend(act_segments)
+        else:
+            for _, rec in sequences.iterrows():
+                act_seq = rec['sequence']
+                act_seq_id = rec['sequence_id']
+                act_segments = segment_sequence_contiguous(act_seq, params, act_seq_id)
+                segments.extend(act_segments)
+        
+    elif segmentation_type == 'random':
+        if IsSeqList:
+            seqeunce_df = pd.DataFrame(sequences,
+                                        columns = ['sequence'])
+            seqeunce_df['sequence_id'] = list(range(len(sequences)))
+            segments = segment_sequences_random(seqeunce_df, params)
+
+        else:
+            segments = segment_sequences_random(sequences, params)
+    if AsDataFrame:
+        #logging.info('Creating a DataFrame from the segments. ')
+        segment_db = pd.DataFrame(segments)
+        segment_ids = list(range(len(segment_db)))
+        segment_db['segment_id'] = segment_ids
+        segment_db = segment_db[return_cols]
+
+    else:
+        segment_db = [seg['segment'] for seg in segments]
+    return segment_db
+
+
+def lca_tokenize_segment(segment, params):
+    """
+    Tokenizes a single segment using Local Context Aware (LCA) tokenization. 
+    The segment is first split into k-mers with specified shifts and then tokenized into token vectors.
+
+    Parameters
+    ----------
+    segment : str
+        The input nucleotide sequence segment to be tokenized.
+    params : dict
+        Dictionary containing the tokenization parameters:
+            - 'shift' (int): The k-mer shift parameter.
+            - 'max_segment_length' (int): Maximum allowable segment length.
+            - 'max_unknown_token_proportion' (float): Maximum allowable proportion of unknown tokens in a segment.
+            - 'kmer' (int): Size of the k-mer.
+            - 'token_limit' (int): Maximum number of tokens allowed in the tokenized output.
+            - 'vocabmap' (dict[str, int]): Dictionary that maps k-mers to their respective token values.
+
+    Returns
+    -------
+    tuple
+        - list[list[int]]: List containing tokenized segments.
+        - list[list[str]]: List containing k-merized segments with different shifts.
+
+    Raises
+    ------
+    ValueError
+        If the segment length exceeds the `max_segment_length`.
+
+    Examples
+    --------
+    >>> vocabmap_example = {"[CLS]": 2, "[SEP]": 3, "[UNK]": 0, "TCTTT": 4, "CTTTG": 5, "TTTGC": 6, "TTGCT": 7}
+    >>> segment_example = 'TCTTTGCTAAG'
+    >>> params_example = {'shift': 1, 'max_segment_length': 512, 'max_unknown_token_proportion': 0.2, 'kmer': 5, 'token_limit': 10, 'vocabmap': vocabmap_example}
+    >>> lca_tokenize_segment(segment_example, params_example)
+    ([[2, 4, 5, 6, 7, 3]], [['TCTTT', 'CTTTG', 'TTTGC', 'TTGCT']])
+    """
+
+    #logging.info('Tokenizing a segment')
+    shift = params['shift']
+    max_segment_length = params['max_segment_length']
+    max_unknown_token_proportion = params['max_unknown_token_proportion']
+    kmer = params['kmer']
+    token_limit = params['token_limit']
+    vocabmap = params['vocabmap']
+    if len(segment) > max_segment_length:
+        raise(ValueError(f'The segment is longer {len(segment)} then the maximum allowed segment length ({max_segment_length}). '))
+    
+    kmers_offset = []
+    # For every pssoble offset and window we should get a k-mer vector. 
+    # If the segmen is too short or non-existent, then we might have a problem. So, please ensure the segment
+    for offset in range(shift):
+        kmers = [segment[i:i + kmer] for i in range(offset, len(segment) - kmer + 1, shift)]
+        kmers_offset.append(kmers)
+    # Mapping the k-mers into numbers
+    tokenized_segments = tokenize_kmerized_segment_list(kmers_offset, vocabmap, token_limit, max_unknown_token_proportion)
+    return tokenized_segments, kmers_offset
+    
+    
+    
+def tokenize_kmerized_segment_list(kmerized_segments, vocabmap, token_limit, max_unknown_token_proportion):
+    """ 
+    Tokenizes or vectorizes a list of k-merized segments into a list of token vectors. If the expected number of 
+    tokens in a segment exceeds the maximum allowed tokens (`token_limit`), the function raises an error. For segments
+    where unknown k-mers exceed the proportion set by `max_unknown_token_proportion`, the output is a special token 
+    sequence indicating an empty sentence.
+
+    Parameters
+    ----------
+    kmerized_segments : list[list[str]]
+        List containing k-merized segments.
+    vocabmap : dict[str, int]
+        Dictionary that maps k-mers to their respective token values.
+    token_limit : int
+        Maximum number of tokens allowed in the tokenized output.
+    max_unknown_token_proportion : float
+        Maximum allowable proportion of unknown tokens in a segment.
+
+    Returns
+    -------
+    list[list[int]]
+        List containing tokenized segments.
+
+    Raises
+    ------
+    ValueError
+        If the expected number of tokens in a segment exceeds `token_limit`.
+
+    Examples
+    --------
+    >>> vocabmap_example = {"[CLS]": 2, "[SEP]": 3, "[UNK]": 0, "TCTTTG": 4, "CTTTGC": 5, "TTTGCT": 6, "TTGCTA": 7}
+    >>> kmerized_segment_example = [['TCTTTG', 'CTTTGC', 'TTTGCT', 'TTGCTA']]
+    >>> tokenize_kmerized_segment_list(kmerized_segment_example, vocabmap_example, 10, 0.2)
+    [[2, 4, 5, 6, 7, 3]]
+    """
+    
+    tokenized_segments = []
+    empty_sentence = [2, 3]
+
+    for act_kmer_list in kmerized_segments:
+        tokenized_kmerized_segment = [vocabmap['[CLS]']]
+        unkcount=0
+        L_kmerized_segment = len(act_kmer_list)
+        unkw_tsh_count = int(L_kmerized_segment*max_unknown_token_proportion)
+        if len(act_kmer_list)+2 > token_limit:
+            raise(ValueError(f'The expected number of tokens in the segment ({L_kmerized_segment+2}) is larger, then the maximum allowed number of tokens = ({token_limit}). '))
+        if L_kmerized_segment == 0:
+            logging.info('Its and empty sentence')
+            tokenized_kmerized_segment = empty_sentence
+            tokenized_segments.append(empty_sentence)
+            continue
+        for kmer in act_kmer_list:
             try:
-                sentence.append(vocabmap[kmer.upper()])
+                tokenized_kmerized_segment.append(vocabmap[kmer.upper()])
             except KeyError:
-                sentence.append(vocabmap['[UNK]'])
+                tokenized_kmerized_segment.append(vocabmap['[UNK]'])
                 unkcount+=1
         if unkcount > unkw_tsh_count:
-            #print('skip sentence')
-            #print(act_seq)
+            tokenized_segments.append(empty_sentence)
             continue
-        sentence.append(vocabmap['[SEP]'])
-        if len(act_seq) < sentence_length-2:
-            extra_padding_tokens_ct = sentence_length - len(act_seq) -2
-            for j in range(extra_padding_tokens_ct):
-                sentence.append(vocabmap['[PAD]'])
-        sentence_tokens.append(sentence)
-    return sentence_tokens
+        tokenized_kmerized_segment.append(vocabmap['[SEP]'])
+        tokenized_segments.append(tokenized_kmerized_segment)
     
-        
-    
-def load_vocab(vocab_file):
-    """Loads a vocabulary file into a dictionary."""
-    vocab = collections.OrderedDict()
-    with open(vocab_file, "r", encoding="utf-8") as reader:
-        tokens = reader.readlines()
-    for index, token in enumerate(tokens):
-        token = token.rstrip("\n")
-        vocab[token] = index
-    return vocab
+    return tokenized_segments
 
+def process_batch_tokenize_segments_with_ids(segments, segment_ids, tokenization_params, np_token_type=np.uint16):
+    """
+    Tokenizes a batch of segments and associates them with their provided IDs.
+
+    This function generates a vector representation for a collection of segments. It presumes that 
+    the segments have undergone quality control. The result is a dictionary where the keys represent
+    the provided segment IDs, and the values are lists of potential vector representations for the segment.
+    Each list element corresponds to a specific shift (e.g., 0-shifted, 1-shifted, etc.).
+    
+    The vector representations are converted to numpy arrays. Note that the output isn't a 2D rectangular
+    array but a list of arrays.
+
+    Parameters
+    ----------
+    segments : list
+        A list of preprocessed and validated segments.
+    segment_ids : list
+        A list of segment IDs corresponding to each segment in the `segments` list.
+    tokenization_params : dict
+        A dictionary containing tokenization parameters.
+
+    Returns
+    -------
+    dict
+        A dictionary where keys are segment IDs and values are lists of numpy arrays representing 
+        tokenized segments.
+
+    Raises
+    ------
+    ValueError
+        If the length of a segment exceeds the maximum permissible segment length defined in `tokenization_params`.
+
+    """
+    logging.info('Tokenization of a list of segments')
+    tokenized_segments_with_ids = {}
+    for i, segment in enumerate(segments):
+        act_id = segment_ids[i]
+        tokenized_segments_with_ids[act_id] = []
+        max_segment_length = tokenization_params['max_segment_length']
+        if len(segment) > max_segment_length:
+            raise(ValueError(f'The segment is longer {len(segment)} then the maximum allowed segment length ({max_segment_length}). '))
+        
+        tokenized_segment,_ = lca_tokenize_segment(segment, tokenization_params)
+        tokenized_segment = [np.array(act_segment, dtype=np_token_type) for act_segment in tokenized_segment]
+        tokenized_segments_with_ids[act_id] = tokenized_segment
+    return tokenized_segments_with_ids
+   
+def batch_tokenize_segments_with_ids(segment_data, tokenization_params, num_cores=1, batch_size = 10000, np_token_type=np.uint16):
+    """ Parallel tokenization of segments. If the segments are provided as DataFrame then it is splitted into junks specified in the paramaters
+    The default number of cores are the maximum available ones. If the segment data is a tuple, then it is expected the first element is the list segments, while the second elements are the ids.
+    Please note that the segment_ids should be unique. The segments should quality controlloed. 
+    """
+
+    if isinstance(segment_data, tuple) or isinstance(segment_data, list):
+        segments = segment_data[0]
+        segment_ids = segment_data[1]
+    elif isinstance(segment_data, pd.DataFrame):
+        segments = list(segment_data['segment'])
+        segment_ids = list(segment_data['segment_id'])
+    else:
+        raise(ValueError(f'The input should be either pandas DataFrame or a tuple instead of {segment_data.__class__}'))
+
+    Ndata = len(segments)
+    batch_intervals = [(i, min( i+batch_size, Ndata)) for i in range(0, Ndata, batch_size)]
+    params = [(segments[interval[0]:interval[1]], 
+               segment_ids[interval[0]:interval[1]],
+               tokenization_params,
+               np_token_type) for interval in batch_intervals]
+    with Pool(processes=num_cores) as pool:
+        result_list = pool.starmap(process_batch_tokenize_segments_with_ids, params)
+
+    tokenized_sets = {}
+    for d in result_list:
+        tokenized_sets.update(d)
+    
+
+    return tokenized_sets
+
+
+def get_rectangular_array_from_tokenized_dataset(tokenized_segments_data: Dict[int, List[np.ndarray]], 
+                                                 shift: int, 
+                                                 max_token_count: int, 
+                                                 truncate_zeros: bool = True, 
+                                                 randomize: bool = True, 
+                                                 numpy_dtype: Type = np.uint16) -> Tuple[np.ndarray, pd.DataFrame]:
+    """
+    Create a rectangular numpy array that can be used as input to a Language Model (LM) from tokenized segment data.
+
+    Parameters:
+    ----------
+    tokenized_segments_data : Dict[int, List[np.ndarray]]
+        A dictionary where keys are segment ids and values are lists of possible LCA tokenized vectors.
+        
+    shift : int
+        Number of LCA offsets.
+        
+    max_token_count : int
+        Maximum allowed token count in the output numpy array.
+        
+    truncate_zeros : bool, optional (default=True)
+        If True, truncate columns from the end of the numpy array that only contain zeros.
+        
+    randomize : bool, optional (default=True)
+        If True, randomize the order of the rows in the output numpy array.
+        
+    numpy_dtype : Type, optional (default=np.uint16)
+        Data type of the values in the output numpy array.
+
+    Returns:
+    -------
+    np.ndarray
+        A rectangular numpy array suitable for input to an LM.
+        
+    pd.DataFrame
+        A dataframe that describes which row in the numpy array corresponds to which segment and its LCA offset.
+        Columns are: ['torch_id', 'segment_id', 'offset']
+
+    """
+    # ... [rest of the function code]
+
+
+    expected_length = len(tokenized_segments_data)*shift
+    X=np.full((expected_length,max_token_count),0, dtype=numpy_dtype)
+    torch_db = [] 
+    torch_id = 0
+    for segment_id, tokenized_vectors in tokenized_segments_data.items():
+        for offset in range(shift):
+            segment_vector = tokenized_vectors[offset]
+            X[torch_id,0:segment_vector.shape[0]] = segment_vector
+            torch_db.append([torch_id, segment_id, offset])
+            torch_id+=1
+    torch_tokenized_segment_db = pd.DataFrame(torch_db,
+                                            columns = ['torch_id', 'segment_id', 'offset'])
+    
+    if randomize:
+        logging.info('Doing randomization!')
+        perm = np.random.permutation(expected_length)        
+        X = X[perm,:]
+        torch_tokenized_segment_db.rename({'torch_id': 'original_torch_id'}, axis=1, inplace=True)
+        torch_tokenized_segment_db = torch_tokenized_segment_db.iloc[perm,:].reset_index().drop('index', axis=1).reset_index().rename({'index' : 'torch_id'}, axis=1)
+
+    if truncate_zeros:
+        logging.info('Tuncating all zeros column')
+    X = truncate_zero_columns(X)
+    return X, torch_tokenized_segment_db
+
+        
 def pretty_print_overlapping_sequence(segment, segment_kmers, params):
     """
     Format the sequence for pretty printing with overlapping k-mers.
@@ -349,7 +648,7 @@ def pretty_print_overlapping_sequence(segment, segment_kmers, params):
     first_line = ' '*base_offset + segment
     lines.append(first_line)
     nr_lines = int(np.ceil((k+sep_c)/shift))
-    print('Nr. line to cover the seq:  {0}'.format(nr_lines))
+    logging.info('Nr. line to cover the seq:  {0}'.format(nr_lines))
 
     for line_id in range(nr_lines):
 
@@ -358,93 +657,4 @@ def pretty_print_overlapping_sequence(segment, segment_kmers, params):
         lines.append(act_line)
     lines = '\n'.join(lines)
     return lines
-
-
-
-def get_default_segmentation_params(params):
-    print('Get default parameters for a segmentation')
-
-    kmer = get_default_value(params['segmentation'], 'kmer', 6)
-    #prokbert_base_path = get_default_value(actparams, 'prokbert_base_path', '.')
-    minSeqLen = get_default_value(params['segmentation'], 'minSeqLen', 10)
-    shifts = get_default_value(params['segmentation'], 'shifts', 2)
-    segmenetation_type = get_default_value(params['segmentation'], 'segmenetation_type', 'contigous')
-
-    params['segmentation'] = {'kmer' : kmer,
-                    'minSeqLen': minSeqLen,
-                    'shifts': shifts,
-                    'segmenetation_type': segmenetation_type}
-    
-    return params
-
-def get_default_tokenization_params(params):
-    print('Get default parameters for tokenization')
-
-    sentence_length = get_default_value(params['tokenization'], 'sentence_length', 512)
-    min_sentence_size = get_default_value(params['tokenization'], 'min_sentence_size', 2)
-    unknown_tsh = get_default_value(params['tokenization'], 'unknown_tsh', 0)
-    prokbert_base_path = get_default_lca_tokenizer_get_default_value(params['tokenization'], 'prokbert_base_path', '.')
-    
-    token_vocab_file = join(prokbert_base_path, 'data/tokenizer/vocabs/bert-base-dna{0}/vocab.txt'.format(kmer))
-    vocabmap = {line.strip(): i for i, line in enumerate(open(token_vocab_file))}
-
-    
-    params['tokenization'] = {'vocabmap' : vocabmap,
-                    'sentence_length': sentence_length,
-                    'min_sentence_size': min_sentence_size,
-                    'unknown_tsh': unknown_tsh,
-                    'prokbert_base_path': prokbert_base_path}
-    
-    return params
-
-def get_default_value(tokenizer_params, var_name, var_def_value = None):
-    if var_name in tokenizer_params:
-        var_value=tokenizer_params[var_name]
-    else:
-        var_value=var_def_value
-    return var_value
-
-
-
-def get_default_lca_tokenizer_get_default_tokenizer_params(actparams):
-    print('Get default parameters for a tokenizer and its preprocessor')
-
-    Ls = get_default_lca_tokenizer_get_default_value(actparams, 'Ls', 1024)
-    kmer = get_default_lca_tokenizer_get_default_value(actparams, 'kmer', 6)
-    prokbert_base_path = get_default_lca_tokenizer_get_default_value(actparams, 'prokbert_base_path', '.')
-    lca_shift = get_default_lca_tokenizer_get_default_value(actparams, 'lca_shift', 1)
-    minSeqLen = get_default_lca_tokenizer_get_default_value(actparams, 'minSeqLen', 2)
-    unkwon_tsh = get_default_lca_tokenizer_get_default_value(actparams, 'unkwon_tsh', 0)
-    shifts = get_default_lca_tokenizer_get_default_value(actparams, 'shifts', [0])
-    nr_repetation = get_default_lca_tokenizer_get_default_value(actparams, 'nr_repetation', 1)
-    coverage = get_default_lca_tokenizer_get_default_value(actparams, 'coverage', 1)
-    P_short = get_default_lca_tokenizer_get_default_value(actparams, 'P_short', 0)
-    tokenization_method = get_default_lca_tokenizer_get_default_value(actparams, 'tokenization_method', 'lcas')
-    lca_shift = get_default_lca_tokenizer_get_default_value(actparams, 'lca_shift', 1)
-    segmenetation_type = get_default_lca_tokenizer_get_default_value(actparams, 'segmenetation_type', 'random')
-    lca_left = get_default_lca_tokenizer_get_default_value(actparams, 'lca_left', 0)
-    lca_right = get_default_lca_tokenizer_get_default_value(actparams, 'lca_right', 0)
-
-    token_vocab_file = join(prokbert_base_path, 'data/tokenizer/vocabs/bert-base-dna{0}/vocab.txt'.format(kmer))
-    vocabmap = {line.strip(): i for i, line in enumerate(open(token_vocab_file))}
-    max_sentence_length = kmer + (Ls-2)*lca_shift
-
-    tokenization_params = {'kmer' : kmer,
-                    'Ls' : Ls,
-                    'minSeqLen': minSeqLen,
-                    'unkwon_tsh': unkwon_tsh,
-                    'token_vocab_file': token_vocab_file,
-                    'vocabmap': vocabmap,
-                    'shifts': shifts,
-                    'nr_repetation': nr_repetation,
-                    'coverage': coverage,
-                    'P_short': P_short,
-                    'tokenization_method': tokenization_method,
-                    'lca_shift': lca_shift,
-                    'segmenetation_type': segmenetation_type,
-                    'lca_left' : lca_left,
-                    'lca_right': lca_right,
-                    'max_sentence_length': max_sentence_length}
-    
-    return tokenization_params
 

@@ -5,3 +5,5 @@ biopython
 gzip
 intervaltree
 umap-learn
+
+pyyaml
