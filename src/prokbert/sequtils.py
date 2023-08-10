@@ -555,12 +555,47 @@ def batch_tokenize_segments_with_ids(segment_data, tokenization_params, num_core
     return tokenized_sets
 
 
-def get_rectangular_array_from_tokenized_dataset(tokenized_segments_data, shift, max_token_count, truncate_zeros=True, randomize=True, numpy_dtype=np.uint16):
-    """ Creates and returns with a numpy array, which can be the input of an LM. The input is a dictionary, in which the keys are the segment ids and the values are the list of possible lca tokenized vectors.
-    The function also returns with a descriptor dataframe that contains which row vector correspondss to which segment and it's lca offset. 
-    Optinally the function randomize and truncate the arrays if necceseary. 
+def get_rectangular_array_from_tokenized_dataset(tokenized_segments_data: Dict[int, List[np.ndarray]], 
+                                                 shift: int, 
+                                                 max_token_count: int, 
+                                                 truncate_zeros: bool = True, 
+                                                 randomize: bool = True, 
+                                                 numpy_dtype: Type = np.uint16) -> Tuple[np.ndarray, pd.DataFrame]:
+    """
+    Create a rectangular numpy array that can be used as input to a Language Model (LM) from tokenized segment data.
+
+    Parameters:
+    ----------
+    tokenized_segments_data : Dict[int, List[np.ndarray]]
+        A dictionary where keys are segment ids and values are lists of possible LCA tokenized vectors.
+        
+    shift : int
+        Number of LCA offsets.
+        
+    max_token_count : int
+        Maximum allowed token count in the output numpy array.
+        
+    truncate_zeros : bool, optional (default=True)
+        If True, truncate columns from the end of the numpy array that only contain zeros.
+        
+    randomize : bool, optional (default=True)
+        If True, randomize the order of the rows in the output numpy array.
+        
+    numpy_dtype : Type, optional (default=np.uint16)
+        Data type of the values in the output numpy array.
+
+    Returns:
+    -------
+    np.ndarray
+        A rectangular numpy array suitable for input to an LM.
+        
+    pd.DataFrame
+        A dataframe that describes which row in the numpy array corresponds to which segment and its LCA offset.
+        Columns are: ['torch_id', 'segment_id', 'offset']
 
     """
+    # ... [rest of the function code]
+
 
     expected_length = len(tokenized_segments_data)*shift
     X=np.full((expected_length,max_token_count),0, dtype=numpy_dtype)

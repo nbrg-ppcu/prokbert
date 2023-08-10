@@ -131,3 +131,5 @@ def truncate_zero_columns(arr: np.ndarray) -> np.ndarray:
         if np.any(arr[:, idx]):
             return arr[:, :(idx+1)]
     return np.empty((arr.shape[0], 0))
+
+
