@@ -476,7 +476,7 @@ def tokenize_kmerized_segment_list(kmerized_segments, vocabmap, token_limit, max
     
     return tokenized_segments
 
-def batch_tokenize_segments_with_ids(segments, segment_ids, tokenization_params):
+def process_batch_tokenize_segments_with_ids(segments, segment_ids, tokenization_params):
     """
     Tokenizes a batch of segments and associates them with their provided IDs.
 
@@ -522,6 +522,41 @@ def batch_tokenize_segments_with_ids(segments, segment_ids, tokenization_params)
         tokenized_segment = [np.array(act_segment, dtype=np.uint32) for act_segment in tokenized_segment]
         tokenized_segments_with_ids[act_id] = tokenized_segment
     return tokenized_segments_with_ids
+   
+def batch_tokenize_segments_with_ids(segment_data, tokenization_params, num_cores=1, batch_size = 10000):
+    """ Parallel tokenization of segments. If the segments are provided as DataFrame then it is splitted into junks specified in the paramaters
+    The default number of cores are the maximum available ones. If the segment data is a tuple, then it is expected the first element is the list segments, while the second elements are the ids.
+    Please note that the segment_ids should be unique. The segments should quality controlloed. 
+    """
+
+    if isinstance(segment_data, tuple) or isinstance(segment_data, list):
+        segments = segment_data[0]
+        segment_ids = segment_data[1]
+    elif isinstance(segment_data, pd.DataFrame):
+        segments = list(segment_data['segment'])
+        segment_ids = list(segment_data['segment_id'])
+    else:
+        raise(ValueError(f'The input should be either pandas DataFrame or a tuple instead of {segment_data.__class__}'))
+
+    Ndata = len(segments)
+    batch_intervals = [(i, min( i+batch_size, Ndata)) for i in range(0, Ndata, batch_size)]
+    params = [(segments[interval[0]:interval[1]], 
+               segment_ids[interval[0]:interval[1]],
+               tokenization_params) for interval in batch_intervals]
+    with Pool(processes=num_cores) as pool:
+        result_list = pool.starmap(process_batch_tokenize_segments_with_ids, params)
+
+    tokenized_sets = {}
+    for d in result_list:
+        tokenized_sets.update(d)
+    
+
+    return tokenized_sets
+
+
+    
+
+   
    
 
         

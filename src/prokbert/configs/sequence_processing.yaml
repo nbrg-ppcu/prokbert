@@ -79,7 +79,7 @@ tokenization:
 # The computatitional paramters i.e. number of cores to be used in the preprocessing
 computatition:
   cpu_cores_for_segmentation:
-    default: -1
+    default: 10
     type: "integer"
     description: "The number of cpu cores to be used for the segmentation process"
     constraints:
@@ -90,6 +90,17 @@ computatition:
     description: "The number of cpu cores to be used for the tokenization of kmers"
     constraints:
       min: 1
-      
+  batch_size_tokenization:
+    default: 10000
+    type: "integer"
+    description: "The number of segments to be processed by a single core. The input segment list will be chunked of size batch_size_tokenization"
+    constraints:
+      min: 1
+  batch_size_fasta_segmentation:
+    default: 3
+    type: "integer"
+    description: "The number of fasta files in one batch if large number of fasta files requeired to be proccessed. "
+    constraints:
+      min: 1
 
       

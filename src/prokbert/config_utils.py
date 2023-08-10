@@ -4,6 +4,7 @@ import pathlib
 from os.path import join
 import os
 import numpy as np
+from multiprocessing import cpu_count
 
 class SeqConfig:
     """Class to manage and validate sequence processing configurations."""
@@ -19,8 +20,9 @@ class SeqConfig:
         self.parameters['tokenization']['shift']['constraints']['max'] = self.parameters['tokenization']['kmer']['default']-1
         # Ha valaki update-li a k-mer paramter-t, akkor triggerelni kellene, hogy mi legyen. 
 
-        self.get_segmentation_parameters()
+        self.get_set_segmentation_parameters()
         self.get_and_set_tokenization_params()
+        self.get_set_computational_paramters()
 
 
         
@@ -137,7 +139,7 @@ class SeqConfig:
         """
         return self.parameters[parameter_class][parameter_name]['description']
     
-    def get_segmentation_parameters(self, parameters: dict = {}) -> dict:
+    def get_set_segmentation_parameters(self, parameters: dict = {}) -> dict:
         """
         Retrieve and validate the provided parameters for segmentation.
 
@@ -185,6 +187,28 @@ class SeqConfig:
         self.tokenization_params = tokenization_params
         return tokenization_params
     
+    def get_set_computational_paramters(self, parameters: dict = {}) -> dict:
+        """ Reading and validating the computational paramters
+        """
+
+        computational_params = {k: self.get_parameter('computatition', k) for k in self.parameters['computatition']}
+        core_count = cpu_count()
+
+        if computational_params['cpu_cores_for_segmentation'] == -1:
+            computational_params['cpu_cores_for_segmentation'] = core_count
+
+        if computational_params['cpu_cores_for_tokenization'] == -1:
+            computational_params['cpu_cores_for_tokenization'] = core_count    
+
+        for param, param_value in parameters.items():
+            if param not in computational_params:
+                raise ValueError(f"The provided {param} is an INVALID computatition parameter! The valid parameters are: {list(computational_params.keys())}")
+            self.validate('computatition', param, param_value)
+            computational_params[param] = param_value
+
+        self.computational_params = computational_params
+        return computational_params
+
 
     def get_maximum_segment_length_from_token_count_from_params(self):
         """Calculating the maximum length of the segment from the token count """
