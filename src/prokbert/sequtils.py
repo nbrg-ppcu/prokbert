@@ -37,6 +37,7 @@ from mimetypes import guess_type
 from functools import partial
 import operator
 import pathlib
+from typing import Dict, List, Type, Tuple
 
 from general_utils import *
 # Ezt a felhasználónak kellene biztosatania 
