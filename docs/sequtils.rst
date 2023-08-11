@@ -33,7 +33,4 @@ Tokenizing a DNA Sequence Segment
 
 ... [Add other examples similarly] ...
 
-.. autosummary::
-   :toctree: api
 
-    prokbert.sequtils.load_contigs
