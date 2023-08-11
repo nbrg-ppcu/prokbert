@@ -624,7 +624,7 @@ def get_rectangular_array_from_tokenized_dataset(tokenized_segments_data: Dict[i
     return X, torch_tokenized_segment_db
 
         
-def pretty_print_overlapping_sequence(segment, segment_kmers, params):
+def pretty_print_overlapping_sequence(segment, segment_kmers, tokenizer_params):
     """
     Format the sequence for pretty printing with overlapping k-mers.
 
@@ -641,8 +641,8 @@ def pretty_print_overlapping_sequence(segment, segment_kmers, params):
     :rtype: list
     """
         
-    shift = params['segmentation']['shifts']
-    k = params['segmentation']['kmer']
+    shift = tokenizer_params['shift']
+    k = tokenizer_params['kmer']
     sep_c = 2
     lines = []
     base_offset = len(str( int((k+3)/shift))) + 3
