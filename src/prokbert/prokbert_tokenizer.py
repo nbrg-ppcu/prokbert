@@ -8,6 +8,7 @@ import collections
 import os
 import unicodedata
 from typing import List, Optional, Tuple
+from copy import deepcopy
 from transformers import PreTrainedTokenizer
 from transformers.tokenization_utils import _is_control, _is_punctuation, _is_whitespace
 from transformers.utils import logging
@@ -66,12 +67,16 @@ class ProkBERTTokenizer(PreTrainedTokenizer):
     pretrained_vocab_files_map = PRETRAINED_VOCAB_FILES_MAP
     pretrained_init_configuration = PRETRAINED_INIT_CONFIGURATION
     max_model_input_sizes = PRETRAINED_POSITIONAL_EMBEDDINGS_SIZES
+    nucleotide_abc = {'A', 'T', 'C', 'G'}
+    # * refers to the specicial mask token
+    extended_nucleotide_abc = {'A', 'T', 'C', 'G', '*'}
+    sequence_unk_token = 'N'
 
     def __init__(self, 
                 tokenization_params = {},
                 segmentation_params = {},
                  comp_params = {},
-                 tokenizer_mode = 'kmer',
+                 operation_space = 'kmer',
                    **kwargs):
         super().__init__(**kwargs)
         
@@ -84,23 +89,35 @@ class ProkBERTTokenizer(PreTrainedTokenizer):
         self.tokenization_params = tokenization_params
         self.segmentation_params = segmentation_params
         self.comp_params = comp_params
-        self.tokenizer_mode = tokenizer_mode
+        self.operation_space = operation_space
 
         vocab_file = tokenization_params['vocabfile']
         self.vocab = tokenization_params['vocabmap']
         self.id2token = {v: k for k, v in self.vocab.items()}
        
         self.max_len = self.tokenization_params['max_segment_length']
-        self.sequence_unk_token = 'N'
 
-        if self.tokenizer_mode == 'sequence':
-            self.unk_token = '[UNK]'
+
+        if self.operation_space == 'sequence':
+
+            token_extension = sorted(list(set(generate_kmers(ProkBERTTokenizer.extended_nucleotide_abc, tokenization_params['kmer'])) - \
+                 set(generate_kmers(ProkBERTTokenizer.nucleotide_abc, tokenization_params['kmer'])) ))
+            print(len(token_extension))
+            self.extended_vocab = deepcopy(self.vocab)
+            for token in token_extension:
+                self.extended_vocab[token] = 4
+                            
+            self.unk_token = ProkBERTTokenizer.sequence_unk_token*tokenization_params['shift']
+            self.mask_token = '*'
+
+
         else:
             self.unk_token = '[UNK]'
         
         self.sep_token = '[SEP]'
         self.cls_token = '[CLS]'
         self.pad_token = '[PAD]'
+        
         
     def tokenize(self, text, lca_shift=0, all=False):
         """ Tokenize a segment. The segment should be smaller then the maximum that the model could handle. 
@@ -120,9 +137,9 @@ class ProkBERTTokenizer(PreTrainedTokenizer):
         return [self.vocab.get(token, self.vocab[self.unk_token]) for token in tokens]
 
     def convert_ids_to_tokens(self, ids):
-        if self.tokenizer_mode == 'kmer':
+        if self.operation_space == 'kmer':
             token_list = [self.id2token.get(id, self.unk_token) for id in ids]
-        elif self.tokenizer_mode == 'sequence':
+        elif self.operation_space == 'sequence':
             act_unknown_token = self.sequence_unk_token*self.tokenization_params['shift']
             start_tok = ids[0:2]
             other_tokens = [self.id2token.get(id, act_unknown_token)[-1*self.tokenization_params['shift']-1:] for id in ids]
@@ -195,4 +212,4 @@ class ProkBERTTokenizer(PreTrainedTokenizer):
         # Decode each set of token IDs
         return [self.decode(token_ids) for token_ids in token_ids_list]
     
-    
+
