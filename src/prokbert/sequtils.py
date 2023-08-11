@@ -639,6 +639,8 @@ def pretty_print_overlapping_sequence(segment, segment_kmers, tokenizer_params):
 
     :return: List of formatted strings representing the sequence with overlapping k-mers.
     :rtype: list
+
+    TODO: Pretty print: mindegyik lca tokenizálást kellene vizualizálni, most pl. az offset hiányzik, így a shift=2 esetre csak a 0. offset-re vizualizál jól. 
     """
         
     shift = tokenizer_params['shift']
