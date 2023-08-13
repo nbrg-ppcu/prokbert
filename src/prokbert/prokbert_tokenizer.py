@@ -7,7 +7,7 @@
 import collections
 import os
 import unicodedata
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Union
 from copy import deepcopy
 from transformers import PreTrainedTokenizer
 from transformers.tokenization_utils import _is_control, _is_punctuation, _is_whitespace
@@ -62,54 +62,55 @@ def load_vocab(vocab_file):
 
 
 class ProkBERTTokenizer(PreTrainedTokenizer):
-
+    """Custom tokenizer for ProkBERT."""
+    
     vocab_files_names = VOCAB_FILES_NAMES
     pretrained_vocab_files_map = PRETRAINED_VOCAB_FILES_MAP
     pretrained_init_configuration = PRETRAINED_INIT_CONFIGURATION
     max_model_input_sizes = PRETRAINED_POSITIONAL_EMBEDDINGS_SIZES
     nucleotide_abc = {'A', 'T', 'C', 'G'}
-    # * refers to the specicial mask token
     extended_nucleotide_abc = {'A', 'T', 'C', 'G', '*'}
     sequence_unk_token = 'N'
 
     def __init__(self, 
-                tokenization_params = {},
-                segmentation_params = {},
-                 comp_params = {},
-                 operation_space = 'kmer',
-                   **kwargs):
+                 tokenization_params: Dict = {},
+                 segmentation_params: Dict = {},
+                 comp_params: Dict = {},
+                 operation_space: str = 'kmer',
+                 **kwargs):
+        """Initialize the ProkBERT tokenizer.
+        
+        Args:
+            tokenization_params (Dict, optional): Tokenization parameters. Defaults to {}.
+            segmentation_params (Dict, optional): Segmentation parameters. Defaults to {}.
+            comp_params (Dict, optional): Computational parameters. Defaults to {}.
+            operation_space (str, optional): Specifies the operation mode. Can be 'kmer' or 'sequence'. Defaults to 'kmer'.
+        """
         super().__init__(**kwargs)
         
         self.defconfig = SeqConfig()
-        tokenization_params = self.defconfig.get_and_set_tokenization_params(tokenization_params)
-        segmentation_params = self.defconfig.get_set_segmentation_parameters(segmentation_params)
-        comp_params = self.defconfig.get_set_computational_paramters(comp_params)
-
-        # Set tokenization params
-        self.tokenization_params = tokenization_params
-        self.segmentation_params = segmentation_params
-        self.comp_params = comp_params
+        self.tokenization_params = self.defconfig.get_and_set_tokenization_params(tokenization_params)
+        self.segmentation_params = self.defconfig.get_set_segmentation_parameters(segmentation_params)
+        self.comp_params = self.defconfig.get_set_computational_paramters(comp_params)
         self.operation_space = operation_space
 
-        vocab_file = tokenization_params['vocabfile']
-        self.vocab = tokenization_params['vocabmap']
+        vocab_file = self.tokenization_params['vocabfile']
+        self.vocab = self.tokenization_params['vocabmap']
         self.id2token = {v: k for k, v in self.vocab.items()}
-       
         self.max_len = self.tokenization_params['max_segment_length']
 
-
         if self.operation_space == 'sequence':
-
-            token_extension = sorted(list(set(generate_kmers(ProkBERTTokenizer.extended_nucleotide_abc, tokenization_params['kmer'])) - \
-                 set(generate_kmers(ProkBERTTokenizer.nucleotide_abc, tokenization_params['kmer'])) ))
-            print(len(token_extension))
+            token_extension = sorted(list(set(generate_kmers(ProkBERTTokenizer.extended_nucleotide_abc, self.tokenization_params['kmer'])) - \
+                 set(generate_kmers(ProkBERTTokenizer.nucleotide_abc, self.tokenization_params['kmer'])) ))
             self.extended_vocab = deepcopy(self.vocab)
             for token in token_extension:
                 self.extended_vocab[token] = 4
                             
-            self.unk_token = ProkBERTTokenizer.sequence_unk_token*tokenization_params['shift']
+            self.unk_token = ProkBERTTokenizer.sequence_unk_token * self.tokenization_params['shift']
             self.mask_token = '*'
-
+            full_unk = 'N' * self.tokenization_params['kmer']
+            self.vocab[full_unk] = 1
+            self.id2token[1] = full_unk
 
         else:
             self.unk_token = '[UNK]'
@@ -117,49 +118,151 @@ class ProkBERTTokenizer(PreTrainedTokenizer):
         self.sep_token = '[SEP]'
         self.cls_token = '[CLS]'
         self.pad_token = '[PAD]'
-        
-        
-    def tokenize(self, text, lca_shift=0, all=False):
-        """ Tokenize a segment. The segment should be smaller then the maximum that the model could handle. 
-        If the all=True, then the function returns with a tuple containing all possible tokenization as list described in  lca_tokenize_segment.
-        lca_shift: which tokenized vector beloning to the specified lca_offset should be return. It should be smaller then shift. Default only the first one.
-    
-        """
+        self.special_tokens = list(self.special_tokens_map.values())
 
+        
+        
+    def tokenize(self, text: str, lca_shift: int = 0, all: bool = False) -> Union[List[str], Tuple[List[List[str]], List[List[str]]]]:
+        """
+        Tokenizes a given segment.
+
+        Args:
+            text (str): The DNA segment to tokenize.
+            lca_shift (int, optional): Which tokenized vector belonging to the specified LCA offset should be returned. Defaults to 0.
+            all (bool, optional): If True, returns all possible tokenizations. Defaults to False.
+        
+        Returns:
+            Union[List[str], Tuple[List[List[str]], List[List[str]]]]: Tokenized segment or tuple of all possible tokenizations.
+        
+        Usage Example:
+            >>> tokenizer = ProkBERTTokenizer(...)
+            >>> segment = 'AATCAAGGAATTATTATCGTT'
+            >>> tokens, kmers = tokenizer.tokenize(segment, all=True)
+            >>> print(tokens)
+            ...
+        """
         tokenized_segments, kmerized_segments = lca_tokenize_segment(text, self.tokenization_params)
         if all:
             return tokenized_segments, kmerized_segments
         else:
             return kmerized_segments[lca_shift]
+
         
 
     def convert_tokens_to_ids(self, tokens):
+        """
+        Converts tokens to their corresponding IDs.
+
+        Args:
+            tokens (List[str]): List of tokens to convert.
+        
+        Returns:
+            List[int]: List of corresponding token IDs.
+        
+        Usage Example:
+            >>> tokenizer = ProkBERTTokenizer(...)
+            >>> tokens = ['AATCAA', 'TCAAGG']
+            >>> ids = tokenizer.convert_tokens_to_ids(tokens)
+            >>> print(ids)
+            ...
+        """
+        
         return [self.vocab.get(token, self.vocab[self.unk_token]) for token in tokens]
 
-    def convert_ids_to_tokens(self, ids):
+    def convert_ids_to_tokens(self, ids: List[int]) -> List[str]:
+        """
+        Converts token IDs back to their original tokens.
+        
+        Args:
+            ids (List[int]): List of token IDs to convert.
+        
+        Returns:
+            List[str]: List of corresponding tokens.
+        
+        Usage Example:
+            >>> tokenizer = ProkBERTTokenizer(...)
+            >>> ids = [213, 3343]
+            >>> tokens = tokenizer.convert_ids_to_tokens(ids)
+            >>> print(tokens)
+            ...
+        """
         if self.operation_space == 'kmer':
             token_list = [self.id2token.get(id, self.unk_token) for id in ids]
+
         elif self.operation_space == 'sequence':
-            act_unknown_token = self.sequence_unk_token*self.tokenization_params['shift']
-            start_tok = ids[0:2]
-            other_tokens = [self.id2token.get(id, act_unknown_token)[-1*self.tokenization_params['shift']-1:] for id in ids]
-            token_list = start_tok + other_tokens
+
+            token_list = []
+            # Handling the sentence start
+            if ids[0] == 2:
+                pass
+            else:
+                token_list.append(self.id2token.get(ids[0], self.unk_token))
+
+            print(token_list)
+            if len(ids) > 1:
+                # if this is a kmer then we add accordingly. 
+                true_start_token = self.id2token.get(ids[1], self.unk_token)
+
+
+                token_list.append(true_start_token)
+            print(token_list)
+            if len(ids) >2:
+                # Adding the other tokens until the end
+                for token_id in ids:
+                    mapped_token_id = self.id2token.get(token_id, self.unk_token)
+                    if (mapped_token_id in self.special_tokens):
+                        act_token_value = ''
+                    else:
+                        act_token_value = mapped_token_id[-1*self.tokenization_params['shift']-1:]
+                        token_list.append(act_token_value)
 
         return token_list
     
  
-    def save_vocabulary(self, save_directory):
+    def save_vocabulary(self, save_directory: str) -> Tuple[str]:
+        """Saves the vocabulary to a file.
+        
+        Args:
+            save_directory (str): Directory where the vocabulary will be saved.
+        
+        Returns:
+            Tuple[str]: Path to the saved vocabulary file.
+        """
         with open(f"{save_directory}/vocab.txt", "w") as f:
             for token in self.vocab:
-                f.write(token + "\n")
+                f.write(token + "\\n")
         return (f"{save_directory}/vocab.txt",)
-
+    
     @classmethod
-    def from_pretrained(cls, vocab_file):
+    def from_pretrained(cls, vocab_file: str) -> 'ProkBERTTokenizer':
+        """Loads a pre-trained tokenizer.
+        
+        Args:
+            vocab_file (str): Path to the pre-trained tokenizer vocabulary file.
+        
+        Returns:
+            ProkBERTTokenizer: Loaded tokenizer instance.
+        """
         return cls(vocab_file)
 
-    def encode_plus(self, text,lca_shift=0, **kwargs):
-        # This is a basic implementation of encode_plus which may need more features
+    def encode_plus(self, text: str, lca_shift: int = 0, **kwargs) -> Dict[str, np.ndarray]:
+        """
+        Tokenizes a sequence and returns it in a format suitable for model input.
+        
+        Args:
+            text (str): The sequence to tokenize.
+            lca_shift (int, optional): LCA offset for tokenization. Defaults to 0.
+        
+        Returns:
+            Dict[str, np.ndarray]: Dictionary containing token IDs and attention masks.
+        
+        Usage Example:
+            >>> tokenizer = ProkBERTTokenizer(...)
+            >>> segment = 'AATCAAGGAATTATTATCGTT'
+            >>> encoded = tokenizer.encode_plus(segment)
+            >>> print(encoded)
+            ...
+        """
         tokenized_segments, kmerized_segments = lca_tokenize_segment(text, self.tokenization_params)
         input_ids = tokenized_segments[lca_shift]
         attention_mask = [1] * len(input_ids)
@@ -174,42 +277,40 @@ class ProkBERTTokenizer(PreTrainedTokenizer):
             "attention_mask": np.array(attention_mask, dtype=self.comp_params['np_tokentype'])
         }
     
-    
     def batch_encode_plus(self, sequences: List[str], **kwargs) -> Dict[str, List[List[int]]]:
         """
         Tokenizes multiple sequences and returns them in a format suitable for model input.
-
+        
         Args:
-        - sequences (List[str]): A list of sequences to be tokenized.
-        - **kwargs: Additional arguments (like max_length, padding, etc.)
-
+            sequences (List[str]): List of sequences to tokenize.
+        
         Returns:
-        - Dict[str, List[List[int]]]: A dictionary containing token IDs and other tensors.
+            Dict[str, List[List[int]]]: Dictionary containing token IDs for each sequence.
+        
+        Usage Example:
+            >>> tokenizer = ProkBERTTokenizer(...)
+            >>> sequences = ['AATCAAGGAATTATTATCGTT', 'GGTAATCGTAGCTATGCTAGC']
+            >>> batch_encoded = tokenizer.batch_encode_plus(sequences)
+            >>> print(batch_encoded)
+            ...
         """
-        # Tokenize each sequence
-        tokenized_data = [self.tokenize(seq) for seq in sequences]
-        
-        # Convert tokens to IDs for each sequence
-        input_ids = [self.convert_tokens_to_ids(tokens) for tokens in tokenized_data]
-        
-        # Depending on kwargs, you might add padding, truncation, etc.
-        # For simplicity, only input_ids are returned here.
-        return {
-            "input_ids": input_ids
-        }
+        return { "input_ids": [self.tokenize(seq) for seq in sequences] }
     
     def batch_decode(self, token_ids_list: List[List[int]], **kwargs) -> List[str]:
         """
         Decodes multiple token ID sequences back into their original sequences.
-
+        
         Args:
-        - token_ids_list (List[List[int]]): A list of token ID sequences.
-        - **kwargs: Additional arguments.
-
+            token_ids_list (List[List[int]]): List of token ID sequences.
+        
         Returns:
-        - List[str]: The decoded sequences.
+            List[str]: List of decoded sequences.
+        
+        Usage Example:
+            >>> tokenizer = ProkBERTTokenizer(...)
+            >>> ids = [[2, 213, 3343, 165, 2580, 248, 3905, 978, 3296, 3]]
+            >>> sequences = tokenizer.batch_decode(ids)
+            >>> print(sequences)
+            ...
         """
-        # Decode each set of token IDs
         return [self.decode(token_ids) for token_ids in token_ids_list]
-    
-
