@@ -334,6 +334,10 @@ class ProkBERTTokenizer(PreTrainedTokenizer):
             "attention_mask": attention_masks
         }
     
+    def decode(self, ids):
+        tokens = self.convert_ids_to_tokens(ids)
+        return ''.join(tokens)
+    
     def batch_decode(self, token_ids_list: List[List[int]], **kwargs) -> List[str]:
         """
         Decodes multiple token ID sequences back into their original sequences.
