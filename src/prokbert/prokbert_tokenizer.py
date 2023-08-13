@@ -208,12 +208,12 @@ class ProkBERTTokenizer(PreTrainedTokenizer):
             print(token_list)
             if len(ids) >2:
                 # Adding the other tokens until the end
-                for token_id in ids:
+                for token_id in ids[2:]:
                     mapped_token_id = self.id2token.get(token_id, self.unk_token)
                     if (mapped_token_id in self.special_tokens):
                         act_token_value = ''
                     else:
-                        act_token_value = mapped_token_id[-1*self.tokenization_params['shift']-1:]
+                        act_token_value = mapped_token_id[-1*self.tokenization_params['shift']:]
                         token_list.append(act_token_value)
 
         return token_list
@@ -277,24 +277,62 @@ class ProkBERTTokenizer(PreTrainedTokenizer):
             "attention_mask": np.array(attention_mask, dtype=self.comp_params['np_tokentype'])
         }
     
-    def batch_encode_plus(self, sequences: List[str], **kwargs) -> Dict[str, List[List[int]]]:
+    def batch_encode_plus(self, sequences: List[str], lca_shift: int = 0, all: bool = False, **kwargs) -> Dict[str, List[List[int]]]:
         """
-        Tokenizes multiple sequences and returns them in a format suitable for model input.
-        
+        Tokenizes multiple sequences and returns them in a format suitable for model input. It is assumed that sequences 
+        have already been preprocessed (i.e., segmented) and quality controlled. 
+
         Args:
-            sequences (List[str]): List of sequences to tokenize.
-        
+        - sequences (List[str]): A list of DNA sequences to be tokenized.
+        - lca_shift (int, default=0): The LCA offset or windows to get the tokenized vector. If the required offset is >= shift, 
+        an error is raised.
+        - all (bool, default=False): Whether all possible tokenization vectors should be returned. If False, only the specified 
+        offset is used. 
+        - **kwargs: Additional arguments (like max_length, padding, etc.)
+
         Returns:
-            Dict[str, List[List[int]]]: Dictionary containing token IDs for each sequence.
-        
-        Usage Example:
-            >>> tokenizer = ProkBERTTokenizer(...)
-            >>> sequences = ['AATCAAGGAATTATTATCGTT', 'GGTAATCGTAGCTATGCTAGC']
-            >>> batch_encoded = tokenizer.batch_encode_plus(sequences)
-            >>> print(batch_encoded)
-            ...
+        - Dict[str, List[List[int]]]: A dictionary containing token IDs, attention masks, and token type IDs.
         """
-        return { "input_ids": [self.tokenize(seq) for seq in sequences] }
+        shift = self.tokenization_params['shift']
+        if lca_shift >= shift:
+            raise ValueError(f'The required offset {lca_shift} is invalid. The maximum offset should be < {shift}')
+        
+        # Parallel tokenization. First, create unique IDs for all sequences. 
+        sequence_ids = list(range(len(sequences)))
+        to_tokenize_data = (sequences, sequence_ids)
+        
+        # Tokenize each sequence
+        tokenization_results = batch_tokenize_segments_with_ids(
+            to_tokenize_data, 
+            self.tokenization_params, 
+            self.comp_params['cpu_cores_for_tokenization'],
+            self.comp_params['batch_size_tokenization'],
+            self.comp_params['np_tokentype']
+        )
+
+        # Generate input ids, token type ids, and attention masks
+        input_ids = []
+        token_type_ids = []
+        attention_masks = []
+        
+        if all:
+            for tokenized_vectors in tokenization_results.values():
+                for tokenized_vector in tokenized_vectors:
+                    input_ids.append(tokenized_vector)
+                    token_type_ids.append([0] * len(tokenized_vector))
+                    attention_masks.append([1] * len(tokenized_vector))
+        else:
+            for tokenized_vectors in tokenization_results.values():
+                selected_vector = tokenized_vectors[lca_shift]
+                input_ids.append(selected_vector)
+                token_type_ids.append([0] * len(selected_vector))
+                attention_masks.append([1] * len(selected_vector))
+
+        return {
+            "input_ids": input_ids,
+            "token_type_ids": token_type_ids,
+            "attention_mask": attention_masks
+        }
     
     def batch_decode(self, token_ids_list: List[List[int]], **kwargs) -> List[str]:
         """
