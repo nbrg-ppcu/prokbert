@@ -59,7 +59,7 @@ tokenization:
       min: 1
       max: 1024
   max_unknown_token_proportion:
-    default: 0
+    default: 0.9999
     type: "float"
     description: "Defines the maximum allowed proportion of unknown tokens in a sequence. For instance, if 10% of the tokens are unknown (when max_unknown_token_proportion=0.1), the segment won't be tokenized."
     constraints:
