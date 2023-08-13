@@ -84,8 +84,8 @@ MLM Probability: {4}
             mask_coords = act_indeces[masked_indices[i]]
             new_mask_coords = []
             for act_coord in mask_coords:
-                index_start = max(1, act_coord - self.mask_to_left) #végeket nem maszkoljuk ki
-                index_end = min (act_coord + self.mask_to_right + 1, masked_indices_shape[1]-1) #végeket nem maszkoljuk ki
+                index_start = max(1, act_coord - self.mask_to_left) 
+                index_end = min (act_coord + self.mask_to_right + 1, masked_indices_shape[1]-1) 
                 new_range = list(range(index_start, index_end))
                 new_mask_coords.extend(new_range)
             new_mask_coords = list(set(new_mask_coords))
