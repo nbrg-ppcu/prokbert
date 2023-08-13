@@ -38,6 +38,7 @@ from functools import partial
 import operator
 import pathlib
 from typing import Dict, List, Type, Tuple
+from itertools import product
 
 from general_utils import *
 # Ezt a felhasználónak kellene biztosatania 
@@ -659,3 +660,15 @@ def pretty_print_overlapping_sequence(segment, segment_kmers, tokenizer_params):
     lines = '\n'.join(lines)
     return lines
 
+def generate_kmers(abc, k):
+    """
+    Generates all possible k-mers from a given alphabet.
+    
+    Args:
+    - abc (set): The alphabet.
+    - k (int): Length of the k-mers.
+
+    Returns:
+    - List[str]: List of all possible k-mers.
+    """
+    return [''.join(p) for p in product(abc, repeat=k)]
