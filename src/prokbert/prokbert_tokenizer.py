@@ -89,9 +89,9 @@ class ProkBERTTokenizer(PreTrainedTokenizer):
         super().__init__(**kwargs)
         
         self.defconfig = SeqConfig()
-        self.tokenization_params = self.defconfig.get_and_set_tokenization_params(tokenization_params)
-        self.segmentation_params = self.defconfig.get_set_segmentation_parameters(segmentation_params)
-        self.comp_params = self.defconfig.get_set_computational_paramters(comp_params)
+        self.tokenization_params = self.defconfig.get_and_set_tokenization_parameters(tokenization_params)
+        self.segmentation_params = self.defconfig.get_and_set_segmentation_parameters(segmentation_params)
+        self.comp_params = self.defconfig.get_and_set_computational_parameters(comp_params)
         self.operation_space = operation_space
 
         vocab_file = self.tokenization_params['vocabfile']

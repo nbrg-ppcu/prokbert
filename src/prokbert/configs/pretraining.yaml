@@ -90,6 +90,24 @@ dataset:
     type: "string"
     description: "The class of the dataset to be used. The default is IterableProkBERTPretrainingDataset. It is assumed that the dataset is already exists. "
     options: ['ProkBERTPretrainingHDFDataset', 'IterableProkBERTPretrainingDataset']
+  input_batch_size:
+    default: 10000
+    type: "int"
+    description: "Only for iterative HDF, storage based datasets. The size of the batch to be loaded into the memory from the disk. "
+  dataset_iteration_batch_offset:
+    default: 0
+    type: "int"   
+    description: "The offset value, where to start read the dataset. I.e. if the training is restarted, then we should able start the iteration in another position."
+    constraints:
+      min: 0.0
+  max_iteration_over_dataset:
+    default: 10
+    type: "int"   
+    description: "Only for iterative datasets. Maximum how many times we should iterate over a dataset (kind of epoch). I.e. 10 times. After thet stop iteration will be raised"
+    constraints:
+      min: 0.0
+      
+
 pretraining:
   output_dir:
     default: './train_output'
@@ -160,10 +178,15 @@ pretraining:
     type: "boolean"
     description: "Whether to ignore data skip or not."
 segmentation:
+  type: 'random'
 # For full definiation, please see the documentation of the sequence_processing.yaml
 tokenization:
+  kmer: 6
+  shift: 2
 # For full definiation, please see the documentation of the sequitls parameters
 computation:
+  numpy_token_integer_prec_byte: 2
+
 
 
     

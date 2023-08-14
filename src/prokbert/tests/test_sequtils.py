@@ -250,7 +250,7 @@ class TestTokenization(unittest.TestCase):
     def setUp(self):
         # Using the provided tokenizer parameters
         defconfig = SeqConfig()
-        tokenizer_params = defconfig.get_and_set_tokenization_params({'max_unknown_token_proportion' : 0.1})    
+        tokenizer_params = defconfig.get_and_set_tokenization_parameters({'max_unknown_token_proportion' : 0.1})    
 
         self.vocabmap = tokenizer_params['vocabmap']
         self.token_limit = tokenizer_params['token_limit']
@@ -286,7 +286,7 @@ class TestLCATokenizeSegment(unittest.TestCase):
 
     def setUp(self):
         defconfig = SeqConfig()
-        tokenizer_params = defconfig.get_and_set_tokenization_params()    
+        tokenizer_params = defconfig.get_and_set_tokenization_parameters()    
         self.vocabmap = tokenizer_params['vocabmap']
 
         self.params_example = {
@@ -296,7 +296,7 @@ class TestLCATokenizeSegment(unittest.TestCase):
             'kmer': 5, 
             'token_limit': 10
         }
-        self.params_example = defconfig.get_and_set_tokenization_params(self.params_example)    
+        self.params_example = defconfig.get_and_set_tokenization_parameters(self.params_example)    
 
     def test_valid_segment(self):
 
@@ -341,7 +341,7 @@ class TestSaveToHDF(unittest.TestCase):
         save_to_hdf(self.array, self.temp_hdf_file)
         
         with h5py.File(self.temp_hdf_file, 'r') as hdf:
-            saved_data = hdf["training_data"][:]
+            saved_data = hdf["training_data"]['X'][:]
             
         np.testing.assert_array_equal(saved_data, self.array)
 
@@ -349,7 +349,7 @@ class TestSaveToHDF(unittest.TestCase):
         save_to_hdf(self.array, self.temp_hdf_file, database=self.df)
         
         with h5py.File(self.temp_hdf_file, 'r') as hdf:
-            saved_data = hdf["training_data"][:]
+            saved_data = hdf["training_data"]['X'][:]
             
         saved_df = pd.read_hdf(self.temp_hdf_file, key='database_0')
             
@@ -364,7 +364,7 @@ class TestSaveToHDF(unittest.TestCase):
         save_to_hdf(self.array, self.temp_hdf_file, compression=True)
         
         with h5py.File(self.temp_hdf_file, 'r') as hdf:
-            saved_data = hdf["training_data"][:]
+            saved_data = hdf["training_data"]['X'][:]
             
         np.testing.assert_array_equal(saved_data, self.array)
 
