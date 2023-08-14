@@ -45,6 +45,8 @@ from general_utils import *
 # VOCAB_FILES_NAMES = {"vocab_file": "vocab.txt"}
 
 import logging
+import h5py
+
 
 
 
@@ -672,3 +674,70 @@ def generate_kmers(abc, k):
     - List[str]: List of all possible k-mers.
     """
     return [''.join(p) for p in product(abc, repeat=k)]
+
+def save_to_hdf(X: np.ndarray, hdf_file_path: str, 
+                   database: pd.DataFrame = None, 
+                   compression: bool = False, 
+                   pd_chunksize: int = 10_000_000) -> None:
+    """
+    Save a numpy array and an optional pandas DataFrame to an HDF5 file.
+    
+    Args:
+        X (np.ndarray): 2D numpy array to be saved.
+        hdf_file_path (str): Path to the HDF5 file.
+        database (pd.DataFrame, optional): Pandas DataFrame to be saved. Defaults to None.
+        compression (bool, optional): Whether to apply compression. Defaults to False.
+        pd_chunksize (int, optional): Number of rows per chunk for saving the DataFrame. Defaults to 10,000,000.
+    
+    Raises:
+        ValueError: If the provided numpy array is not 2D.
+        OSError: If there's an error creating the directory structure or removing an existing HDF5 file.
+    
+    Example:
+        >>> import numpy as np
+        >>> import pandas as pd
+        >>> array = np.random.random((100, 100))
+        >>> df = pd.DataFrame({'A': range(1, 101), 'B': range(101, 201)})
+        >>> save_to_hdf(array, "sample.hdf5", database=df, compression=True)
+    
+    """
+    
+    # Check if X is a 2D numpy array
+    if len(X.shape) != 2:
+        raise ValueError("The provided numpy array is not 2D.")
+    
+    # If HDF5 file exists, attempt to delete it
+    if os.path.exists(hdf_file_path):
+        try:
+            os.remove(hdf_file_path)
+            logging.info(f"Existing HDF5 file {hdf_file_path} removed successfully.")
+        except Exception as e:
+            raise OSError(f"Error removing existing HDF5 file {hdf_file_path}. Error: {e}")
+    
+    # Create directory structure for HDF5 file
+    create_directory_for_filepath(hdf_file_path)
+    
+    # Save the numpy array to HDF5
+    with h5py.File(hdf_file_path, 'w') as hdf:
+        if compression:
+            hdf.create_dataset("training_data", data=X, compression="lzf", chunks=True)
+        else:
+            hdf.create_dataset("training_data", data=X, chunks=True)
+    
+    logging.info(f"Numpy array saved to {hdf_file_path} successfully.")
+
+    # Save the pandas DataFrame to HDF5, if provided
+    if database is not None:
+        logging.info("Adding database into the HDF5 file!")
+        num_chunks = int(np.ceil(len(database) / pd_chunksize))
+        logging.info(f'Number of chunks: {num_chunks}')
+        chunk_grouping = np.arange(len(database)) // pd_chunksize
+        chunkseqs = database.groupby(chunk_grouping)
+        for i, (_, chunk) in enumerate(chunkseqs):
+            logging.info(f'Writing database chunk {i} into {hdf_file_path}')
+            if compression:
+                chunk.to_hdf(hdf_file_path, f'database_{i}', format='table', data_columns=True,  mode='a', complib='lzo')
+            else:
+                chunk.to_hdf(hdf_file_path, f'database_{i}', format='table', data_columns=True,  mode='a')
+
+        logging.info('Database addition finished!')

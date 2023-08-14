@@ -200,7 +200,7 @@ class TestSegmentSequencesRandom(unittest.TestCase):
             'type': 'random',
             'min_length': 10,
             'max_length': 30,
-            'coverage': 0.5
+            'coverage': 10
         }
 
     def test_basic_functionality_with_df(self):
