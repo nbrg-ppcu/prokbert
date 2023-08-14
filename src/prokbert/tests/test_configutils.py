@@ -39,11 +39,11 @@ class TestSeqConfig(unittest.TestCase):
             self.config.validate('segmentation', 'type', 'invalid_type')
 
     def test_get_set_segmentation_parameters(self):
-        parameters = self.config.get_set_segmentation_parameters({'type': 'random'})
+        parameters = self.config.get_and_set_segmentation_parameters({'type': 'random'})
         self.assertEqual(parameters['type'], 'random')
 
         with self.assertRaises(ValueError):
-            self.config.get_set_segmentation_parameters({'invalid_param': 'value'})
+            self.config.get_and_set_segmentation_parameters({'invalid_param': 'value'})
 
 if __name__ == "__main__":
     unittest.main()

@@ -133,3 +133,31 @@ def truncate_zero_columns(arr: np.ndarray) -> np.ndarray:
     return np.empty((arr.shape[0], 0))
 
 
+import os
+
+def create_directory_for_filepath(filepath: str) -> None:
+    """
+    Given a file path, creates the underlying directory structure if it doesn't already exist.
+
+    Args:
+        filepath (str): The path to the file for which the directory structure should be created.
+
+    Raises:
+        ValueError: If the provided path is empty or None.
+        OSError: If there's an error creating the directory structure.
+    """
+    
+    if not filepath:
+        raise ValueError("The provided filepath is empty or None.")
+    
+    directory = os.path.dirname(filepath)
+    
+    if directory and not os.path.exists(directory):
+        try:
+            os.makedirs(directory)
+            print(f"Directory structure {directory} created successfully.")
+        except OSError as e:
+            raise OSError(f"Error creating directory structure {directory}. Error: {e}")
+
+# Example usage:
+# create_directory_for_filepath("/path/to/directory/that/might/not/exist/filename.txt")
