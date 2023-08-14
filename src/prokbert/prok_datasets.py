@@ -114,7 +114,9 @@ class IterableProkBERTPretrainingDataset(IterableDataset):
             return torch.tensor(self.dataset_file['training_data']['X'][index], dtype=torch.int16)
         elif isinstance(index, slice):
             # Return slice
-            return [torch.tensor(item, dtype=torch.int) for item in self.dataset_file['training_data']['X'][index]]
+            return torch.tensor(self.dataset_file['training_data']['X'][index], dtype=torch.int16)
+        
+            #return [torch.tensor(item, dtype=torch.int) for item in self.dataset_file['training_data']['X'][index]]
 
 
     def __del__(self):
