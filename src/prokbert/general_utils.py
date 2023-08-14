@@ -161,3 +161,19 @@ def create_directory_for_filepath(filepath: str) -> None:
 
 # Example usage:
 # create_directory_for_filepath("/path/to/directory/that/might/not/exist/filename.txt")
+
+def check_file_exists(file_path: str) -> bool:
+    """
+    Checks if the provided file path exists.
+
+    Args:
+        file_path (str): Path to the file.
+
+    Returns:
+        bool: True if the file exists, raises ValueError otherwise.
+    """
+    if os.path.exists(file_path):
+        return True
+    else:
+        raise ValueError(f"The provided file path '{file_path}' does not exist.")
+    

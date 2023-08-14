@@ -4,6 +4,7 @@ import pathlib
 from os.path import join
 import os
 import numpy as np
+import torch
 from multiprocessing import cpu_count
 
 class BaseConfig:
@@ -189,6 +190,8 @@ class SeqConfig(BaseConfig):
             print(self.current_path)
             vocabfile_path = join(self.current_path, 'data/prokbert_vocabs/', f'prokbert-base-dna{act_kmer}', 'vocab.txt')
             tokenization_params['vocabfile'] = vocabfile_path
+        else:
+            vocabfile_path = vocabfile
         with open(vocabfile_path) as vocabfile_in:
             vocabmap = {line.strip(): i for i, line in enumerate(vocabfile_in)}
         tokenization_params['vocabmap'] = vocabmap
@@ -260,6 +263,11 @@ class SeqConfig(BaseConfig):
 class ProkBERTConfig(BaseConfig):
     """Class to manage and validate pretraining configurations."""
 
+    torch_dtype_mapping = {1: torch.uint8,
+                           2: torch.int16,
+                           8: torch.int64,
+                           4: torch.int32}
+
     def __init__(self):
         super().__init__()
 
@@ -279,6 +287,7 @@ class ProkBERTConfig(BaseConfig):
         self.tokenization_params = self.def_seq_config.get_and_set_tokenization_parameters(self.parameters['tokenization'])
         self.computation_params = self.def_seq_config.get_and_set_computational_parameters(self.parameters['computation'])
 
+        self.default_torchtype = ProkBERTConfig.torch_dtype_mapping[self.computation_params['numpy_token_integer_prec_byte']]
 
     def _get_default_pretrain_config_file(self) -> str:
         """
@@ -319,4 +328,30 @@ class ProkBERTConfig(BaseConfig):
             class_params[param] = param_value
 
         return class_params
+    
+    def get_and_set_model_parameters(self, parameters: dict = {}) -> dict:
+        """ Setting the model parameters """
+
+        self.model_params = self.get_set_parameters('model', parameters)
+
+        return self.model_params
+
+    def get_and_set_dataset_parameters(self, parameters: dict = {}) -> dict:
+        """ Setting the dataset parameters """
+
+        self.dataset_params = self.get_set_parameters('dataset', parameters)
+
+        return self.dataset_params
+
+    def get_and_set_pretraining_parameters(self, parameters: dict = {}) -> dict:
+        """ Setting the model parameters """
+        self.pretraining_params = self.get_set_parameters('pretraining', parameters)
+
+        return self.pretraining_params       
+    
+    
+    def get_and_set_datacollator_parameters(self, parameters: dict = {}) -> dict:
+        """ Setting the model parameters """
+        self.data_collator_params = self.get_set_parameters('data_collator', parameters)
+        return self.data_collator_params
     
