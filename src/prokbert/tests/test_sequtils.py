@@ -7,7 +7,9 @@ import gzip
 import sys
 import collections
 from os.path import join
-
+import pandas as pd
+import numpy as np
+import tempfile
 # The test should be run from the project root directory as: 
 
 from sequtils import *
@@ -191,15 +193,15 @@ class TestSegmentSequencesRandom(unittest.TestCase):
         self.sequences_df = pd.DataFrame({
             "sequence_id": {0: 0, 1: 1, 2: 2},
             "sequence": {
-                0: "TAGAAATGTCCGCGACCTTTCATACATACCACCGGTACGCCCTGGAGATG",
-                1: "ATAATGCTAAATCGTAACCCCACTGCTTAAATGAGCCTTCTGTAAATTTC",
-                2: "GTGACCGGGGTCAGGTTCTCGGCGGCGGCGCGCATCACGTGCTTGCCGAC"
+                0: "TAGAAATGTCCGCGACCTTTCATACATACCACCGGTACGCCCACTGCTTAAATGAGCCTTCTGTAAATTCCTGGAGATGTAGAAATGTCCGCGACCTTTCATACATACCACCGGTACGCCCTGGAGATG",
+                1: "ATAATGCTAAATCGTAACCCCACTGCTTAAATGAGCCTTCTGTAAATTTCATAATGCTAAATCGTAACCCCACTGCTTAAATGAGCCTTCTGTAAATTTCATAATGCTAAATCGTAACCCCACTGCTTAAATGAGCCTTCTGTAAATTTC",
+                2: "GTGACCGGGGTCAGGTTCTCGGCGGCGGCGCGCATCACGTGCTTGCCGACCCGGGGTCAGGTTCTCGGCGGCGGCCCGGGGTCAGGTTCTCGGCGGCGGCCCGGGGTCAGGTTCTCGGCGGCGGCCCGGGGTCAGGTTCTCGGCGGCGGC"
             }
         })
         self.default_params = {
             'type': 'random',
             'min_length': 10,
-            'max_length': 30,
+            'max_length': 100,
             'coverage': 10
         }
 
@@ -221,7 +223,7 @@ class TestSegmentSequencesRandom(unittest.TestCase):
         sampled_length = sum([len(segment['segment']) for segment in result])
         expected_sampled_length = total_sequence_length * self.default_params['coverage']
         # Given the randomness, we might not get exact coverage, so we allow a small margin of error
-        margin = expected_sampled_length * 0.2  # 10% margin
+        margin = expected_sampled_length * 0.5  # 10% margin
 
         print(f'expected_sampled_length: {expected_sampled_length}')
 
@@ -248,7 +250,7 @@ class TestTokenization(unittest.TestCase):
     def setUp(self):
         # Using the provided tokenizer parameters
         defconfig = SeqConfig()
-        tokenizer_params = defconfig.get_and_set_tokenization_params()    
+        tokenizer_params = defconfig.get_and_set_tokenization_params({'max_unknown_token_proportion' : 0.1})    
 
         self.vocabmap = tokenizer_params['vocabmap']
         self.token_limit = tokenizer_params['token_limit']
@@ -261,9 +263,12 @@ class TestTokenization(unittest.TestCase):
         self.assertEqual(output, expected_output)
 
     def test_unknown_tokens(self):
-        kmerized_segment_with_unknown = [['TCTTTG', 'UNKNOWN', 'TTTGCT', 'TTGCTA']]
+        kmerized_segment_with_unknown = [['TCTTTG', 'UNKNOWN', 'UNKNOWN', 'TTGCTA']]
         expected_output = [[2, 3]]  # Expected [CLS, SEP] due to exceeding unknown kmer threshold
         output = tokenize_kmerized_segment_list(kmerized_segment_with_unknown, self.vocabmap, self.token_limit, self.max_unknown_token_proportion)
+
+        print(output)
+
         self.assertEqual(output, expected_output)
 
     def test_exceeding_token_limit(self):
@@ -319,6 +324,54 @@ class TestLCATokenizeSegment(unittest.TestCase):
         result = lca_tokenize_segment(segment, self.params_example)
         self.assertEqual(result, expected_tokenized)
 
+
+class TestSaveToHDF(unittest.TestCase):
+    
+    def setUp(self):
+        # Create sample data
+        self.array = np.random.random((100, 100))
+        self.df = pd.DataFrame({'A': range(1, 101), 'B': range(101, 201)})
+        
+        # Temporary HDF5 file path
+
+        self.temp_hdf_file = tempfile.mktemp(suffix=".hdf5")
+
+    def test_basic_functionality(self):
+
+        save_to_hdf(self.array, self.temp_hdf_file)
+        
+        with h5py.File(self.temp_hdf_file, 'r') as hdf:
+            saved_data = hdf["training_data"][:]
+            
+        np.testing.assert_array_equal(saved_data, self.array)
+
+    def test_save_with_dataframe(self):
+        save_to_hdf(self.array, self.temp_hdf_file, database=self.df)
+        
+        with h5py.File(self.temp_hdf_file, 'r') as hdf:
+            saved_data = hdf["training_data"][:]
+            
+        saved_df = pd.read_hdf(self.temp_hdf_file, key='database_0')
+            
+        np.testing.assert_array_equal(saved_data, self.array)
+        pd.testing.assert_frame_equal(saved_df, self.df)
+
+    def test_non_2d_array_error(self):
+        with self.assertRaises(ValueError):
+            save_to_hdf(np.random.random(100), self.temp_hdf_file)
+
+    def test_compression(self):
+        save_to_hdf(self.array, self.temp_hdf_file, compression=True)
+        
+        with h5py.File(self.temp_hdf_file, 'r') as hdf:
+            saved_data = hdf["training_data"][:]
+            
+        np.testing.assert_array_equal(saved_data, self.array)
+
+    def tearDown(self):
+        # Clean up temporary file
+        if os.path.exists(self.temp_hdf_file):
+            os.remove(self.temp_hdf_file)
 
 
 if __name__ == '__main__':

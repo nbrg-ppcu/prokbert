@@ -9,10 +9,10 @@ from multiprocessing import cpu_count
 class SeqConfig:
     """Class to manage and validate sequence processing configurations."""
 
-    numpy_dtype_mapping = {1: np.uint8,
-                           2: np.uint16,
-                           8: np.uint64,
-                           4: np.uint32}
+    numpy_dtype_mapping = {1: np.int8,
+                           2: np.int16,
+                           8: np.int64,
+                           4: np.int32}
 
     def __init__(self):
         """

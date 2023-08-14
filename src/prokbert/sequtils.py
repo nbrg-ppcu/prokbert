@@ -44,7 +44,6 @@ from general_utils import *
 # Ezt a felhasználónak kellene biztosatania 
 # VOCAB_FILES_NAMES = {"vocab_file": "vocab.txt"}
 
-import logging
 import h5py
 
 
@@ -719,10 +718,15 @@ def save_to_hdf(X: np.ndarray, hdf_file_path: str,
     
     # Save the numpy array to HDF5
     with h5py.File(hdf_file_path, 'w') as hdf:
+        try:
+            grp = hdf.create_group("training_data")
+        except ValueError:
+            del hdf['training_data']
+
         if compression:
-            hdf.create_dataset("training_data", data=X, compression="lzf", chunks=True)
+            grp.create_dataset("X", data=X, compression="lzf", chunks=True)
         else:
-            hdf.create_dataset("training_data", data=X, chunks=True)
+            grp.create_dataset("X", data=X, chunks=True)
     
     logging.info(f"Numpy array saved to {hdf_file_path} successfully.")
 
