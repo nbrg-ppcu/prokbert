@@ -3,6 +3,8 @@
 import pandas as pd
 import os
 import numpy as np
+import subprocess
+import torch
 """ Library for general utils, such as dataframe properties checking,
 creating directories, checking files, etc.
 """
@@ -176,4 +178,19 @@ def check_file_exists(file_path: str) -> bool:
         return True
     else:
         raise ValueError(f"The provided file path '{file_path}' does not exist.")
-    
+
+def count_gpus():
+    # Count NVIDIA GPUs
+    nvidia_gpu_count = torch.cuda.device_count()
+
+    # Count AMD GPUs
+    amd_gpu_count = 0
+    try:
+        clinfo_output = subprocess.check_output('clinfo').decode('utf-8')
+        amd_gpu_count = clinfo_output.count('Device Type: GPU')
+    except:
+        pass  # clinfo command might not be available
+
+    total_gpus = nvidia_gpu_count + amd_gpu_count
+
+    return total_gpus

@@ -5,13 +5,23 @@ from prokbert_tokenizer import ProkBERTTokenizer
 from ProkBERTDataCollator import *
 from general_utils import *
 from prok_datasets import *
+from config_utils import *
+
+import logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 
-def get_training_tokenizer(prokbert_config):
-    """ Loading a tokenizer
-    The input is the multiple paramterset requeired by the trainings
-    It returns with a prokBert tokenizer
+def get_training_tokenizer(prokbert_config: ProkBERTConfig) -> ProkBERTTokenizer:
     """
+    Load a tokenizer for ProkBERT training.
+    
+    This function initializes and returns a ProkBERT tokenizer suitable for tokenizing sequences during training.
+
+    :param prokbert_config: Configuration parameters for ProkBERT, an instance of :class:`ProkBERTConfig`.
+                            The parameters are typically read from `pretraining.yaml`.
+    :return: An instance of :class:`ProkBERTTokenizer`.
+    """
+
     tokenizer = ProkBERTTokenizer(tokenization_params=prokbert_config.tokenization_params, 
                               segmentation_params=prokbert_config.segmentation_params,
                               comp_params=prokbert_config.computation_params,
@@ -23,8 +33,19 @@ def get_training_tokenizer(prokbert_config):
 
 
 def get_data_collator_for_overlapping_sequences(tokenizer, prokbert_config):
+    """
+    Load a data collator for overlapping sequences.
+    
+    This function initializes and returns a ProkBERT data collator suitable for handling overlapping sequences
+    during training.
 
-    print('Loading the datacollator class!')
+    :param tokenizer: The tokenizer to be used for tokenizing sequences. It should be an instance of :class:`ProkBERTTokenizer`.
+    :param prokbert_config: Configuration parameters for ProkBERT. This should be an instance of :class:`ProkBERTConfig` 
+                            and the parameters are typically read from the `pretraining.yaml` via the :class:`ProkBERTConfig`.
+    :return: An instance of the :class:`ProkBERTDataCollator`.
+    """
+
+    logging.info('Loading the datacollator class!')
     prokbert_dc = ProkBERTDataCollator(tokenizer,
                                     mask_to_left=prokbert_config.data_collator_params['mask_to_left'], 
                                     mask_to_right=prokbert_config.data_collator_params['mask_to_right'],
@@ -32,23 +53,35 @@ def get_data_collator_for_overlapping_sequences(tokenizer, prokbert_config):
                                     replace_prob =prokbert_config.data_collator_params['replace_prob'],
                                     random_prob = prokbert_config.data_collator_params['random_prob'])
     prokbert_dc.set_torch_token_dtype(prokbert_config.default_torchtype)
-    print(str(prokbert_dc))
+    logging.info(str(prokbert_dc))
 
     return prokbert_dc
 
 
-def check_model_existance_and_checkpoint(model_name, output_path):
-    """ The hugginface models are organized into checkpoints: except the final model
-    The final checkpoint corresponds to the 0 checkpoint. Thus the checkpoint 0 thats the latest checkpoint
+def check_model_existance_and_checkpoint(model_name: str, output_path: str) -> Tuple[bool, Optional[str], Optional[int], Optional[List[int]]]:
+    """
+    Check the existence of a model and determine the latest checkpoint.
+    
+    The Hugging Face models are organized into checkpoints, with the final model corresponding to the "checkpoint 0".
+    This function verifies the existence of a model in the specified output path and determines the checkpoint number 
+    that represents the latest model.
+
+    :param model_name: The name of the model to check.
+    :param output_path: The path where the model checkpoints are stored.
+    :return: 
+        - True if the model exists, otherwise False.
+        - Path to the largest checkpoint directory.
+        - The largest checkpoint number.
+        - A list of available checkpoint numbers.
     """
 
+
     model_path = join(output_path,model_name)
-    print('model_path:', model_path)
+    logging.info( 'model_path:  ' +  str(model_path))
     path_exists = pathlib.Path.exists(pathlib.Path(model_path))
     largest_checkpoint_dir = None
     largest_checkpoint = None
     chekcpoint_nr = None
-    print(model_path)
     if path_exists:
         try:
             subfolders = [ f for f in os.scandir(model_path) if f.is_dir() ]
@@ -56,14 +89,14 @@ def check_model_existance_and_checkpoint(model_name, output_path):
             chekcpoint_nr = sorted([int(f.name[11:]) for f in subfolders if f.name.startswith('checkpoint-')])
             largest_checkpoint = chekcpoint_nr[-1]
             if 0 in chekcpoint_nr:
-                print('The 0 is the largest checkpoint!')
+                logging.info('   The 0 is the largest checkpoint!')
                 largest_checkpoint = 0
 
             largest_checkpoint_dir = join(model_path, 'checkpoint-' + str(largest_checkpoint))
 
         except IndexError:
-            print('Something is wrong, set default valies')
-            print(str(subfolders))
+            logging.info('   Something is wrong, set default valies')
+            logging.info('   ' + str(subfolders))
             path_exists =False
             largest_checkpoint_dir = None
             largest_checkpoint = None
@@ -72,6 +105,14 @@ def check_model_existance_and_checkpoint(model_name, output_path):
 
 
 def check_hdf_dataset_file(prokbert_config):
+    """
+    Verify the validity of an HDF5 dataset file.
+    
+    This function checks whether a given file path points to a valid HDF5 dataset used in ProkBERT's training.
+
+    :param hdf_file_path: Path to the HDF5 dataset file.
+    :return: True if the file is a valid HDF5 dataset, False otherwise.
+    """
 
     hdf_file_path = prokbert_config.dataset_params['dataset_path']
     dataset_class = prokbert_config.dataset_params['dataset_class']
@@ -80,19 +121,19 @@ def check_hdf_dataset_file(prokbert_config):
     if len(hdf_file_path) == 0:
         raise(ValueError(f'There is no provided dataset file!'))
     
-    print('Checking whether the file exists or not!')
+    logging.info('Checking whether the file exists or not!')
     hdf_file_exists = check_file_exists(hdf_file_path)
     if dataset_class== 'IterableProkBERTPretrainingDataset':
-        print('Loading and creating a IterableProkBERTPretrainingDataset')
+        logging.info('Loading and creating a IterableProkBERTPretrainingDataset')
 
         ds = IterableProkBERTPretrainingDataset(hdf_file_path)
         ds_size = len(ds)
     elif dataset_class== 'ProkBERTPretrainingHDFDataset':
-        print('Loading and creating a IterableProkBERTPretrainingDataset')
+        logging.info('Loading and creating a IterableProkBERTPretrainingDataset')
         ds = ProkBERTPretrainingHDFDataset(hdf_file_path)
         ds_size = len(ds)
     elif dataset_class== 'ProkBERTPretrainingDataset':
-        print('Checking the input data ...')
+        logging.info('Checking the input data ...')
         ds_size = len(prokbert_config.dataset_params['pretraining_dataset_data'])
         if ds_size == 0:
             raise(ValueError(f'The provided data is empty, plase check the provided input.'))
@@ -103,13 +144,28 @@ def check_hdf_dataset_file(prokbert_config):
 
     return hdf_file_exists, ds_size
 
-def get_the_iteration_offset(nr_gpus, act_gradient_accumulation_steps,
-                             act_batch_size, largest_checkpoint, ds_size):
+def get_the_iteration_offset(batch_size, training_steps, dataset_size, 
+                             nr_gpus=1, radient_accumulation_steps=1):
+    """
+    Determine the iteration offset for ProkBERT training.
+    
+    This function calculates the iteration offset based on the training configuration, output path, and tokenizer.
+    It ensures that training resumes correctly from the last checkpoint or starts anew if no checkpoint is found.
+
+    :param prokbert_config: Configuration parameters for ProkBERT, an instance of :class:`ProkBERTConfig`.
+                            The parameters are typically read from `pretraining.yaml`.
+    :param output_path: The path where the model checkpoints and other training artifacts are stored.
+    :param tokenizer: An instance of :class:`ProkBERTTokenizer` used for tokenization during training.
+    :param logger: Logger instance to log messages during the process.
+    :param kwargs: Additional keyword arguments.
+    :return: The iteration offset, indicating where the training should start or resume.
+    """
 
 
-    act_ds_offset = nr_gpus*act_gradient_accumulation_steps*act_batch_size*largest_checkpoint % ds_size
+    act_ds_offset = nr_gpus*radient_accumulation_steps*batch_size*training_steps % dataset_size
 
     return act_ds_offset
+
 
 
 
