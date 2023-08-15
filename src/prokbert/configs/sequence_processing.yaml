@@ -70,7 +70,7 @@ tokenization:
     type: "str"
     description: "Path to the vocabulary file. If set to 'auto', the default vocabulary is utilized."
   vocabmap:
-    default: 
+    default: {}
     type: "dict"
     description: "The default vocabmap loaded from file"  
   isPaddingToMaxLength:
