@@ -4,7 +4,7 @@ import pandas as pd
 import os
 import numpy as np
 import subprocess
-import torch
+import shutil
 """ Library for general utils, such as dataframe properties checking,
 creating directories, checking files, etc.
 """
@@ -181,6 +181,7 @@ def check_file_exists(file_path: str) -> bool:
 
 def count_gpus():
     # Count NVIDIA GPUs
+    import torch
     nvidia_gpu_count = torch.cuda.device_count()
 
     # Count AMD GPUs
@@ -194,3 +195,119 @@ def count_gpus():
     total_gpus = nvidia_gpu_count + amd_gpu_count
 
     return total_gpus
+
+
+def create_hard_links(source_directory: str, target_directory: str, blacklist: list = []) -> None:
+    """
+    Creates hard links for all files from the source directory to the target directory.
+    
+    Args:
+        source_directory (str): The directory containing the original files.
+        target_directory (str): The directory where hard links will be created.
+        blacklist (list): List of filenames to exclude from creating hard links.
+    
+    Returns:
+        None
+    """
+    
+    # Ensure the provided directories exist
+    if not os.path.exists(source_directory):
+        raise ValueError(f"The source directory '{source_directory}' does not exist.")
+    if not os.path.exists(target_directory):
+        os.makedirs(target_directory)
+    
+    # Iterate through the files in the source directory
+    for filename in os.listdir(source_directory):
+        source_file_path = os.path.join(source_directory, filename)
+        target_file_path = os.path.join(target_directory, filename)
+        
+        # Check for files to skip
+        if (filename.startswith('.') or 
+            filename.startswith('_') or 
+            os.path.isdir(source_file_path) or 
+            filename in blacklist):
+            continue
+        
+        # Create a hard link
+        os.link(source_file_path, target_file_path)
+
+    return f"Hard links created in {target_directory} from {source_directory}."
+
+# Example usage
+# create_hard_links("/path/to/source_directory", "/path/to/target_directory", blacklist=["file_to_skip.txt"])
+
+def create_selected_hard_links(source_directory: str, target_directory: str, filenames: list) -> None:
+    """
+    Creates hard links for the specified files from the source directory to the target directory.
+    
+    Args:
+        source_directory (str): The directory containing the original files.
+        target_directory (str): The directory where hard links will be created.
+        filenames (list): List of filenames for which hard links should be created.
+    
+    Returns:
+        None
+    """
+    
+    # Ensure the provided directories exist
+    if not os.path.exists(source_directory):
+        raise ValueError(f"The source directory '{source_directory}' does not exist.")
+    if not os.path.exists(target_directory):
+        os.makedirs(target_directory)
+    
+    # Iterate through the specified filenames
+    for filename in filenames:
+        source_file_path = os.path.join(source_directory, filename)
+        target_file_path = os.path.join(target_directory, filename)
+        
+        # Ensure the file exists in the source directory
+        if not os.path.isfile(source_file_path):
+            print(f"Warning: {filename} does not exist in the source directory. Skipping.")
+            continue
+        
+        # Create a hard link
+        os.link(source_file_path, target_file_path)
+
+    return f"Hard links for specified files created in {target_directory} from {source_directory}."
+
+def selective_directory_copy(source_directory: str, target_directory: str, substring: str) -> None:
+    """
+    Copies the content of a directory to another directory, but only includes files and folders 
+    that contain the specified substring.
+    
+    Args:
+        source_directory (str): The directory containing the original content.
+        target_directory (str): The directory where the content will be copied to.
+        substring (str): The substring to use as a filter.
+    
+    Returns:
+        None
+    """
+    
+    # Ensure the source directory exists
+    if not os.path.exists(source_directory):
+        raise ValueError(f"The source directory '{source_directory}' does not exist.")
+    
+    # Create the target directory if it doesn't exist
+    if not os.path.exists(target_directory):
+        os.makedirs(target_directory)
+    
+    # Iterate through the items in the source directory
+    for item_name in os.listdir(source_directory):
+        source_item_path = os.path.join(source_directory, item_name)
+        target_item_path = os.path.join(target_directory, item_name)
+        
+        # Check for files or directories to skip
+        if (item_name.startswith('.') or 
+            item_name.startswith('_') or 
+            substring not in item_name):
+            continue
+        
+        # If it's a directory, use shutil.copytree, otherwise use shutil.copy2
+        if os.path.isdir(source_item_path):
+            shutil.copytree(source_item_path, target_item_path)
+        else:
+            shutil.copy2(source_item_path, target_item_path)
+    
+    return f"Selected content copied from {source_directory} to {target_directory}."
+

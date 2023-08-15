@@ -167,7 +167,53 @@ def get_the_iteration_offset(batch_size, training_steps, dataset_size,
     return act_ds_offset
 
 
+def get_pretrained_model(prokbert_config):
+    from transformers import MegatronBertConfig, MegatronBertForMaskedLM
 
+    new_model_args = MegatronBertConfig(**prokbert_config.model_params)
+
+    [m_exists, cp_dir, cp, cps] = check_model_existance_and_checkpoint(prokbert_config.model_params['model_outputpath'], 
+                                     prokbert_config.model_params['model_name'])
+    if m_exists:
+        print(f'Loading the existing model from the chekcpoint folder: {cp_dir}')
+        expected_model_dir = cp_dir
+        model = MegatronBertForMaskedLM.from_pretrained(expected_model_dir)
+    else:
+        print('Investigating whether previous model is exists')
+        [init_m_exists, init_m_cp_dir, init_m_cp, init_m_cps] = check_model_existance_and_checkpoint(prokbert_config.model_params['model_outputpath'], 
+                                        prokbert_config.model_params['model_name'])
+        if not init_m_exists:
+            print(f'The expected model does not exist {0}')
+            model = MegatronBertForMaskedLM(new_model_args)
+            
+        else:
+            model = MegatronBertForMaskedLM.from_pretrained(init_m_cp)
+
+
+    return model
+    
+
+def run_pretraining(model,tokenizer, data_collator,training_dataset, prokbert_config):
+    from transformers import Trainer, TrainingArguments
+
+    training_args = TrainingArguments(**prokbert_config.pretraining_params)
+    is_resume_training = prokbert_config.model_params['ResumeTraining']
+    [m_exists, cp_dir, cp, cps] = check_model_existance_and_checkpoint(prokbert_config.model_params['model_outputpath'], 
+                                     prokbert_config.model_params['model_name'])
+
+
+    trainer = Trainer(
+        model=model,
+        args=training_args,
+        data_collator=data_collator,
+        train_dataset=training_dataset,
+        tokenizer=tokenizer
+        )
+    
+    if is_resume_training and m_exists: 
+        trainer.train(resume_from_checkpoint = cp_dir)
+    else:
+        trainer.train()
 
 
 
