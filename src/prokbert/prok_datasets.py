@@ -72,7 +72,7 @@ class IterableProkBERTPretrainingDataset(IterableDataset):
 
         new_fetch_start, new_fetch_end = self._get_fetch_interval()
         self._current_data_batch = torch.tensor(self.dataset_file['training_data']['X'][new_fetch_start:new_fetch_end],
-                                         dtype=torch.int16)
+                                         dtype=torch.int32)
         
 
     def __iter__(self) -> Iterator[torch.Tensor]:
@@ -111,10 +111,10 @@ class IterableProkBERTPretrainingDataset(IterableDataset):
 
         if isinstance(index, int):
             # Return single item
-            return torch.tensor(self.dataset_file['training_data']['X'][index], dtype=torch.int16)
+            return torch.tensor(self.dataset_file['training_data']['X'][index], dtype=torch.int32)
         elif isinstance(index, slice):
             # Return slice
-            return torch.tensor(self.dataset_file['training_data']['X'][index], dtype=torch.int16)
+            return torch.tensor(self.dataset_file['training_data']['X'][index], dtype=torch.int32)
         
             #return [torch.tensor(item, dtype=torch.int) for item in self.dataset_file['training_data']['X'][index]]
 

@@ -63,7 +63,7 @@ Collator Parameters:
         self.mask_to_right = mask_to_right   
         logger.info(f"Mask neighborhood parameters set to: mask_to_left={mask_to_left}, mask_to_right={mask_to_right}")
 
-    def set_torch_token_dtype(self, torch_token_dtype=torch.long):
+    def set_torch_token_dtype(self, torch_token_dtype=torch.int16):
         self.torch_token_dtype = torch_token_dtype
 
 
@@ -115,6 +115,8 @@ Collator Parameters:
             inputs[indices_random] = random_words[indices_random]
 
         # The rest of the time (10% of the time) we keep the masked input tokens unchanged
+        labels = labels.to(dtype=torch.int64)
+        
         return inputs, labels
 
 

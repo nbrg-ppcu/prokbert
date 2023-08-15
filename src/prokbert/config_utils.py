@@ -430,3 +430,14 @@ class ProkBERTConfig(BaseConfig):
         self.data_collator_params = self.get_set_parameters('data_collator', parameters)
         return self.data_collator_params
     
+    def get_and_set_segmentation_parameters(self, parameters: dict = {}) -> dict:
+        self.segmentation_params = self.def_seq_config.get_and_set_segmentation_parameters(parameters)
+
+        return self.segmentation_params 
+    def get_and_set_tokenization_parameters(self, parameters: dict = {}) -> dict:
+        self.tokenization_params = self.def_seq_config.get_and_set_tokenization_parameters(parameters)
+        
+        return self.tokenization_params 
+    def get_and_set_computation_params(self, parameters: dict = {}) -> dict:
+        self.computation_params = self.def_seq_config.get_and_set_computational_parameters(parameters)
+        return self.computation_params    
