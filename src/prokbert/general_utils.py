@@ -4,7 +4,7 @@ import pandas as pd
 import os
 import numpy as np
 import subprocess
-import torch
+import shutil
 """ Library for general utils, such as dataframe properties checking,
 creating directories, checking files, etc.
 """
@@ -181,6 +181,7 @@ def check_file_exists(file_path: str) -> bool:
 
 def count_gpus():
     # Count NVIDIA GPUs
+    import torch
     nvidia_gpu_count = torch.cuda.device_count()
 
     # Count AMD GPUs
@@ -268,3 +269,45 @@ def create_selected_hard_links(source_directory: str, target_directory: str, fil
         os.link(source_file_path, target_file_path)
 
     return f"Hard links for specified files created in {target_directory} from {source_directory}."
+
+def selective_directory_copy(source_directory: str, target_directory: str, substring: str) -> None:
+    """
+    Copies the content of a directory to another directory, but only includes files and folders 
+    that contain the specified substring.
+    
+    Args:
+        source_directory (str): The directory containing the original content.
+        target_directory (str): The directory where the content will be copied to.
+        substring (str): The substring to use as a filter.
+    
+    Returns:
+        None
+    """
+    
+    # Ensure the source directory exists
+    if not os.path.exists(source_directory):
+        raise ValueError(f"The source directory '{source_directory}' does not exist.")
+    
+    # Create the target directory if it doesn't exist
+    if not os.path.exists(target_directory):
+        os.makedirs(target_directory)
+    
+    # Iterate through the items in the source directory
+    for item_name in os.listdir(source_directory):
+        source_item_path = os.path.join(source_directory, item_name)
+        target_item_path = os.path.join(target_directory, item_name)
+        
+        # Check for files or directories to skip
+        if (item_name.startswith('.') or 
+            item_name.startswith('_') or 
+            substring not in item_name):
+            continue
+        
+        # If it's a directory, use shutil.copytree, otherwise use shutil.copy2
+        if os.path.isdir(source_item_path):
+            shutil.copytree(source_item_path, target_item_path)
+        else:
+            shutil.copy2(source_item_path, target_item_path)
+    
+    return f"Selected content copied from {source_directory} to {target_directory}."
+
