@@ -3,7 +3,7 @@
 
 import unittest
 
-from config_utils import *
+from prokbert.config_utils import *
 
 
 class TestSeqConfig(unittest.TestCase):

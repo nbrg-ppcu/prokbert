@@ -266,48 +266,40 @@ def create_selected_hard_links(source_directory: str, target_directory: str, fil
             continue
         
         # Create a hard link
-        os.link(source_file_path, target_file_path)
+        try:
+            os.link(source_file_path, target_file_path)
+        except FileExistsError:
+            print(f'The target hard link {target_file_path} exist. Skipping...')
 
     return f"Hard links for specified files created in {target_directory} from {source_directory}."
 
-def selective_directory_copy(source_directory: str, target_directory: str, substring: str) -> None:
+def remove_hidden_files(directory: str) -> None:
     """
-    Copies the content of a directory to another directory, but only includes files and folders 
-    that contain the specified substring.
+    Removes all files recursively in a folder that start with '.' or '_'.
     
     Args:
-        source_directory (str): The directory containing the original content.
-        target_directory (str): The directory where the content will be copied to.
-        substring (str): The substring to use as a filter.
+        directory (str): The directory from which hidden files should be removed.
     
     Returns:
         None
     """
     
-    # Ensure the source directory exists
-    if not os.path.exists(source_directory):
-        raise ValueError(f"The source directory '{source_directory}' does not exist.")
+    # Ensure the directory exists
+    if not os.path.exists(directory):
+        raise ValueError(f"The directory '{directory}' does not exist.")
     
-    # Create the target directory if it doesn't exist
-    if not os.path.exists(target_directory):
-        os.makedirs(target_directory)
-    
-    # Iterate through the items in the source directory
-    for item_name in os.listdir(source_directory):
-        source_item_path = os.path.join(source_directory, item_name)
-        target_item_path = os.path.join(target_directory, item_name)
+    # Use os.walk to iterate through all subdirectories and files
+    for dirpath, dirnames, filenames in os.walk(directory, topdown=False):
         
-        # Check for files or directories to skip
-        if (item_name.startswith('.') or 
-            item_name.startswith('_') or 
-            substring not in item_name):
-            continue
+        # Filter out directories starting with '.' or '_'
+        dirnames[:] = [d for d in dirnames if not d.startswith('.') and not d.startswith('_')]
         
-        # If it's a directory, use shutil.copytree, otherwise use shutil.copy2
-        if os.path.isdir(source_item_path):
-            shutil.copytree(source_item_path, target_item_path)
-        else:
-            shutil.copy2(source_item_path, target_item_path)
+        # Remove files starting with '.' or '_'
+        for filename in filenames:
+            if filename.startswith('.') or filename.startswith('_'):
+                file_path = os.path.join(dirpath, filename)
+                os.remove(file_path)
+                print(f"Removed: {file_path}")
+                
+    print(f"All hidden files removed from {directory}.")
     
-    return f"Selected content copied from {source_directory} to {target_directory}."
-

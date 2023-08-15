@@ -10,9 +10,9 @@ from os.path import join
 
 # The test should be run from the project root directory as: 
 
-from sequtils import *
-from config_utils import *
-from prokbert_tokenizer import ProkBERTTokenizer
+from prokbert.sequtils import *
+from prokbert.config_utils import *
+from prokbert.prokbert_tokenizer import ProkBERTTokenizer
 
 class TestProkBERTTokenizer(unittest.TestCase):
 

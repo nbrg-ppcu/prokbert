@@ -15,8 +15,8 @@ from transformers.utils import logging
 
 # These utils contains the tools needed by the ProkBERT tokenizer
 
-from config_utils import *
-from sequtils import *
+from .config_utils import *
+from .sequtils import *
 
 import logging as logger
 

@@ -6,24 +6,10 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 
 """ Library for sequence processing """
 
-#sequence: whole, not-segmented DNA sequence
-#sentence: sequence block/chunk - 512, 1024, etc
-#kmer: token
-#tokenizes: vectorized 
-
-#KERDESEK
-#-
-
-#TODO
-#def for getting params
-#KESZ  - segmentate- DataFrame-s is legyen!
-#KESZ  - shift=2 eseten 2 tokenizalt vector! 0, 1 start.poz!
-#tokenization default padding=False
 
 import os
 import sys
 import pandas as pd
-import matplotlib.pyplot as plt
 from multiprocessing import Pool
 import multiprocessing
 from os.path import join, isfile, splitext
@@ -40,7 +26,7 @@ import pathlib
 from typing import Dict, List, Type, Tuple
 from itertools import product
 
-from general_utils import *
+from .general_utils import *
 # Ezt a felhasználónak kellene biztosatania 
 # VOCAB_FILES_NAMES = {"vocab_file": "vocab.txt"}
 

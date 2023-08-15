@@ -12,8 +12,8 @@ import numpy as np
 import tempfile
 # The test should be run from the project root directory as: 
 
-from sequtils import *
-from config_utils import *
+from prokbert.sequtils import *
+from prokbert.config_utils import *
 
 
 class TestSeqUtils(unittest.TestCase):
