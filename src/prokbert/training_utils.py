@@ -1,11 +1,11 @@
 # Training utils i.e. loading stuff, investiageting stuffs, etc
-from config_utils import *
-from sequtils import *
-from prokbert_tokenizer import ProkBERTTokenizer
-from ProkBERTDataCollator import *
-from general_utils import *
-from prok_datasets import *
-from config_utils import *
+from .config_utils import *
+from .sequtils import *
+from .prokbert_tokenizer import ProkBERTTokenizer
+from .ProkBERTDataCollator import *
+from .general_utils import *
+from .prok_datasets import *
+from .config_utils import *
 
 import logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')

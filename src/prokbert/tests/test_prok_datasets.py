@@ -9,7 +9,7 @@ import numpy as np
 import h5py
 import torch
 
-from prok_datasets import *
+from prokbert.prok_datasets import *
 
 
 class TestProkBERTDatasets(unittest.TestCase):

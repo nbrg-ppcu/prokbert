@@ -215,7 +215,8 @@ class SeqConfig(BaseConfig):
             prokbert_seq_config_file = os.environ['SEQ_CONFIG_FILE']
         except KeyError:
             # Handle the case when the environment variable is not found
-            print("SEQ_CONFIG_FILE environment variable has not been set. Using default value: {0}".format(prokbert_seq_config_file))
+            pass
+            # print("SEQ_CONFIG_FILE environment variable has not been set. Using default value: {0}".format(prokbert_seq_config_file))
         return prokbert_seq_config_file
 
     
@@ -256,7 +257,6 @@ class SeqConfig(BaseConfig):
         vocabfile=tokenization_params['vocabfile']
         act_kmer = tokenization_params['kmer']
         if vocabfile=='auto':
-            print(self.current_path)
             vocabfile_path = join(self.current_path, 'data/prokbert_vocabs/', f'prokbert-base-dna{act_kmer}', 'vocab.txt')
             tokenization_params['vocabfile'] = vocabfile_path
         else:
@@ -373,7 +373,8 @@ class ProkBERTConfig(BaseConfig):
             pretrain_config_file = os.environ['PRETRAIN_CONFIG_FILE']
         except KeyError:
             # Handle the case when the environment variable is not found
-            print(f"PRETRAIN_CONFIG_FILE environment variable has not been set. Using default value: {pretrain_config_file}")
+            pass
+            # print(f"PRETRAIN_CONFIG_FILE environment variable has not been set. Using default value: {pretrain_config_file}")
         return pretrain_config_file
     
     def get_set_parameters(self, parameter_class: str, parameters: dict = {}) -> dict:

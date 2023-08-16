@@ -24,7 +24,6 @@ segmentation:
     constraints:
       min: 0.0
       max: 100.0
-
 tokenization:
   type:
     default: lca
@@ -79,6 +78,12 @@ tokenization:
     description: "Determines if the tokenized sentence should be padded with [PAD] tokens to produce vectors of a fixed length."
     constraints:
       options: [True, False]
+  add_special_token:
+    default: True
+    type: "bool"
+    description: "The tokenizer should add the special starting and setence end tokens. The default is yes"
+    constraints:
+      options: [True, False]    
 computation:
   cpu_cores_for_segmentation:
     default: 10
@@ -114,4 +119,4 @@ computation:
     default: np.int16
     type: "type"
     description: "Dummy"
-     
+
