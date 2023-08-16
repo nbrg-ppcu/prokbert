@@ -385,6 +385,7 @@ def lca_tokenize_segment(segment, params):
     kmer = params['kmer']
     token_limit = params['token_limit']
     vocabmap = params['vocabmap']
+    add_special_token = params['add_special_token']
     if len(segment) > max_segment_length:
         raise(ValueError(f'The segment is longer {len(segment)} then the maximum allowed segment length ({max_segment_length}). '))
     
@@ -395,12 +396,16 @@ def lca_tokenize_segment(segment, params):
         kmers = [segment[i:i + kmer] for i in range(offset, len(segment) - kmer + 1, shift)]
         kmers_offset.append(kmers)
     # Mapping the k-mers into numbers
-    tokenized_segments = tokenize_kmerized_segment_list(kmers_offset, vocabmap, token_limit, max_unknown_token_proportion)
+    tokenized_segments = tokenize_kmerized_segment_list(kmers_offset, vocabmap, token_limit, max_unknown_token_proportion, add_special_token)
     return tokenized_segments, kmers_offset
     
     
     
-def tokenize_kmerized_segment_list(kmerized_segments, vocabmap, token_limit, max_unknown_token_proportion):
+def tokenize_kmerized_segment_list(kmerized_segments: List[List[str]], 
+                                   vocabmap: Dict[str, int], 
+                                   token_limit: int, 
+                                   max_unknown_token_proportion: float, 
+                                   add_special_tokens: bool = True) -> List[List[int]]:
     """ 
     Tokenizes or vectorizes a list of k-merized segments into a list of token vectors. If the expected number of 
     tokens in a segment exceeds the maximum allowed tokens (`token_limit`), the function raises an error. For segments
@@ -409,18 +414,20 @@ def tokenize_kmerized_segment_list(kmerized_segments, vocabmap, token_limit, max
 
     Parameters
     ----------
-    kmerized_segments : list[list[str]]
+    kmerized_segments : List[List[str]]
         List containing k-merized segments.
-    vocabmap : dict[str, int]
+    vocabmap : Dict[str, int]
         Dictionary that maps k-mers to their respective token values.
     token_limit : int
         Maximum number of tokens allowed in the tokenized output.
     max_unknown_token_proportion : float
         Maximum allowable proportion of unknown tokens in a segment.
+    add_special_tokens : bool, optional (default=True)
+        Whether to add special tokens (`[CLS]` and `[SEP]`) to the tokenized segments.
 
     Returns
     -------
-    list[list[int]]
+    List[List[int]]
         List containing tokenized segments.
 
     Raises
@@ -436,11 +443,19 @@ def tokenize_kmerized_segment_list(kmerized_segments, vocabmap, token_limit, max
     [[2, 4, 5, 6, 7, 3]]
     """
     
+    print(f'add_special_token: {add_special_tokens}')
+
     tokenized_segments = []
-    empty_sentence = [2, 3]
+    if add_special_tokens:
+        empty_sentence = [2, 3]
+    else:
+        empty_sentence = []
 
     for act_kmer_list in kmerized_segments:
-        tokenized_kmerized_segment = [vocabmap['[CLS]']]
+        if add_special_tokens:
+            tokenized_kmerized_segment = [vocabmap['[CLS]']]
+        else:
+            tokenized_kmerized_segment = []
         unkcount=0
         L_kmerized_segment = len(act_kmer_list)
         unkw_tsh_count = int(L_kmerized_segment*max_unknown_token_proportion)
@@ -460,7 +475,8 @@ def tokenize_kmerized_segment_list(kmerized_segments, vocabmap, token_limit, max
         if unkcount > unkw_tsh_count:
             tokenized_segments.append(empty_sentence)
             continue
-        tokenized_kmerized_segment.append(vocabmap['[SEP]'])
+        if add_special_tokens:
+            tokenized_kmerized_segment.append(vocabmap['[SEP]'])
         tokenized_segments.append(tokenized_kmerized_segment)
     
     return tokenized_segments

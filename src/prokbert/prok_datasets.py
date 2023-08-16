@@ -13,7 +13,8 @@ class IterableProkBERTPretrainingDataset(IterableDataset):
     def __init__(self, file_path: str, 
                  input_batch_size: int = 10000,
                  ds_offset: int = 0,
-                 max_iteration_over_ds: int = 10) -> None:
+                 max_iteration_over_ds: int = 10,
+                 default_dtype = torch.long) -> None:
         """
         Initialize the IterableProkBERTPretrainingDataset.
 
@@ -33,7 +34,8 @@ class IterableProkBERTPretrainingDataset(IterableDataset):
         self.dataset_file = h5py.File(self.file_path, 'r')
         self.ds_size = self.dataset_file['training_data']['X'].shape[0]
         self.max_iteration_over_ds_steps = int(self.ds_size * max_iteration_over_ds)
-        self._global_iter_steps = 0
+        self._global_iter_steps = 0,
+        self.default_dtype = default_dtype
         logging.info(f'Dataset size: {self.ds_size}')
 
     def __len__(self) -> int:
@@ -71,9 +73,9 @@ class IterableProkBERTPretrainingDataset(IterableDataset):
         self._ensure_file_open()
 
         new_fetch_start, new_fetch_end = self._get_fetch_interval()
-        self._current_data_batch = torch.tensor(self.dataset_file['training_data']['X'][new_fetch_start:new_fetch_end],
-                                         dtype=torch.int32)
         
+        self._current_data_batch = torch.tensor(self.dataset_file['training_data']['X'][new_fetch_start:new_fetch_end],
+                                         dtype=self.default_dtype)        
 
     def __iter__(self) -> Iterator[torch.Tensor]:
         self._current_ds_pointer = int(np.floor(self.ds_offset / self.input_batch_size))
@@ -111,10 +113,10 @@ class IterableProkBERTPretrainingDataset(IterableDataset):
 
         if isinstance(index, int):
             # Return single item
-            return torch.tensor(self.dataset_file['training_data']['X'][index], dtype=torch.int32)
+            return torch.tensor(self.dataset_file['training_data']['X'][index], dtype=self.default_dtype)
         elif isinstance(index, slice):
             # Return slice
-            return torch.tensor(self.dataset_file['training_data']['X'][index], dtype=torch.int32)
+            return torch.tensor(self.dataset_file['training_data']['X'][index], dtype=self.default_dtype)
         
             #return [torch.tensor(item, dtype=torch.int) for item in self.dataset_file['training_data']['X'][index]]
 
@@ -138,15 +140,18 @@ class ProkBERTPretrainingDataset(Dataset):
         return torch.tensor(self.X[index], dtype=torch.int16)
 
 class ProkBERTPretrainingHDFDataset(Dataset):
-    def __init__(self, hdf_file_path: str):
+    def __init__(self, hdf_file_path: str, default_dtype = torch.long):
         """
         Initialize the HDFDataset.
 
         :param hdf_file_path: Path to the HDF5 file.
         """
+        self.default_dtype = default_dtype
         self.file_path = hdf_file_path
         self.dataset_file = h5py.File(self.file_path, 'r')
-        self.dataset = self.dataset_file['training_data']['X']
+        logging.info(f'Loading and converting file {hdf_file_path}')
+        self.dataset = torch.tensor(np.array(self.dataset_file['training_data']['X']), dtype = self.default_dtype)
+        logging.info(f'Loading finished!')
 
     def _ensure_file_open(self):
         """
@@ -170,10 +175,10 @@ class ProkBERTPretrainingHDFDataset(Dataset):
         self._ensure_file_open()
         if isinstance(index, int):
             # Return single item
-            return torch.tensor(self.dataset[index], dtype=torch.int16)
+            return self.dataset[index]
         elif isinstance(index, slice):
             # Return slice
-            return torch.tensor(self.dataset[index], dtype=torch.int16)
+            return self.dataset[index]
 
     def __len__(self):
         self._ensure_file_open()
