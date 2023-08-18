@@ -137,7 +137,8 @@ class ProkBERTPretrainingDataset(Dataset):
 
     def __getitem__(self, index):
         # 
-        return torch.tensor(self.X[index], dtype=torch.int16)
+        return torch.tensor(self.X[index], dtype=torch.long)
+    
 
 class ProkBERTPretrainingHDFDataset(Dataset):
     def __init__(self, hdf_file_path: str, default_dtype = torch.long):

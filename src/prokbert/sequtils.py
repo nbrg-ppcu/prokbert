@@ -443,8 +443,6 @@ def tokenize_kmerized_segment_list(kmerized_segments: List[List[str]],
     [[2, 4, 5, 6, 7, 3]]
     """
     
-    print(f'add_special_token: {add_special_tokens}')
-
     tokenized_segments = []
     if add_special_tokens:
         empty_sentence = [2, 3]
