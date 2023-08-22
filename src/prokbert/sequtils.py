@@ -625,7 +625,7 @@ def get_rectangular_array_from_tokenized_dataset(tokenized_segments_data: Dict[i
     return X, torch_tokenized_segment_db
 
         
-def pretty_print_overlapping_sequence(segment, segment_kmers, tokenizer_params):
+def pretty_print_overlapping_sequence(segment, segment_kmers_list, tokenizer_params):
     """
     Format the sequence for pretty printing with overlapping k-mers.
 
@@ -652,13 +652,19 @@ def pretty_print_overlapping_sequence(segment, segment_kmers, tokenizer_params):
     nr_lines = int(np.ceil((k+sep_c)/shift))
     logging.info('Nr. line to cover the seq:  {0}'.format(nr_lines))
 
-    for line_id in range(nr_lines):
+    
+    for i in range(len(segment_kmers_list)):
+        for line_id in range(nr_lines):
 
-        line_mers = [k_mer for j, k_mer in enumerate(segment_kmers) if j%nr_lines== line_id]
-        act_line = str(line_id) + '.  ' + ' '*(line_id*shift)  + (' '*(sep_c)).join(line_mers)
-        lines.append(act_line)
-    lines = '\n'.join(lines)
-    return lines
+            line_mers = [k_mer for j, k_mer in enumerate(segment_kmers_list[i]) if j % nr_lines == line_id]
+            act_line = str(line_id) + '.  ' + ' ' * (line_id * shift + i) + (' ' * (sep_c)).join(line_mers)
+            lines.append(act_line)
+        lines.extend(['', ''])  # Add empty lines between iterations
+        lines.append(first_line)
+
+    formatted_lines = '\n'.join(lines)
+    return formatted_lines
+
 
 def generate_kmers(abc, k):
     """
