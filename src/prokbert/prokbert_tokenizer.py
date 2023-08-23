@@ -132,7 +132,7 @@ class ProkBERTTokenizer(PreTrainedTokenizer):
         self.special_tokens = list(self.special_tokens_map.values())
 
     def __len__(self) -> int:
-        return len(self.vocab)
+        return len(self.vocab)-1
 
 
     def tokenize(self, text: str, lca_shift: int = 0, all: bool = False) -> Union[List[str], Tuple[List[List[str]], List[List[str]]]]:
