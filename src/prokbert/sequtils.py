@@ -648,19 +648,18 @@ def pretty_print_overlapping_sequence(segment, segment_kmers_list, tokenizer_par
     lines = []
     base_offset = len(str( int((k+3)/shift))) + 3
     first_line = ' '*base_offset + segment
-    lines.append(first_line)
     nr_lines = int(np.ceil((k+sep_c)/shift))
     logging.info('Nr. line to cover the seq:  {0}'.format(nr_lines))
 
     
     for i in range(len(segment_kmers_list)):
+        lines.append(first_line)
         for line_id in range(nr_lines):
 
             line_mers = [k_mer for j, k_mer in enumerate(segment_kmers_list[i]) if j % nr_lines == line_id]
             act_line = str(line_id) + '.  ' + ' ' * (line_id * shift + i) + (' ' * (sep_c)).join(line_mers)
             lines.append(act_line)
         lines.extend(['', ''])  # Add empty lines between iterations
-        lines.append(first_line)
 
     formatted_lines = '\n'.join(lines)
     return formatted_lines

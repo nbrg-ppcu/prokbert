@@ -218,6 +218,44 @@ class ProkBERTTokenizer(PreTrainedTokenizer):
 
         return token_list
     
+    def get_positions_tokens(self, sequence: str, position: int) -> List[str]:
+        """
+        Get tokens containing the nucleotide at the given position.
+
+        Args:
+            sequence (str): Sequence
+            position (int): Position of the character.
+
+        Returns:
+            List[str]: List of tokens containing the character at the specified position.
+
+        Usage Example:
+            >>> tokenizer = ProkBERTTokenizer(...)
+            >>> position = 8
+            >>> sequence = "AACTGTGATCTGA"
+            >>> tokens = tokenizer.get_positions_tokens(sequence, position)
+            >>> print(tokens)
+            ...
+        """
+        all_tokens = []
+        sequence_w_pos = sequence
+        char = sequence_w_pos[position]
+        sequence_w_pos = sequence_w_pos[:position] + '0' + sequence_w_pos[position + 1:]
+        print("You look for nucleotide {0} at position {1}".format(char, position))
+        ids, kmers_w_0 = self.tokenize(sequence_w_pos, all=True)
+        #print(kmers_w_0)
+        print(self.tokenize(sequence, all=True)[1])
+        # Iterate through token IDs to find tokens containing the character at the given position
+        for kmers in kmers_w_0:
+            tokens_at_position = []
+            for token in kmers:
+                if '0' in token:
+                    tok = token.replace('0', char)
+                    tokens_at_position.append(tok)
+            all_tokens.append(tokens_at_position)
+        return all_tokens
+
+    
  
     def save_vocabulary(self, save_directory: str) -> Tuple[str]:
         """Saves the vocabulary to a file.
