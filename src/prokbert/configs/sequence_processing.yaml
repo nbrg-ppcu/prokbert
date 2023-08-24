@@ -24,7 +24,6 @@ segmentation:
     constraints:
       min: 0.0
       max: 100.0
-
 tokenization:
   type:
     default: lca
@@ -69,12 +68,22 @@ tokenization:
     default: auto
     type: "str"
     description: "Path to the vocabulary file. If set to 'auto', the default vocabulary is utilized."
+  vocabmap:
+    default: {}
+    type: "dict"
+    description: "The default vocabmap loaded from file"  
   isPaddingToMaxLength:
     default: False
     type: "bool"
     description: "Determines if the tokenized sentence should be padded with [PAD] tokens to produce vectors of a fixed length."
     constraints:
       options: [True, False]
+  add_special_token:
+    default: True
+    type: "bool"
+    description: "The tokenizer should add the special starting and setence end tokens. The default is yes"
+    constraints:
+      options: [True, False]    
 computation:
   cpu_cores_for_segmentation:
     default: 10
@@ -103,6 +112,11 @@ computation:
   numpy_token_integer_prec_byte:
     default: 2
     type: "integer"
-    description: "The type of integer to be used during the vectorization. The default is 2, if you want to work larger k-mers then increase it to 4. 1: np.uint8, 2:np.uint16. 4:np.uint32. 8: np.uint64"
+    description: "The type of integer to be used during the vectorization. The default is 2, if you want to work larger k-mers then increase it to 4. 1: np.int8, 2:np.int16. 4:np.int32. 8: np.int64"
     constraints:
       options: [1, 2, 4, 8]
+  np_tokentype:
+    default: np.int16
+    type: "type"
+    description: "Dummy"
+

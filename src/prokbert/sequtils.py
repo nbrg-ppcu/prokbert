@@ -6,24 +6,10 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 
 """ Library for sequence processing """
 
-#sequence: whole, not-segmented DNA sequence
-#sentence: sequence block/chunk - 512, 1024, etc
-#kmer: token
-#tokenizes: vectorized 
-
-#KERDESEK
-#-
-
-#TODO
-#def for getting params
-#KESZ  - segmentate- DataFrame-s is legyen!
-#KESZ  - shift=2 eseten 2 tokenizalt vector! 0, 1 start.poz!
-#tokenization default padding=False
 
 import os
 import sys
 import pandas as pd
-import matplotlib.pyplot as plt
 from multiprocessing import Pool
 import multiprocessing
 from os.path import join, isfile, splitext
@@ -40,11 +26,12 @@ import pathlib
 from typing import Dict, List, Type, Tuple
 from itertools import product
 
-from general_utils import *
+from .general_utils import *
 # Ezt a felhasználónak kellene biztosatania 
 # VOCAB_FILES_NAMES = {"vocab_file": "vocab.txt"}
 
-import logging
+import h5py
+
 
 
 
@@ -398,6 +385,7 @@ def lca_tokenize_segment(segment, params):
     kmer = params['kmer']
     token_limit = params['token_limit']
     vocabmap = params['vocabmap']
+    add_special_token = params['add_special_token']
     if len(segment) > max_segment_length:
         raise(ValueError(f'The segment is longer {len(segment)} then the maximum allowed segment length ({max_segment_length}). '))
     
@@ -408,12 +396,16 @@ def lca_tokenize_segment(segment, params):
         kmers = [segment[i:i + kmer] for i in range(offset, len(segment) - kmer + 1, shift)]
         kmers_offset.append(kmers)
     # Mapping the k-mers into numbers
-    tokenized_segments = tokenize_kmerized_segment_list(kmers_offset, vocabmap, token_limit, max_unknown_token_proportion)
+    tokenized_segments = tokenize_kmerized_segment_list(kmers_offset, vocabmap, token_limit, max_unknown_token_proportion, add_special_token)
     return tokenized_segments, kmers_offset
     
     
     
-def tokenize_kmerized_segment_list(kmerized_segments, vocabmap, token_limit, max_unknown_token_proportion):
+def tokenize_kmerized_segment_list(kmerized_segments: List[List[str]], 
+                                   vocabmap: Dict[str, int], 
+                                   token_limit: int, 
+                                   max_unknown_token_proportion: float, 
+                                   add_special_tokens: bool = True) -> List[List[int]]:
     """ 
     Tokenizes or vectorizes a list of k-merized segments into a list of token vectors. If the expected number of 
     tokens in a segment exceeds the maximum allowed tokens (`token_limit`), the function raises an error. For segments
@@ -422,18 +414,20 @@ def tokenize_kmerized_segment_list(kmerized_segments, vocabmap, token_limit, max
 
     Parameters
     ----------
-    kmerized_segments : list[list[str]]
+    kmerized_segments : List[List[str]]
         List containing k-merized segments.
-    vocabmap : dict[str, int]
+    vocabmap : Dict[str, int]
         Dictionary that maps k-mers to their respective token values.
     token_limit : int
         Maximum number of tokens allowed in the tokenized output.
     max_unknown_token_proportion : float
         Maximum allowable proportion of unknown tokens in a segment.
+    add_special_tokens : bool, optional (default=True)
+        Whether to add special tokens (`[CLS]` and `[SEP]`) to the tokenized segments.
 
     Returns
     -------
-    list[list[int]]
+    List[List[int]]
         List containing tokenized segments.
 
     Raises
@@ -450,10 +444,16 @@ def tokenize_kmerized_segment_list(kmerized_segments, vocabmap, token_limit, max
     """
     
     tokenized_segments = []
-    empty_sentence = [2, 3]
+    if add_special_tokens:
+        empty_sentence = [2, 3]
+    else:
+        empty_sentence = []
 
     for act_kmer_list in kmerized_segments:
-        tokenized_kmerized_segment = [vocabmap['[CLS]']]
+        if add_special_tokens:
+            tokenized_kmerized_segment = [vocabmap['[CLS]']]
+        else:
+            tokenized_kmerized_segment = []
         unkcount=0
         L_kmerized_segment = len(act_kmer_list)
         unkw_tsh_count = int(L_kmerized_segment*max_unknown_token_proportion)
@@ -473,7 +473,8 @@ def tokenize_kmerized_segment_list(kmerized_segments, vocabmap, token_limit, max
         if unkcount > unkw_tsh_count:
             tokenized_segments.append(empty_sentence)
             continue
-        tokenized_kmerized_segment.append(vocabmap['[SEP]'])
+        if add_special_tokens:
+            tokenized_kmerized_segment.append(vocabmap['[SEP]'])
         tokenized_segments.append(tokenized_kmerized_segment)
     
     return tokenized_segments
@@ -677,3 +678,75 @@ def generate_kmers(abc, k):
     - List[str]: List of all possible k-mers.
     """
     return [''.join(p) for p in product(abc, repeat=k)]
+
+def save_to_hdf(X: np.ndarray, hdf_file_path: str, 
+                   database: pd.DataFrame = None, 
+                   compression: bool = False, 
+                   pd_chunksize: int = 10_000_000) -> None:
+    """
+    Save a numpy array and an optional pandas DataFrame to an HDF5 file.
+    
+    Args:
+        X (np.ndarray): 2D numpy array to be saved.
+        hdf_file_path (str): Path to the HDF5 file.
+        database (pd.DataFrame, optional): Pandas DataFrame to be saved. Defaults to None.
+        compression (bool, optional): Whether to apply compression. Defaults to False.
+        pd_chunksize (int, optional): Number of rows per chunk for saving the DataFrame. Defaults to 10,000,000.
+    
+    Raises:
+        ValueError: If the provided numpy array is not 2D.
+        OSError: If there's an error creating the directory structure or removing an existing HDF5 file.
+    
+    Example:
+        >>> import numpy as np
+        >>> import pandas as pd
+        >>> array = np.random.random((100, 100))
+        >>> df = pd.DataFrame({'A': range(1, 101), 'B': range(101, 201)})
+        >>> save_to_hdf(array, "sample.hdf5", database=df, compression=True)
+    
+    """
+    
+    # Check if X is a 2D numpy array
+    if len(X.shape) != 2:
+        raise ValueError("The provided numpy array is not 2D.")
+    
+    # If HDF5 file exists, attempt to delete it
+    if os.path.exists(hdf_file_path):
+        try:
+            os.remove(hdf_file_path)
+            logging.info(f"Existing HDF5 file {hdf_file_path} removed successfully.")
+        except Exception as e:
+            raise OSError(f"Error removing existing HDF5 file {hdf_file_path}. Error: {e}")
+    
+    # Create directory structure for HDF5 file
+    create_directory_for_filepath(hdf_file_path)
+    
+    # Save the numpy array to HDF5
+    with h5py.File(hdf_file_path, 'w') as hdf:
+        try:
+            grp = hdf.create_group("training_data")
+        except ValueError:
+            del hdf['training_data']
+
+        if compression:
+            grp.create_dataset("X", data=X, compression="lzf", chunks=True)
+        else:
+            grp.create_dataset("X", data=X, chunks=True)
+    
+    logging.info(f"Numpy array saved to {hdf_file_path} successfully.")
+
+    # Save the pandas DataFrame to HDF5, if provided
+    if database is not None:
+        logging.info("Adding database into the HDF5 file!")
+        num_chunks = int(np.ceil(len(database) / pd_chunksize))
+        logging.info(f'Number of chunks: {num_chunks}')
+        chunk_grouping = np.arange(len(database)) // pd_chunksize
+        chunkseqs = database.groupby(chunk_grouping)
+        for i, (_, chunk) in enumerate(chunkseqs):
+            logging.info(f'Writing database chunk {i} into {hdf_file_path}')
+            if compression:
+                chunk.to_hdf(hdf_file_path, f'database_{i}', format='table', data_columns=True,  mode='a', complib='lzo')
+            else:
+                chunk.to_hdf(hdf_file_path, f'database_{i}', format='table', data_columns=True,  mode='a')
+
+        logging.info('Database addition finished!')

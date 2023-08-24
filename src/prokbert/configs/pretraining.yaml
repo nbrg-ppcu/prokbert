@@ -1,0 +1,199 @@
+# One can set here all the parameters needed for the pretraining. Important note, is that it is responsibility of the user to provide proper inputs for the model.
+# Note if not parameter provided then the default is used. 
+
+data_collator:
+  # Data collator related parameters
+  # ProkBERT applies and overlapping k-mer strategy. Therefore if one simply mask a token, it is trivially reconstruable from the neighbouring tokens, because of the overlap. To define proper masking exercise the datacollater mask tokens to the left and right as well. 
+  mask_to_left:
+    default: 3
+    type: "integer"
+    description: "The number of tokens to be masked to the left of the original mask tokens to avoid data leaked."
+    constraints:
+      min: 0
+  mask_to_right:
+    default: 2
+    type: "integer"
+    description: "The number of tokens to be masked to the RIGHT of the original mask tokens to avoid data leaked."
+    constraints:
+      min: 0
+  mlm_probability:
+    default: 0.05
+    type: "float"
+    description: "The probability of defining a task on a given token. "
+    constraints:
+      min: 0.0
+      max: 1.0  
+  replace_prob:
+    default: 0.8
+    type: "float"
+    description: "1- The probability of restoring a masked token. Other others will be changed or restores." 
+    constraints:
+      min: 0.0
+      max: 1.0  
+  random_prob:
+    default: 0.01
+    type: "float"
+    description: "The probability of replacing a token with a random token. It's introduce some random errors to avoid overfitting"
+    constraints:
+      min: 0.0
+      max: 1.0  
+model:
+  model_name:
+    default: 'mini'
+    type: "string"
+    description: "Name of the ProkBERT model."
+  model_outputpath:
+    default: '/scratch/fastscratch/NBL/trained_models/test'
+    type: "string"
+    description: "Path to the models. If it is not defined that it will try to load from the huggingface later. "    
+  vocab_size:
+    default: 4101
+    type: "integer"
+    description: "Size of vocabulary, must align with the tokenizer's vocab."
+  hidden_size:
+    default: 384
+    type: "integer"
+    description: "Size of the hidden state in the Transformer."
+  num_hidden_layers:
+    default: 6
+    type: "integer"
+    description: "Number of hidden layers in the Transformer."
+  num_attention_heads:
+    default: 6
+    type: "integer"
+    description: "Number of attention heads for each Transformer layer."
+  max_position_embeddings:
+    default: 1024
+    type: "integer"
+    description: "Maximum number of position embeddings."
+  intermediate_size:
+    default: 2048
+    type: "integer"
+    description: "Size of the intermediate (feed-forward) layer in the Transformer."
+  position_embedding_type:
+    default: 'relative_key_query'
+    type: "string"
+    description: "Type of position embedding. 'relative_key_query' for relative position embeddings."
+  ResumeTraining:
+    default: True
+    type: "bool"
+    description: "decide whether to contine the pretraining or not"
+    constraints:
+      options: [True, False]
+  resume_or_initiation_model_path:
+    default: ''
+    type: "string"
+    description: "Path to the model to get the initiation paramters and data from. Default is None and initiate the model randomly" 
+dataset:
+  dataset_path:
+    default: ''
+    type: "string"
+    description: "Path to the dataset if needed. It shouldn't be empty. It triggers an error. Note that the preprocessed dataset should be aligned with the tokenizer to be used. "
+  pretraining_dataset_data:
+    default: [[]]
+    type: list
+    description: "The raw dataset data. It is recommended to use preprocessed HDF data for the training. "
+  dataset_class:
+    default: 'IterableProkBERTPretrainingDataset'
+    type: "string"
+    description: "The class of the dataset to be used. The default is IterableProkBERTPretrainingDataset. It is assumed that the dataset is already exists. "
+    options: ['ProkBERTPretrainingHDFDataset', 'IterableProkBERTPretrainingDataset', 'ProkBERTPretrainingDataset']
+  input_batch_size:
+    default: 10000
+    type: "int"
+    description: "Only for iterative HDF, storage based datasets. The size of the batch to be loaded into the memory from the disk. "
+  dataset_iteration_batch_offset:
+    default: 0
+    type: "int"   
+    description: "The offset value, where to start read the dataset. I.e. if the training is restarted, then we should able start the iteration in another position."
+    constraints:
+      min: 0.0
+  max_iteration_over_dataset:
+    default: 10
+    type: "int"   
+    description: "Only for iterative datasets. Maximum how many times we should iterate over a dataset (kind of epoch). I.e. 10 times. After thet stop iteration will be raised"
+    constraints:
+      min: 0.0
+pretraining:
+  output_dir:
+    default: './train_output'
+    type: "string"
+    description: "Output directory for training artifacts."
+  num_train_epochs:
+    default: 1
+    type: "integer"
+    description: "Total number of training epochs."
+  save_steps:
+    default: 1000
+    type: "integer"
+    description: "Save model checkpoint every N steps."
+  save_total_limit:
+    default: 20
+    type: "integer"
+    description: "Maximum number of total checkpoints to keep."
+  logging_steps:
+    default: 50
+    type: "integer"
+    description: "Log metrics every N steps."
+  logging_first_step:
+    default: True
+    type: "boolean"
+    description: "Whether to log metrics for the first step."
+  per_device_train_batch_size:
+    default: 48  # Placeholder; use the appropriate default value
+    type: "integer"
+    description: "Batch size for training."
+  dataloader_num_workers:
+    default: 1
+    type: "integer"
+    description: "Number of subprocesses for data loading."
+  learning_rate:
+    default: 0.0005
+    type: "float"
+    description: "Learning rate for training."
+  adam_epsilon:
+    default: 5e-05
+    type: "float"
+    description: "Epsilon for the Adam optimizer."
+  warmup_steps:
+    default: 500
+    type: "integer"
+    description: "Number of warmup steps for learning rate scheduler."
+  weight_decay:
+    default: 0.1
+    type: "float"
+    description: "Weight decay for optimizer."
+  adam_beta1:
+    default: 0.95
+    type: "float"
+    description: "Beta1 hyperparameter for the Adam optimizer."
+  adam_beta2:
+    default: 0.98
+    type: "float"
+    description: "Beta2 hyperparameter for the Adam optimizer."
+  gradient_accumulation_steps:
+    default: 1  # Placeholder; use the appropriate default value
+    type: "integer"
+    description: "Number of steps to accumulate gradients before updating weights."
+  optim:
+    default: "adamw_torch"
+    type: "string"
+    description: "Optimizer to use for training."
+  ignore_data_skip:
+    default: True
+    type: "boolean"
+    description: "Whether to ignore data skip or not."
+    
+segmentation:
+  type: 'random'
+# For full definiation, please see the documentation of the sequence_processing.yaml
+tokenization:
+  kmer: 6
+  shift: 1
+# For full definiation, please see the documentation of the sequitls parameters
+computation:
+  numpy_token_integer_prec_byte: 2
+
+
+
+    

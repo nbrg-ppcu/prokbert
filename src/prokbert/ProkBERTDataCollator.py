@@ -1,5 +1,3 @@
-import random
-import warnings
 import logging
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -23,11 +21,11 @@ class ProkBERTDataCollator(DataCollatorForLanguageModeling):
         replace_prob (float): Probability of replacing a token. Default is 0.8.
         random_prob (float): Probability of changing a token to a random token. Default is 0.1.
     """
-
     mask_to_left: int = 0
     mask_to_right: int = 0
     replace_prob: float = 0.8
     random_prob: float = 0.1
+    torch_token_dtype = torch.int16
 
     def __str__(self) -> str:
         """
@@ -36,12 +34,13 @@ class ProkBERTDataCollator(DataCollatorForLanguageModeling):
         """
         collator_params = '''\
 Collator Parameters:
-Number of tokens masked to left:  {0}
-Number of tokens masked to right: {1}
-Probability of restoring a masked token: {2}
-Probability of changing to a random token: {3}
-MLM Probability: {4}
-'''.format(self.mask_to_left, self.mask_to_right, self.replace_prob, self.random_prob, self.mlm_probability)
+  Number of tokens masked to left:  {0}
+  Number of tokens masked to right: {1}
+  Probability of restoring a masked token: {2}
+  Probability of changing to a random token: {3}
+  MLM Probability: {4}
+  Default token type: {5}
+'''.format(self.mask_to_left, self.mask_to_right, self.replace_prob, self.random_prob, self.mlm_probability, self.torch_token_dtype)
         return collator_params
 
     def set_mask_neighborhood_params(self, mask_to_left: int = 0, mask_to_right: int = 0):
@@ -62,6 +61,10 @@ MLM Probability: {4}
         self.mask_to_right = mask_to_right   
         logger.info(f"Mask neighborhood parameters set to: mask_to_left={mask_to_left}, mask_to_right={mask_to_right}")
 
+    def set_torch_token_dtype(self, torch_token_dtype=torch.int16):
+        self.torch_token_dtype = torch_token_dtype
+
+
     def torch_mask_tokens(self, inputs: torch.Tensor, special_tokens_mask: Optional[torch.Tensor] = None) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Prepare masked tokens inputs/labels for masked language modeling: 80% MASK, 10% random, 10% original.
@@ -75,7 +78,13 @@ MLM Probability: {4}
         """
         labels = inputs.clone()
         probability_matrix = torch.full(labels.shape, self.mlm_probability)
-        special_tokens_mask = special_tokens_mask.bool() if special_tokens_mask else torch.tensor([], dtype=torch.bool)
+        if special_tokens_mask is None:
+            special_tokens_mask = [
+                self.tokenizer.get_special_tokens_mask(val, already_has_special_tokens=True) for val in labels.tolist()
+            ]
+            special_tokens_mask = torch.tensor(special_tokens_mask, dtype=torch.bool)
+        else:
+            special_tokens_mask = special_tokens_mask.bool()
         probability_matrix.masked_fill_(special_tokens_mask, value=0.0)
         masked_indices = torch.bernoulli(probability_matrix).bool()
         masked_indices_shape = masked_indices.shape
@@ -84,8 +93,8 @@ MLM Probability: {4}
             mask_coords = act_indeces[masked_indices[i]]
             new_mask_coords = []
             for act_coord in mask_coords:
-                index_start = max(1, act_coord - self.mask_to_left) #végeket nem maszkoljuk ki
-                index_end = min (act_coord + self.mask_to_right + 1, masked_indices_shape[1]-1) #végeket nem maszkoljuk ki
+                index_start = max(1, act_coord - self.mask_to_left) 
+                index_end = min (act_coord + self.mask_to_right + 1, masked_indices_shape[1]-1) 
                 new_range = list(range(index_start, index_end))
                 new_mask_coords.extend(new_range)
             new_mask_coords = list(set(new_mask_coords))
@@ -100,10 +109,12 @@ MLM Probability: {4}
         # X% of the time, we replace masked input tokens with random word
         if self.random_prob > 0:
             indices_random = torch.bernoulli(torch.full(labels.shape, self.random_prob)).bool() & masked_indices & ~indices_replaced
-            random_words = torch.randint(len(self.tokenizer), labels.shape, dtype=torch.long)
+            random_words = torch.randint(len(self.tokenizer), labels.shape, dtype=self.torch_token_dtype)
             inputs[indices_random] = random_words[indices_random]
 
         # The rest of the time (10% of the time) we keep the masked input tokens unchanged
+        labels = labels.to(dtype=torch.int64)
+        
         return inputs, labels
 
 
