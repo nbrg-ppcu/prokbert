@@ -15,8 +15,8 @@ from transformers.utils import logging
 
 # These utils contains the tools needed by the ProkBERT tokenizer
 
-from .config_utils import *
-from .sequtils import *
+from config_utils import *
+from sequtils import *
 
 import logging as logger
 
@@ -71,18 +71,12 @@ class ProkBERTTokenizer(PreTrainedTokenizer):
     nucleotide_abc = {'A', 'T', 'C', 'G'}
     extended_nucleotide_abc = {'A', 'T', 'C', 'G', '*'}
     sequence_unk_token = 'N'
-    default_unk_token="[UNK]"
-    default_sep_token="[SEP]"
-    default_pad_token="[PAD]"
-    default_cls_token="[CLS]"
-    default_mask_token="[MASK]"
-
 
     def __init__(self, 
                  tokenization_params: Dict = {},
                  segmentation_params: Dict = {},
                  comp_params: Dict = {},
-                 operation_space: str = 'sequence',
+                 operation_space: str = 'kmer',
                  **kwargs):
         """Initialize the ProkBERT tokenizer.
         
@@ -92,13 +86,12 @@ class ProkBERTTokenizer(PreTrainedTokenizer):
             comp_params (Dict, optional): Computational parameters. Defaults to {}.
             operation_space (str, optional): Specifies the operation mode. Can be 'kmer' or 'sequence'. Defaults to 'kmer'.
         """
-        super().__init__(cls_token=ProkBERTTokenizer.default_cls_token,
-                         **kwargs)
+        super().__init__(**kwargs)
         
         self.defconfig = SeqConfig()
-        self.tokenization_params = self.defconfig.get_and_set_tokenization_parameters(tokenization_params)
-        self.segmentation_params = self.defconfig.get_and_set_segmentation_parameters(segmentation_params)
-        self.comp_params = self.defconfig.get_and_set_computational_parameters(comp_params)
+        self.tokenization_params = self.defconfig.get_and_set_tokenization_params(tokenization_params)
+        self.segmentation_params = self.defconfig.get_set_segmentation_parameters(segmentation_params)
+        self.comp_params = self.defconfig.get_set_computational_paramters(comp_params)
         self.operation_space = operation_space
 
         vocab_file = self.tokenization_params['vocabfile']
@@ -115,26 +108,20 @@ class ProkBERTTokenizer(PreTrainedTokenizer):
                             
             self.unk_token = ProkBERTTokenizer.sequence_unk_token * self.tokenization_params['shift']
             self.mask_token = '*'
-            self.extended_vocab[self.mask_token] = self.vocab['[MASK]']
-
             full_unk = 'N' * self.tokenization_params['kmer']
             self.vocab[full_unk] = 1
             self.id2token[1] = full_unk
-            self.full_unk_token = full_unk
 
         else:
-            self.extended_vocab = self.vocab 
             self.unk_token = '[UNK]'
+        
         self.sep_token = '[SEP]'
         self.cls_token = '[CLS]'
         self.pad_token = '[PAD]'
-        self.mask_token = '[MASK]'
         self.special_tokens = list(self.special_tokens_map.values())
 
-    def __len__(self) -> int:
-        return len(self.vocab)-1
-
-
+        
+        
     def tokenize(self, text: str, lca_shift: int = 0, all: bool = False) -> Union[List[str], Tuple[List[List[str]], List[List[str]]]]:
         """
         Tokenizes a given segment.
@@ -160,16 +147,9 @@ class ProkBERTTokenizer(PreTrainedTokenizer):
         else:
             return kmerized_segments[lca_shift]
 
-    def _convert_token_to_id(self, token):
-        """Converts a token (str) in an id using the vocab."""
-        return self.vocab.get(token, self.vocab.get(self.unk_token))
+        
 
-    def _convert_id_to_token(self, index):
-        """Converts an index (integer) in a token (str) using the vocab."""
-        return self.ids_to_tokens.get(index, self.unk_token)
-            
-
-    def depr_convert_ids_to_tokens(self, ids: Union[int, List[int]]) -> List[str]:
+    def convert_tokens_to_ids(self, tokens):
         """
         Converts tokens to their corresponding IDs.
 
@@ -186,20 +166,10 @@ class ProkBERTTokenizer(PreTrainedTokenizer):
             >>> print(ids)
             ...
         """
-
-        if isinstance(ids, int):
-            token_ids = self.vocab.get(ids, self.vocab[self.unk_token])
-
-
-        if self.operation_space == 'sequence':
-            token_ids = [self.vocab.get(token, self.vocab[self.full_unk_token]) for token in tokens]
         
-        else:
-            token_ids = [self.vocab.get(token, self.vocab[self.unk_token]) for token in tokens]
-        
-        return token_ids
+        return [self.vocab.get(token, self.vocab[self.unk_token]) for token in tokens]
 
-    def convert_ids_to_tokens(self, ids: Union[int, List[int]]) -> Union[str, List[str]]:
+    def convert_ids_to_tokens(self, ids: List[int]) -> List[str]:
         """
         Converts token IDs back to their original tokens.
         
@@ -216,22 +186,19 @@ class ProkBERTTokenizer(PreTrainedTokenizer):
             >>> print(tokens)
             ...
         """
-        if isinstance(ids, int):
-            ids = [ids]
-        if len(ids) == 1: 
-            #default_token_list = [self.id2token.get(ids[0], self.unk_token)]
-            return self.id2token.get(ids[0], self.unk_token)
-
         if self.operation_space == 'kmer':
             token_list = [self.id2token.get(id, self.unk_token) for id in ids]
 
         elif self.operation_space == 'sequence':
+
             token_list = []
             # Handling the sentence start
             if ids[0] == 2:
                 pass
             else:
                 token_list.append(self.id2token.get(ids[0], self.unk_token))
+
+            print(token_list)
             if len(ids) > 1:
                 # if this is a kmer then we add accordingly. 
                 true_start_token = self.id2token.get(ids[1], self.unk_token)
@@ -251,7 +218,45 @@ class ProkBERTTokenizer(PreTrainedTokenizer):
 
         return token_list
     
+    def get_positions_tokens(self, sequence: str, position: int) -> List[str]:
+        """
+        Get tokens containing the nucleotide at the given position.
+
+        Args:
+            sequence (str): Sequence
+            position (int): Position of the character.
+
+        Returns:
+            List[str]: List of tokens containing the character at the specified position.
+
+        Usage Example:
+            >>> tokenizer = ProkBERTTokenizer(...)
+            >>> position = 8
+            >>> sequence = "AACTGTGATCTGA"
+            >>> tokens = tokenizer.get_positions_tokens(sequence, position)
+            >>> print(tokens)
+            ...
+        """
+        all_tokens = []
+        sequence_w_pos = sequence
+        char = sequence_w_pos[position]
+        sequence_w_pos = sequence_w_pos[:position] + '0' + sequence_w_pos[position + 1:]
+        print("You look for nucleotide {0} at position {1}".format(char, position))
+        ids, kmers_w_0 = self.tokenize(sequence_w_pos, all=True)
+        #print(kmers_w_0)
+        print(self.tokenize(sequence, all=True)[1])
+        # Iterate through token IDs to find tokens containing the character at the given position
+        for kmers in kmers_w_0:
+            tokens_at_position = []
+            for token in kmers:
+                if '0' in token:
+                    tok = token.replace('0', char)
+                    tokens_at_position.append(tok)
+            all_tokens.append(tokens_at_position)
+        return all_tokens
+
     
+ 
     def save_vocabulary(self, save_directory: str, filename_prefix: Optional[str] = None) -> Tuple[str]:
         """Saves the vocabulary to a file."""
         if filename_prefix is None:
@@ -262,6 +267,7 @@ class ProkBERTTokenizer(PreTrainedTokenizer):
                 f.write(token + "\\n")
         return (vocab_file_path,)
 
+    
     @classmethod
     def from_pretrained(cls, vocab_file: str) -> 'ProkBERTTokenizer':
         """Loads a pre-trained tokenizer.
@@ -362,48 +368,6 @@ class ProkBERTTokenizer(PreTrainedTokenizer):
             "token_type_ids": token_type_ids,
             "attention_mask": attention_masks
         }
-    
-    def encode(self, segment: str,  lca_shift: int = 0, all: bool = False, add_special_tokens: bool = True, **kwargs) -> List[int]:
-        """
-        Encode a DNA sequence into its corresponding token IDs.
-        
-        Args:
-            text (str): The DNA segment to encode.
-            add_special_tokens (bool, optional): Whether to add special tokens like [CLS] and [SEP]. Defaults to True.
-        
-        Returns:
-            List[int]: Encoded token IDs.
-        
-        Usage Example:
-            >>> tokenizer = ProkBERTTokenizer(...)
-            >>> segment = 'AATCAAGGAATTATTATCGTT'
-            >>> ids = tokenizer.encode(segment)
-            >>> print(ids)
-            ...
-        """
-        shift = self.tokenization_params['shift']
-        if lca_shift >= shift:
-            raise ValueError(f'The required offset {lca_shift} is invalid. The maximum offset should be < {shift}')
-        
-        tokenized_segments, _ = lca_tokenize_segment(segment, self.tokenization_params)
-
-        # if all is set to True, then we return all the possible ids as a list
-        if all:
-            token_ids = tokenized_segments
-            if not add_special_tokens:
-                new_token_ids = []
-                for token_id_set in tokenized_segments:
-                    new_token_ids.append(token_id_set[1:len(token_id_set)-1])
-                token_ids = new_token_ids
-
-        else:
-            token_ids = tokenized_segments[lca_shift]
-            # Convert tokens to their corresponding IDs
-            # Add special tokens if needed
-            if not add_special_tokens:
-                token_ids = token_ids[1:len(token_ids)-1]
-
-        return token_ids
     
     def decode(self, ids):
         tokens = self.convert_ids_to_tokens(ids)
