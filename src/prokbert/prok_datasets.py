@@ -139,14 +139,17 @@ class IterableProkBERTPretrainingDataset(IterableDataset):
             return data
             #return [torch.tensor(item, dtype=torch.int) for item in self.dataset_file['training_data']['X'][index]]
 
+    
+class ProkBERTPretrainingDatasetPT(Dataset):
+    def __init__(self, filepath):
+        print(f'Loading: {filepath}')
+        self.X = torch.load(filepath)
+    def __len__(self):
+        return len(self.X)
 
-    def __del__(self):
-        """
-        Destructor to close the HDF5 file when the dataset object is destroyed.
-        """
-        self.dataset_file.close()
-    
-    
+    def __getitem__(self, index):
+        # 
+        return self.X[index]    
 
 class ProkBERTPretrainingDataset(Dataset):
     def __init__(self, X):
@@ -192,7 +195,7 @@ class ProkBERTPretrainingHDFDataset(Dataset):
         :param index: Index or slice object
         :return: Dataset item or slice
         """
-        self._ensure_file_open()
+        #self._ensure_file_open()
         if isinstance(index, int):
             # Return single item
             return self.dataset[index]
@@ -201,7 +204,7 @@ class ProkBERTPretrainingHDFDataset(Dataset):
             return self.dataset[index]
 
     def __len__(self):
-        self._ensure_file_open()
+        #self._ensure_file_open()
         return len(self.dataset)
 
     def close(self):
@@ -214,4 +217,17 @@ class ProkBERTPretrainingHDFDataset(Dataset):
         """
         Destructor to close the HDF5 file when the dataset object is destroyed.
         """
-        self.close()
+        pass
+        #self.close()
+
+class TestDS(torch.utils.data.Dataset):
+    def __init__(self, data):
+        self.data = data  # This should be a list of dictionaries
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, idx):
+        return self.data[idx]
+    
+    

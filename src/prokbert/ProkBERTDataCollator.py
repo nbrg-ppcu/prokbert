@@ -76,6 +76,12 @@ Collator Parameters:
         Returns:
             Tuple[torch.Tensor, torch.Tensor]: Tuple of input tensor with masked values and labels tensor.
         """
+        import os
+        #subinputs = inputs[0:10,0:10]
+        #myrank = int(os.environ["RANK"])
+        #print(f'RANK: {myrank}; dataset_sample: {subinputs}', flush=True)
+
+
         labels = inputs.clone()
         probability_matrix = torch.full(labels.shape, self.mlm_probability)
         if special_tokens_mask is None:
