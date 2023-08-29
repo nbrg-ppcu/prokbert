@@ -179,22 +179,31 @@ def check_file_exists(file_path: str) -> bool:
     else:
         raise ValueError(f"The provided file path '{file_path}' does not exist.")
 
-def count_gpus():
-    # Count NVIDIA GPUs
+def count_gpus(method="clinfo"):
     import torch
+    import subprocess
+
+    # Count NVIDIA GPUs
     nvidia_gpu_count = torch.cuda.device_count()
 
     # Count AMD GPUs
     amd_gpu_count = 0
     try:
-        clinfo_output = subprocess.check_output('clinfo').decode('utf-8')
-        amd_gpu_count = clinfo_output.count('Device Type: GPU')
-    except:
-        pass  # clinfo command might not be available
+        if method == "clinfo":
+            clinfo_output = subprocess.check_output('clinfo').decode('utf-8')
+            amd_gpu_count = clinfo_output.lower().count('device type: gpu')
+        elif method == "rocm":
+            rocm_output = subprocess.check_output('rocm-smi --list', shell=True).decode('utf-8')
+            amd_gpu_count = len(rocm_output.strip().split('\n'))
+        else:
+            raise ValueError("Unknown method provided. Choose between 'clinfo' and 'rocm'.")
+    except Exception as e:
+        print(f"Error querying AMD GPUs using method '{method}': {e}")
 
     total_gpus = nvidia_gpu_count + amd_gpu_count
 
     return total_gpus
+
 
 
 def create_hard_links(source_directory: str, target_directory: str, blacklist: list = []) -> None:

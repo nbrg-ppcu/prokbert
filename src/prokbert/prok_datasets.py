@@ -8,13 +8,17 @@ import numpy as np
 import h5py
 from typing import Dict, List, Type, Tuple, Iterator, Union
 from torch.utils.data import Dataset, IterableDataset
+import torch.distributed as dist
+
+#class IterableProkBERTPretrainingDataset(IterableDataset):
 
 class IterableProkBERTPretrainingDataset(IterableDataset):
     def __init__(self, file_path: str, 
                  input_batch_size: int = 10000,
                  ds_offset: int = 0,
                  max_iteration_over_ds: int = 10,
-                 default_dtype = torch.long) -> None:
+                 default_dtype = torch.long,
+                 add_end_token=False):
         """
         Initialize the IterableProkBERTPretrainingDataset.
 
@@ -37,6 +41,11 @@ class IterableProkBERTPretrainingDataset(IterableDataset):
         self._global_iter_steps = 0,
         self.default_dtype = default_dtype
         logging.info(f'Dataset size: {self.ds_size}')
+        self.add_end_token = add_end_token
+                # Assuming you're using distributed training
+        self.rank = dist.get_rank() if dist.is_available() and dist.is_initialized() else 0
+        self.world_size = dist.get_world_size() if dist.is_available() and dist.is_initialized() else 1
+
 
     def __len__(self) -> int:
         return self.ds_size
@@ -75,7 +84,10 @@ class IterableProkBERTPretrainingDataset(IterableDataset):
         new_fetch_start, new_fetch_end = self._get_fetch_interval()
         
         self._current_data_batch = torch.tensor(self.dataset_file['training_data']['X'][new_fetch_start:new_fetch_end],
-                                         dtype=self.default_dtype)        
+                                         dtype=self.default_dtype)
+        if self.add_end_token:
+            threes_column = torch.full((self._current_data_batch.shape[0], 1), 3, dtype=self.default_dtype)
+            self._current_data_batch = torch.cat((self._current_data_batch, threes_column), dim=1)
 
     def __iter__(self) -> Iterator[torch.Tensor]:
         self._current_ds_pointer = int(np.floor(self.ds_offset / self.input_batch_size))
@@ -113,21 +125,31 @@ class IterableProkBERTPretrainingDataset(IterableDataset):
 
         if isinstance(index, int):
             # Return single item
-            return torch.tensor(self.dataset_file['training_data']['X'][index], dtype=self.default_dtype)
+            data = torch.tensor(self.dataset_file['training_data']['X'][index], dtype=self.default_dtype)
+            if self.add_end_token:
+                threes_column = torch.tensor([3], dtype=self.default_dtype)
+                data =  torch.cat((data, threes_column), dim=0)                
+            return data
         elif isinstance(index, slice):
             # Return slice
-            return torch.tensor(self.dataset_file['training_data']['X'][index], dtype=self.default_dtype)
-        
+            data = torch.tensor(self.dataset_file['training_data']['X'][index], dtype=self.default_dtype)
+            if self.add_end_token:
+                threes_column = torch.full((data.shape[0], 1), 3, dtype=self.default_dtype)
+                data = torch.cat((data, threes_column), dim=1)
+            return data
             #return [torch.tensor(item, dtype=torch.int) for item in self.dataset_file['training_data']['X'][index]]
 
+    
+class ProkBERTPretrainingDatasetPT(Dataset):
+    def __init__(self, filepath):
+        print(f'Loading: {filepath}')
+        self.X = torch.load(filepath)
+    def __len__(self):
+        return len(self.X)
 
-    def __del__(self):
-        """
-        Destructor to close the HDF5 file when the dataset object is destroyed.
-        """
-        self.dataset_file.close()
-    
-    
+    def __getitem__(self, index):
+        # 
+        return self.X[index]    
 
 class ProkBERTPretrainingDataset(Dataset):
     def __init__(self, X):
@@ -173,7 +195,7 @@ class ProkBERTPretrainingHDFDataset(Dataset):
         :param index: Index or slice object
         :return: Dataset item or slice
         """
-        self._ensure_file_open()
+        #self._ensure_file_open()
         if isinstance(index, int):
             # Return single item
             return self.dataset[index]
@@ -182,7 +204,7 @@ class ProkBERTPretrainingHDFDataset(Dataset):
             return self.dataset[index]
 
     def __len__(self):
-        self._ensure_file_open()
+        #self._ensure_file_open()
         return len(self.dataset)
 
     def close(self):
@@ -195,4 +217,17 @@ class ProkBERTPretrainingHDFDataset(Dataset):
         """
         Destructor to close the HDF5 file when the dataset object is destroyed.
         """
-        self.close()
+        pass
+        #self.close()
+
+class TestDS(torch.utils.data.Dataset):
+    def __init__(self, data):
+        self.data = data  # This should be a list of dictionaries
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, idx):
+        return self.data[idx]
+    
+    

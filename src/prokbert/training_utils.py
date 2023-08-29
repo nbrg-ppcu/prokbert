@@ -168,9 +168,16 @@ def get_the_iteration_offset(batch_size, training_steps, dataset_size,
 
 
 def get_pretrained_model(prokbert_config):
-    from transformers import MegatronBertConfig, MegatronBertForMaskedLM
+    from transformers import MegatronBertConfig, MegatronBertForMaskedLM, BertForMaskedLM, BertConfig
 
-    new_model_args = MegatronBertConfig(**prokbert_config.model_params)
+    #new_model_args = MegatronBertConfig(**prokbert_config.model_params)
+    #model = MegatronBertForMaskedLM(new_model_args)
+
+    #new_model_args = BertConfig(**prokbert_config.model_params)
+    #model = BertForMaskedLM(new_model_args)
+
+    #return model
+
 
     [m_exists, cp_dir, cp, cps] = check_model_existance_and_checkpoint(prokbert_config.model_params['model_outputpath'], 
                                      prokbert_config.model_params['model_name'])
@@ -180,14 +187,14 @@ def get_pretrained_model(prokbert_config):
         model = MegatronBertForMaskedLM.from_pretrained(expected_model_dir)
     else:
         print('Investigating whether previous model is exists')
-        [init_m_exists, init_m_cp_dir, init_m_cp, init_m_cps] = check_model_existance_and_checkpoint(prokbert_config.model_params['model_outputpath'], 
+        [init_m_exists, init_m_cp_dir, init_m_cp, init_m_cps] = check_model_existance_and_checkpoint(prokbert_config.model_params['resume_or_initiation_model_path'], 
                                         prokbert_config.model_params['model_name'])
         if not init_m_exists:
             print(f'The expected model does not exist {0}')
             model = MegatronBertForMaskedLM(new_model_args)
             
         else:
-            model = MegatronBertForMaskedLM.from_pretrained(init_m_cp)
+            model = MegatronBertForMaskedLM.from_pretrained(init_m_cp_dir)
 
 
     return model
@@ -211,7 +218,9 @@ def run_pretraining(model,tokenizer, data_collator,training_dataset, prokbert_co
         )
     
     if is_resume_training and m_exists: 
+        #trainer.train()
         trainer.train(resume_from_checkpoint = cp_dir)
+
     else:
         trainer.train()
 
