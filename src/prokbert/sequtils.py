@@ -512,7 +512,7 @@ def process_batch_tokenize_segments_with_ids(segments, segment_ids, tokenization
         If the length of a segment exceeds the maximum permissible segment length defined in `tokenization_params`.
 
     """
-    logging.info('Tokenization of a list of segments')
+    #logging.info('Tokenization of a list of segments')
     tokenized_segments_with_ids = {}
     for i, segment in enumerate(segments):
         act_id = segment_ids[i]

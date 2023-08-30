@@ -230,4 +230,43 @@ class TestDS(torch.utils.data.Dataset):
     def __getitem__(self, idx):
         return self.data[idx]
     
+
+class ProkBERTTrainingDatasetPT(Dataset):
+    def __init__(self, X, y, attention_masks=None):
+        self.input_ids = X  # Assuming X is a tensor containing input_ids
+        self.labels = y  # Assuming y is a tensor containing labels
+        self.attention_masks = attention_masks  # Optional attention masks
+
+    def __len__(self):
+        return len(self.labels)  # Number of samples
+
+    def __getitem__(self, idx):
+        sample = {
+            'input_ids': self.input_ids[idx],  # input_ids for this sample
+            'labels': self.labels[idx],  # label for this sample
+        }
+        
+        # Include attention_mask in the sample if it is provided
+        if self.attention_masks is not None:
+            sample['attention_mask'] = self.attention_masks[idx]
+        
+        return sample
+
+
+class ProkBERTTrainingDatasetPTa(torch.utils.data.Dataset):
+    def __init__(self, X, y):
+        self.X = X  # Assuming X is either a list of dictionaries or a tensor
+        self.y = y  # Assuming y is a tensor of labels
+
+    def __len__(self):
+        return len(self.y)  # Assuming y is a tensor, so this gives us the number of samples
+
+    def __getitem__(self, idx):
+        x = self.X[idx]  # Get the data sample at the given index
+        y = self.y[idx]  # Get the corresponding label
+
+        return x, y  # Return the sample and its label
+
     
+
+      
