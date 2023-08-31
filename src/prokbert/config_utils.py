@@ -18,6 +18,72 @@ class BaseConfig:
     def __init__(self):
         super().__init__()
 
+    def cast_to_expected_type(self, parameter_class: str, parameter_name: str, value: any) -> any:
+        """
+        Cast the given value to the expected type.
+
+        :param parameter_class: The class/category of the parameter.
+        :type parameter_class: str
+        :param parameter_name: The name of the parameter.
+        :type parameter_name: str
+        :param value: The value to be casted.
+        :type value: any
+        :return: Value casted to the expected type.
+        :rtype: any
+        :raises ValueError: If casting fails.
+        """
+        expected_type = self.parameters[parameter_class][parameter_name]['type']
+
+        if expected_type in ["integer", "int"]:
+            try:
+                return int(value)
+            except ValueError:
+                raise ValueError(f"Failed to cast value '{value}' to integer for parameter '{parameter_name}' in class '{parameter_class}'.")
+        elif expected_type == "float":
+            try:
+                return float(value)
+            except ValueError:
+                raise ValueError(f"Failed to cast value '{value}' to float for parameter '{parameter_name}' in class '{parameter_class}'.")
+        elif expected_type in ["string", "str"]:
+            return str(value)
+        elif expected_type in ["boolean", "bool"]:
+            if isinstance(value, bool):
+                return value
+            elif str(value).lower() == "true":
+                return True
+            elif str(value).lower() == "false":
+                return False
+            else:
+                raise ValueError(f"Failed to cast value '{value}' to boolean for parameter '{parameter_name}' in class '{parameter_class}'.")
+        elif expected_type == "type":
+            # For this type, we will simply return the value without casting. 
+            # It assumes the configuration provides valid Python types.
+            return value
+        elif expected_type == "list":
+            if isinstance(value, list):
+                return value
+            else:
+                raise ValueError(f"Failed to validate value '{value}' as a list for parameter '{parameter_name}' in class '{parameter_class}'.")
+        elif expected_type == "tuple":
+            if isinstance(value, tuple):
+                return value
+            else:
+                raise ValueError(f"Failed to validate value '{value}' as a tuple for parameter '{parameter_name}' in class '{parameter_class}'.")
+        elif expected_type == "set":
+            if isinstance(value, set):
+                return value
+            else:
+                raise ValueError(f"Failed to validate value '{value}' as a set for parameter '{parameter_name}' in class '{parameter_class}'.")
+        elif expected_type == "dict":
+            if isinstance(value, dict):
+                return value
+            else:
+                raise ValueError(f"Failed to validate value '{value}' as a dict for parameter '{parameter_name}' in class '{parameter_class}'.")
+        else:
+            raise ValueError(f"Unknown expected type '{expected_type}' for parameter '{parameter_name}' in class '{parameter_class}'.")
+
+
+
     def get_parameter(self, parameter_class: str, parameter_name: str) -> any:
         """
         Retrieve the default value of a specified parameter.
@@ -26,10 +92,13 @@ class BaseConfig:
         :type parameter_class: str
         :param parameter_name: The name of the parameter.
         :type parameter_name: str
-        :return: Default value of the parameter.
+        :return: Default value of the parameter, casted to the expected type.
         :rtype: any
         """
-        return self.parameters[parameter_class][parameter_name]['default']
+        default_value = self.parameters[parameter_class][parameter_name]['default']
+        return self.cast_to_expected_type(parameter_class, parameter_name, default_value)
+    
+
     
     def validate_type(self, parameter_class: str, parameter_name: str, value: any) -> bool:
         """
@@ -146,7 +215,8 @@ class SeqConfig(BaseConfig):
             prokbert_seq_config_file = os.environ['SEQ_CONFIG_FILE']
         except KeyError:
             # Handle the case when the environment variable is not found
-            print("SEQ_CONFIG_FILE environment variable has not been set. Using default value: {0}".format(prokbert_seq_config_file))
+            pass
+            # print("SEQ_CONFIG_FILE environment variable has not been set. Using default value: {0}".format(prokbert_seq_config_file))
         return prokbert_seq_config_file
 
     
@@ -187,7 +257,6 @@ class SeqConfig(BaseConfig):
         vocabfile=tokenization_params['vocabfile']
         act_kmer = tokenization_params['kmer']
         if vocabfile=='auto':
-            print(self.current_path)
             vocabfile_path = join(self.current_path, 'data/prokbert_vocabs/', f'prokbert-base-dna{act_kmer}', 'vocab.txt')
             tokenization_params['vocabfile'] = vocabfile_path
         else:
@@ -304,7 +373,8 @@ class ProkBERTConfig(BaseConfig):
             pretrain_config_file = os.environ['PRETRAIN_CONFIG_FILE']
         except KeyError:
             # Handle the case when the environment variable is not found
-            print(f"PRETRAIN_CONFIG_FILE environment variable has not been set. Using default value: {pretrain_config_file}")
+            pass
+            # print(f"PRETRAIN_CONFIG_FILE environment variable has not been set. Using default value: {pretrain_config_file}")
         return pretrain_config_file
     
     def get_set_parameters(self, parameter_class: str, parameters: dict = {}) -> dict:
@@ -320,6 +390,12 @@ class ProkBERTConfig(BaseConfig):
         :raises ValueError: If an invalid parameter is provided.
         """
         class_params = {k: self.get_parameter(parameter_class, k) for k in self.parameters[parameter_class]}
+
+        # First validatiading the class parameters as well
+        for param, param_value in class_params.items():
+
+            self.validate(parameter_class, param, param_value)
+
 
         for param, param_value in parameters.items():
             if param not in class_params:
@@ -355,3 +431,14 @@ class ProkBERTConfig(BaseConfig):
         self.data_collator_params = self.get_set_parameters('data_collator', parameters)
         return self.data_collator_params
     
+    def get_and_set_segmentation_parameters(self, parameters: dict = {}) -> dict:
+        self.segmentation_params = self.def_seq_config.get_and_set_segmentation_parameters(parameters)
+
+        return self.segmentation_params 
+    def get_and_set_tokenization_parameters(self, parameters: dict = {}) -> dict:
+        self.tokenization_params = self.def_seq_config.get_and_set_tokenization_parameters(parameters)
+        
+        return self.tokenization_params 
+    def get_and_set_computation_params(self, parameters: dict = {}) -> dict:
+        self.computation_params = self.def_seq_config.get_and_set_computational_parameters(parameters)
+        return self.computation_params    

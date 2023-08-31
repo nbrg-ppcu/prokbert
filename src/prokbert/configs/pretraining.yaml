@@ -114,7 +114,6 @@ dataset:
     description: "Only for iterative datasets. Maximum how many times we should iterate over a dataset (kind of epoch). I.e. 10 times. After thet stop iteration will be raised"
     constraints:
       min: 0.0
-
 pretraining:
   output_dir:
     default: './train_output'
@@ -141,7 +140,7 @@ pretraining:
     type: "boolean"
     description: "Whether to log metrics for the first step."
   per_device_train_batch_size:
-    default: 56  # Placeholder; use the appropriate default value
+    default: 48  # Placeholder; use the appropriate default value
     type: "integer"
     description: "Batch size for training."
   dataloader_num_workers:
@@ -190,7 +189,7 @@ segmentation:
 # For full definiation, please see the documentation of the sequence_processing.yaml
 tokenization:
   kmer: 6
-  shift: 2
+  shift: 1
 # For full definiation, please see the documentation of the sequitls parameters
 computation:
   numpy_token_integer_prec_byte: 2

@@ -2,7 +2,7 @@
 
 import unittest
 import pandas as pd
-from general_utils import *
+from prokbert.general_utils import *
 
 
 class TestCheckExpectedColumns(unittest.TestCase):

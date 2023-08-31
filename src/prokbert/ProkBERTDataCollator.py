@@ -1,5 +1,3 @@
-import random
-import warnings
 import logging
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -63,7 +61,7 @@ Collator Parameters:
         self.mask_to_right = mask_to_right   
         logger.info(f"Mask neighborhood parameters set to: mask_to_left={mask_to_left}, mask_to_right={mask_to_right}")
 
-    def set_torch_token_dtype(self, torch_token_dtype=torch.long):
+    def set_torch_token_dtype(self, torch_token_dtype=torch.int16):
         self.torch_token_dtype = torch_token_dtype
 
 
@@ -78,6 +76,12 @@ Collator Parameters:
         Returns:
             Tuple[torch.Tensor, torch.Tensor]: Tuple of input tensor with masked values and labels tensor.
         """
+        import os
+        #subinputs = inputs[0:10,0:10]
+        #myrank = int(os.environ["RANK"])
+        #print(f'RANK: {myrank}; dataset_sample: {subinputs}', flush=True)
+
+
         labels = inputs.clone()
         probability_matrix = torch.full(labels.shape, self.mlm_probability)
         if special_tokens_mask is None:
@@ -115,6 +119,8 @@ Collator Parameters:
             inputs[indices_random] = random_words[indices_random]
 
         # The rest of the time (10% of the time) we keep the masked input tokens unchanged
+        labels = labels.to(dtype=torch.int64)
+        
         return inputs, labels
 
 

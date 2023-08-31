@@ -15,8 +15,8 @@ from transformers.utils import logging
 
 # These utils contains the tools needed by the ProkBERT tokenizer
 
-from config_utils import *
-from sequtils import *
+from .config_utils import *
+from .sequtils import *
 
 import logging as logger
 
@@ -132,7 +132,7 @@ class ProkBERTTokenizer(PreTrainedTokenizer):
         self.special_tokens = list(self.special_tokens_map.values())
 
     def __len__(self) -> int:
-        return len(self.vocab)
+        return len(self.vocab)-1
 
 
     def tokenize(self, text: str, lca_shift: int = 0, all: bool = False) -> Union[List[str], Tuple[List[List[str]], List[List[str]]]]:
@@ -251,21 +251,17 @@ class ProkBERTTokenizer(PreTrainedTokenizer):
 
         return token_list
     
- 
-    def save_vocabulary(self, save_directory: str) -> Tuple[str]:
-        """Saves the vocabulary to a file.
-        
-        Args:
-            save_directory (str): Directory where the vocabulary will be saved.
-        
-        Returns:
-            Tuple[str]: Path to the saved vocabulary file.
-        """
-        with open(f"{save_directory}/vocab.txt", "w") as f:
+    
+    def save_vocabulary(self, save_directory: str, filename_prefix: Optional[str] = None) -> Tuple[str]:
+        """Saves the vocabulary to a file."""
+        if filename_prefix is None:
+            filename_prefix = ""
+        vocab_file_path = os.path.join(save_directory, filename_prefix + "vocab.txt")
+        with open(vocab_file_path, "w") as f:
             for token in self.vocab:
                 f.write(token + "\\n")
-        return (f"{save_directory}/vocab.txt",)
-    
+        return (vocab_file_path,)
+
     @classmethod
     def from_pretrained(cls, vocab_file: str) -> 'ProkBERTTokenizer':
         """Loads a pre-trained tokenizer.
