@@ -427,3 +427,50 @@ class ProkBERTTokenizer(PreTrainedTokenizer):
             ...
         """
         return [self.decode(token_ids) for token_ids in token_ids_list]
+    
+    def get_positions_tokens(self, sequence: str, position: int) -> List[str]:
+        """
+        Get tokens containing the nucleotide at the given position.
+
+        Args:
+            sequence (str): Sequence
+            position (int): Position of the character.
+
+        Returns:
+            List[str]: List of tokens containing the character at the specified position.
+
+        Usage Example:
+            >>> tokenizer = ProkBERTTokenizer(...)
+            >>> position = 8
+            >>> sequence = "AACTGTGATCTGA"
+            >>> tokens = tokenizer.get_positions_tokens(sequence, position)
+            >>> print(tokens)
+            ...
+        """
+        all_tokens = []
+        sequence_w_pos = sequence
+        char = sequence_w_pos[position]
+        positions = []
+        sequence_w_pos = sequence_w_pos[:position] + '0' + sequence_w_pos[position + 1:]
+        print("You look for nucleotide {0} at position {1}".format(char, position))
+        ids, kmers_w_0 = self.tokenize(sequence_w_pos, all=True)
+        #print(kmers_w_0)
+        if position > len(sequence):
+            raise ValueError('Given position is higher than the lenght of the sequence!')
+        if len(kmers_w_0[0]) == 0 :
+            raise ValueError('No kmers could be made from the sequence!')    
+        print('All kmers:' , self.tokenize(sequence, all=True)[1])
+        # Iterate through token IDs to find tokens containing the character at the given position
+        for kmers in kmers_w_0:
+            tokens_at_position = []
+            pos_in_kmers = []
+            for i in range(len(kmers)):
+                if '0' in kmers[i]:
+                    tok = kmers[i].replace('0', char)
+                    tokens_at_position.append(tok)
+                    pos_in_kmers.append(i)
+            if tokens_at_position:
+                all_tokens.append(tokens_at_position)
+                positions.append(pos_in_kmers)
+        return [all_tokens, positions]
+    #STILL NEED WHICH KMER LIST HAS THE POS IF NOT ALL
