@@ -1,4 +1,10 @@
 # Training utils i.e. loading stuff, investiageting stuffs, etc
+from sklearn.metrics import roc_auc_score, accuracy_score, f1_score, matthews_corrcoef, confusion_matrix
+from torch.optim.lr_scheduler import CosineAnnealingLR
+from transformers import Trainer, AdamW, TrainingArguments
+
+from typing import List, Tuple, Dict, Union
+
 from .config_utils import *
 from .sequtils import *
 from .prokbert_tokenizer import ProkBERTTokenizer
@@ -6,6 +12,7 @@ from .ProkBERTDataCollator import *
 from .general_utils import *
 from .prok_datasets import *
 from .config_utils import *
+
 
 import logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -84,7 +91,7 @@ def check_model_existance_and_checkpoint(model_name: str, output_path: str) -> T
     chekcpoint_nr = None
     if path_exists:
         try:
-            subfolders = [ f for f in os.scandir(model_path) if f.is_dir() ]
+            subfolders = [ f for f in os.scandir(model_path) if f.is_dir() and f.name.startswith('checkpoint-')]
             subfolders = [sf for sf in subfolders if len(os.listdir(subfolders[0])) > 1]
             chekcpoint_nr = sorted([int(f.name[11:]) for f in subfolders if f.name.startswith('checkpoint-')])
             largest_checkpoint = chekcpoint_nr[-1]
@@ -225,7 +232,151 @@ def run_pretraining(model,tokenizer, data_collator,training_dataset, prokbert_co
         trainer.train()
 
 
+def evaluate_binary_classification_bert_build_pred_results(logits: torch.Tensor, labels: torch.Tensor) -> np.ndarray:
+    """
+    Build prediction results for binary classification.
+    
+    Parameters:
+        logits (torch.Tensor): Raw model outputs for each class.
+        labels (torch.Tensor): True labels.
+        
+    Returns:
+        np.ndarray: An array containing labels, predictions, and logits for each class.
+    """
+    
+    predictions = torch.argmax(logits, dim=-1)
+    p = predictions.detach().cpu().numpy()
+    y = labels.detach().cpu().numpy()
+    logits = logits.detach().cpu().numpy()
+    pred = np.stack((y, p)).T
+    pred_results = np.concatenate((pred, logits), axis=1)
+    
+    return pred_results
+
+def evaluate_binary_classification_bert(pred_results: np.ndarray) -> Tuple[Dict, List]:
+    """
+    Calculate various metrics for binary classification based on the prediction results.
+    
+    Parameters:
+        pred_results (np.ndarray): An array containing labels, predictions, and logits for each class.
+        
+    Returns:
+        Tuple[Dict, List]:
+            - Dict: A dictionary containing various evaluation metrics.
+            - List: A list containing some of the metrics for further analysis.
+    """
+    
+    y_true = pred_results[:, 0]
+    y_pred = pred_results[:, 1]
+    class_0_scores = pred_results[:, 2]
+    class_1_scores = pred_results[:, 3]
+    
+    try:
+        auc_class1 = roc_auc_score(y_true, class_0_scores)
+    except ValueError:
+        auc_class1 = -1
+    
+    try:
+        auc_class2 = roc_auc_score(y_true, class_1_scores)
+    except ValueError:
+        auc_class2 = -1
+    
+    acc = accuracy_score(y_true, y_pred)
+    f1 = f1_score(y_true, y_pred)
+    mcc = matthews_corrcoef(y_true, y_pred)
+    tn, fp, fn, tp = confusion_matrix(y_true, y_pred).ravel()
+    recall = tp / (tp + fn)
+    specificity = tn / (tn + fp)
+    Np = tp + fn
+    Nn = tn + fp
+    
+    eval_results = {
+        'auc_class0': auc_class1,
+        'auc_class1': auc_class2,
+        'acc': acc,
+        'f1': f1,
+        'mcc': mcc,
+        'recall': recall,
+        'sensitivity': recall,
+        'specificity': specificity,
+        'tn': tn,
+        'fp': fp,
+        'fn': fn,
+        'tp': tp,
+        'Np': Np,
+        'Nn': Nn
+    }
+    
+    eval_results_ls = [auc_class1, auc_class2, f1, tn, fp, fn, tp, Np, Nn]
+    
+    return eval_results, eval_results_ls
+
+
+def compute_metrics(eval_preds: Tuple) -> Dict:
+    """
+    Compute metrics for binary classification evaluation.
+    
+    Parameters:
+        eval_preds (Tuple): A tuple containing two elements:
+            - logits: A list or array of raw model outputs.
+            - labels: A list or array of true labels.
+            
+    Returns:
+        Dict: A dictionary containing evaluation metrics.
+        
+    Note:
+        This function assumes that `evaluate_binary_classification_bert_build_pred_results`
+        and `evaluate_binary_classification_bert` are available in the scope.
+    """
+    
+    logits, labels = eval_preds
+    logits = torch.tensor(logits)
+    labels = torch.tensor(labels)
+    
+    # Generate prediction results (assuming this function is available in the scope)
+    pred_results = evaluate_binary_classification_bert_build_pred_results(logits, labels)
+    
+    # Evaluate binary classification (assuming this function is available in the scope)
+    eval_results, eval_results_ls = evaluate_binary_classification_bert(pred_results)
+    
+    return eval_results
 
 
 
 
+class ProkBERTTrainer(Trainer):
+    """
+    ProkBERTTrainer is a custom Trainer class that inherits from Hugging Face's Trainer.
+    It overrides the create_optimizer_and_scheduler method to customize the learning rate
+    scheduler and optimizer.
+    """
+
+    def create_optimizer_and_scheduler(self, num_training_steps: int):
+        """
+        Create and set the AdamW optimizer and CosineAnnealingLR scheduler for training.
+        
+        Parameters:
+            num_training_steps (int): The total number of training steps for the scheduler.
+        
+        Returns:
+            None: Sets the optimizer and lr_scheduler attributes.
+        """
+
+        # Create AdamW optimizer with the largest learning rate
+        optimizer = torch.optim.AdamW(
+            self.model.parameters(),
+            lr=self.args.learning_rate,  # Largest learning rate
+            eps=self.args.adam_epsilon,
+            weight_decay=self.args.weight_decay,
+        )
+
+        # Create Cosine Annealing scheduler
+        scheduler = CosineAnnealingLR(
+            optimizer,
+            T_max=num_training_steps,  # Number of steps in one cycle
+            eta_min=1e-6  # Smallest learning rate
+        )
+
+        self.optimizer = optimizer
+        self.lr_scheduler = scheduler
+        
