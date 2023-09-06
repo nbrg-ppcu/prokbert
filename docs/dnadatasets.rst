@@ -9,4 +9,8 @@ ProkDataset
    :toctree: api
 
    prokbert.dnadatasets.ProkDataset
+   :members:
    prokbert.dnadatasets.DnaDatasetID
+
+.. autoclass:: prokbert.dnadatasets.ProkDataset
+    :members:
