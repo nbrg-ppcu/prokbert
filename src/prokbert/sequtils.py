@@ -170,20 +170,20 @@ def segment_sequences_random(sequences, params):
     The actual coverage might differ from the expected one. 
     The output is a list of dictionaries. Note that segment IDs are not generated in this function.
 
-    Parameters
+    Parameters:
     ----------
     sequences : pd.DataFrame
         DataFrame containing sequences in the "sequence" column and their associated IDs in "sequence_id".
     params : dict
         Dictionary containing segmentation parameters including 'coverage', 'min_length', and 'max_length'.
 
-    Returns
+    Returns:
     -------
     list of dict
         Each dictionary contains information about a segment including its sequence, start position, 
         end position, associated sequence ID, and a segment ID.
 
-    Notes
+    Notes:
     -----
     The actual number of segments might differ from the expected number due to the random sampling nature 
     and the presence of sequences shorter than the segment size.

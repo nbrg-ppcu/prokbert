@@ -1,4 +1,5 @@
 _build/
+api/
 
 deploy_version.py
 # macOS system files
