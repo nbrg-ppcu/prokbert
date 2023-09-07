@@ -36,25 +36,21 @@ import h5py
 
 
 def load_contigs(fasta_files_list, adding_reverse_complement=True, IsAddHeader=False, AsDataFrame=False):
-    """ 
-    Load contigs from a list of fasta files.
+    """Load contigs from a list of fasta files.
 
     :param fasta_files_list: List of paths to fasta files. Compressed (gz) fasta files are accepted as well.
-    :type fasta_files_list: list
-
+    :type fasta_files_list: list: list
     :param adding_reverse_complement: If True, add the reverse complement of each sequence. Defaults to True.
     :type adding_reverse_complement: bool, optional
-
     :param IsAddHeader: If True, include the fasta ID and description in the output. Defaults to False.
     :type IsAddHeader: bool, optional
-
     :param AsDataFrame: If True, return the sequences as a pandas DataFrame. Defaults to False.
     :type AsDataFrame: bool, optional
-
-    :return: The loaded sequences. Each sequence is represented as a string if IsAddHeader is False,
+    :returns: The loaded sequences. Each sequence is represented as a string if IsAddHeader is False,
              or as a list [fasta_id, description, source_file, sequence, orientation] if IsAddHeader is True.
              If AsDataFrame is True, the sequences are returned as a DataFrame.
     :rtype: list or DataFrame
+
     """
     
     logging.info('Loading sequence data into memory!')
@@ -105,6 +101,18 @@ def load_contigs(fasta_files_list, adding_reverse_complement=True, IsAddHeader=F
 
 
 def segment_sequence_contiguous(sequence, params, sequence_id=np.NaN):
+    """_summary_
+
+    :param sequence: _description_
+    :type sequence: _type_
+    :param params: _description_
+    :type params: _type_
+    :param sequence_id: _description_, defaults to np.NaN
+    :type sequence_id: _type_, optional
+    :returns: _description_
+    :rtype: _type_
+
+    """
     """
     Create end-to-end, disjoint segments of a sequence without overlaps.
 
@@ -160,13 +168,12 @@ def segment_sequence_contiguous(sequence, params, sequence_id=np.NaN):
     return segments
 
 def segment_sequences_random(sequences, params):
-    """
-    Randomly segment the input sequences.
-
+    """Randomly segment the input sequences.
+    
     This function takes a list of sequences or a DataFrame containing sequences.
     If a DataFrame is provided, it's assumed to be preprocessed, where the "sequence" column
     stores the sequences to be segmented, and "sequence_id" serves as a valid primary key.
-
+    
     The actual coverage may differ from the expected one. The function returns a list of dictionaries,
     each containing information about a segment, including its sequence, start position, end position,
     associated sequence ID, and a segment ID. Note that segment IDs are not generated in this function.
@@ -177,16 +184,15 @@ def segment_sequences_random(sequences, params):
     :param params: A dictionary containing segmentation parameters, including 'coverage', 'min_length',
         and 'max_length'.
     :type params: dict
-
-    :return: A list of dictionaries. Each dictionary contains information about a segment, including its sequence,
+    :returns: A list of dictionaries. Each dictionary contains information about a segment, including its sequence,
         start position, end position, associated sequence ID, and a segment ID. Note that segment IDs are not
         generated in this function.
     :rtype: list of dict
 
-    :notes:
-    
-    The actual number of segments may differ from the expected number due to the random sampling nature
-    and the presence of sequences shorter than the segment size.
+:notes:
+
+The actual number of segments may differ from the expected number due to the random sampling nature
+and the presence of sequences shorter than the segment size.
 
     """
     
@@ -239,48 +245,35 @@ def segment_sequences_random(sequences, params):
 
 
 def segment_sequences(sequences, params, AsDataFrame=False):
-    """
-    Segment sequences based on the provided parameters.
+    """Segment sequences based on the provided parameters.
     
-    We assume that the sequence is quality controlled and preprocessed, 
-    i.e., is a valid nucleotide sequence, etc. If sequences are provided 
-    as a DataFrame, then it is assumed that there is a "sequence_id" and 
-    a "sequence" attribute. The "sequence_id" should be a valid primary key. 
+    We assume that the sequence is quality controlled and preprocessed,
+    i.e., is a valid nucleotide sequence, etc. If sequences are provided
+    as a DataFrame, then it is assumed that there is a "sequence_id" and
+    a "sequence" attribute. The "sequence_id" should be a valid primary key.
     If the output is requested as a DataFrame, then the IDs are added as well.
 
-    Parameters
-    ----------
-    sequences : list or pd.DataFrame
-        A list of sequences or a DataFrame containing sequences. 
+    :param sequences: A list of sequences or a DataFrame containing sequences.
         If a DataFrame, it must have "sequence_id" and "sequence" attributes.
-    params : dict
-        Dictionary containing the segmentation parameters. 
+    :type sequences: list or pd.DataFrame
+    :param params: Dictionary containing the segmentation parameters.
         The 'type' key in the dictionary can be 'contiguous' or 'random'.
-    AsDataFrame : bool, optional
-        If True, the output will be a DataFrame. If False, it will be a list. 
+    :type params: dict
+    :param AsDataFrame: If True, the output will be a DataFrame. If False, it will be a list.
         Defaults to False.
-
-    Returns
-    -------
-    list or pd.DataFrame
-        List of segmented sequences or a DataFrame with segmented sequences 
+    :type AsDataFrame: bool, optional
+    :returns: List of segmented sequences or a DataFrame with segmented sequences
         and their corresponding information based on the `AsDataFrame` parameter.
-
-    Raises
-    ------
-    ValueError
-        If the provided sequences DataFrame does not have the required attributes.
-    ValueError
-        If the "sequence_id" column is not a valid primary key.
+    :rtype: list or pd.DataFrame
+    :raises ValueError: If the provided sequences DataFrame does not have the required attributes.
+    :raises ValueError: If the "sequence_id" column is not a valid primary key.
 
     Notes
     -----
     If the segmentation type is 'random', the functionality is yet to be implemented.
-
     Examples
     --------
     TODO: Add examples after finalizing the function's behavior and output.
-
     """
     segmentation_type = params['type']
 
@@ -341,33 +334,23 @@ def segment_sequences(sequences, params, AsDataFrame=False):
 
 
 def lca_tokenize_segment(segment, params):
-    """
-    Tokenizes a single segment using Local Context Aware (LCA) tokenization. 
+    """Tokenizes a single segment using Local Context Aware (LCA) tokenization.
     The segment is first split into k-mers with specified shifts and then tokenized into token vectors.
 
-    Parameters
-    ----------
-    segment : str
-        The input nucleotide sequence segment to be tokenized.
-    params : dict
-        Dictionary containing the tokenization parameters:
+    :param segment: The input nucleotide sequence segment to be tokenized.
+    :type segment: str
+    :param params: Dictionary containing the tokenization parameters:
             - 'shift' (int): The k-mer shift parameter.
             - 'max_segment_length' (int): Maximum allowable segment length.
             - 'max_unknown_token_proportion' (float): Maximum allowable proportion of unknown tokens in a segment.
             - 'kmer' (int): Size of the k-mer.
             - 'token_limit' (int): Maximum number of tokens allowed in the tokenized output.
             - 'vocabmap' (dict[str, int]): Dictionary that maps k-mers to their respective token values.
-
-    Returns
-    -------
-    tuple
-        - list[list[int]]: List containing tokenized segments.
+    :type params: dict
+    :returns: - list[list[int]]: List containing tokenized segments.
         - list[list[str]]: List containing k-merized segments with different shifts.
-
-    Raises
-    ------
-    ValueError
-        If the segment length exceeds the `max_segment_length`.
+    :rtype: tuple
+    :raises ValueError: If the segment length exceeds the `max_segment_length`.
 
     Examples
     --------
@@ -406,34 +389,24 @@ def tokenize_kmerized_segment_list(kmerized_segments: List[List[str]],
                                    token_limit: int, 
                                    max_unknown_token_proportion: float, 
                                    add_special_tokens: bool = True) -> List[List[int]]:
-    """ 
-    Tokenizes or vectorizes a list of k-merized segments into a list of token vectors. If the expected number of 
+    """Tokenizes or vectorizes a list of k-merized segments into a list of token vectors. If the expected number of
     tokens in a segment exceeds the maximum allowed tokens (`token_limit`), the function raises an error. For segments
-    where unknown k-mers exceed the proportion set by `max_unknown_token_proportion`, the output is a special token 
+    where unknown k-mers exceed the proportion set by `max_unknown_token_proportion`, the output is a special token
     sequence indicating an empty sentence.
 
-    Parameters
-    ----------
-    kmerized_segments : List[List[str]]
-        List containing k-merized segments.
-    vocabmap : Dict[str, int]
-        Dictionary that maps k-mers to their respective token values.
-    token_limit : int
-        Maximum number of tokens allowed in the tokenized output.
-    max_unknown_token_proportion : float
-        Maximum allowable proportion of unknown tokens in a segment.
-    add_special_tokens : bool, optional (default=True)
-        Whether to add special tokens (`[CLS]` and `[SEP]`) to the tokenized segments.
-
-    Returns
-    -------
-    List[List[int]]
-        List containing tokenized segments.
-
-    Raises
-    ------
-    ValueError
-        If the expected number of tokens in a segment exceeds `token_limit`.
+    :param kmerized_segments: List containing k-merized segments.
+    :type kmerized_segments: List[List[str]]
+    :param vocabmap: Dictionary that maps k-mers to their respective token values.
+    :type vocabmap: Dict[str, int]
+    :param token_limit: Maximum number of tokens allowed in the tokenized output.
+    :type token_limit: int
+    :param max_unknown_token_proportion: Maximum allowable proportion of unknown tokens in a segment.
+    :type max_unknown_token_proportion: float
+    :param add_special_tokens: Whether to add special tokens (`[CLS]` and `[SEP]`) to the tokenized segments.
+    :type add_special_tokens: bool, optional (default=True)
+    :returns: List containing tokenized segments.
+    :rtype: List[List[int]]
+    :raises ValueError: If the expected number of tokens in a segment exceeds `token_limit`.
 
     Examples
     --------
@@ -480,10 +453,9 @@ def tokenize_kmerized_segment_list(kmerized_segments: List[List[str]],
     return tokenized_segments
 
 def process_batch_tokenize_segments_with_ids(segments, segment_ids, tokenization_params, np_token_type=np.uint16):
-    """
-    Tokenizes a batch of segments and associates them with their provided IDs.
-
-    This function generates a vector representation for a collection of segments. It presumes that 
+    """Tokenizes a batch of segments and associates them with their provided IDs.
+    
+    This function generates a vector representation for a collection of segments. It presumes that
     the segments have undergone quality control. The result is a dictionary where the keys represent
     the provided segment IDs, and the values are lists of potential vector representations for the segment.
     Each list element corresponds to a specific shift (e.g., 0-shifted, 1-shifted, etc.).
@@ -491,26 +463,18 @@ def process_batch_tokenize_segments_with_ids(segments, segment_ids, tokenization
     The vector representations are converted to numpy arrays. Note that the output isn't a 2D rectangular
     array but a list of arrays.
 
-    Parameters
-    ----------
-    segments : list
-        A list of preprocessed and validated segments.
-    segment_ids : list
-        A list of segment IDs corresponding to each segment in the `segments` list.
-    tokenization_params : dict
-        A dictionary containing tokenization parameters.
-
-    Returns
-    -------
-    dict
-        A dictionary where keys are segment IDs and values are lists of numpy arrays representing 
+    :param segments: A list of preprocessed and validated segments.
+    :type segments: list
+    :param segment_ids: A list of segment IDs corresponding to each segment in the `segments` list.
+    :type segment_ids: list
+    :param tokenization_params: A dictionary containing tokenization parameters.
+    :type tokenization_params: dict
+    :param np_token_type:  (Default value = np.uint16)
+    :returns: A dictionary where keys are segment IDs and values are lists of numpy arrays representing
         tokenized segments.
+    :rtype: dict
 
-    Raises
-    ------
-    ValueError
-        If the length of a segment exceeds the maximum permissible segment length defined in `tokenization_params`.
-
+    
     """
     #logging.info('Tokenization of a list of segments')
     tokenized_segments_with_ids = {}
@@ -527,9 +491,16 @@ def process_batch_tokenize_segments_with_ids(segments, segment_ids, tokenization
     return tokenized_segments_with_ids
    
 def batch_tokenize_segments_with_ids(segment_data, tokenization_params, num_cores=1, batch_size = 10000, np_token_type=np.uint16):
-    """ Parallel tokenization of segments. If the segments are provided as DataFrame then it is splitted into junks specified in the paramaters
+    """Parallel tokenization of segments. If the segments are provided as DataFrame then it is splitted into junks specified in the paramaters
     The default number of cores are the maximum available ones. If the segment data is a tuple, then it is expected the first element is the list segments, while the second elements are the ids.
-    Please note that the segment_ids should be unique. The segments should quality controlloed. 
+    Please note that the segment_ids should be unique. The segments should quality controlloed.
+
+    :param segment_data: 
+    :param tokenization_params: 
+    :param num_cores:  (Default value = 1)
+    :param batch_size:  (Default value = 10000)
+    :param np_token_type:  (Default value = np.uint16)
+
     """
 
     if isinstance(segment_data, tuple) or isinstance(segment_data, list):
@@ -564,38 +535,46 @@ def get_rectangular_array_from_tokenized_dataset(tokenized_segments_data: Dict[i
                                                  truncate_zeros: bool = True, 
                                                  randomize: bool = True, 
                                                  numpy_dtype: Type = np.uint16) -> Tuple[np.ndarray, pd.DataFrame]:
-    """
-    Create a rectangular numpy array that can be used as input to a Language Model (LM) from tokenized segment data.
-
+    """Create a rectangular numpy array that can be used as input to a Language Model (LM) from tokenized segment data.
+    
     Parameters:
     ----------
     tokenized_segments_data : Dict[int, List[np.ndarray]]
         A dictionary where keys are segment ids and values are lists of possible LCA tokenized vectors.
-        
+    
     shift : int
         Number of LCA offsets.
-        
+    
     max_token_count : int
         Maximum allowed token count in the output numpy array.
-        
+    
     truncate_zeros : bool, optional (default=True)
         If True, truncate columns from the end of the numpy array that only contain zeros.
-        
+    
     randomize : bool, optional (default=True)
         If True, randomize the order of the rows in the output numpy array.
-        
+    
     numpy_dtype : Type, optional (default=np.uint16)
         Data type of the values in the output numpy array.
-
+    
     Returns:
     -------
     np.ndarray
         A rectangular numpy array suitable for input to an LM.
-        
+    
     pd.DataFrame
         A dataframe that describes which row in the numpy array corresponds to which segment and its LCA offset.
         Columns are: ['torch_id', 'segment_id', 'offset']
 
+    :param tokenized_segments_data: Dict[int: 
+    :param List[np.ndarray]]: 
+    :param shift: int: 
+    :param max_token_count: int: 
+    :param truncate_zeros: bool:  (Default value = True)
+    :param randomize: bool:  (Default value = True)
+    :param numpy_dtype: Type:  (Default value = np.uint16)
+
+    
     """
     # ... [rest of the function code]
 
@@ -627,20 +606,18 @@ def get_rectangular_array_from_tokenized_dataset(tokenized_segments_data: Dict[i
 
         
 def pretty_print_overlapping_sequence(segment, segment_kmers_list, tokenizer_params):
-    """
-    Format the sequence for pretty printing with overlapping k-mers.
+    """Format the sequence for pretty printing with overlapping k-mers.
 
     :param segment: DNA sequence.
     :type segment: str
-
     :param segment_kmers: List of k-mers in the segment.
     :type segment_kmers: list
-
     :param tokenizer_params: Dictionary containing tokenization parameters.
     :type tokenizer_params: dict
-
-    :return: List of formatted strings representing the sequence with overlapping k-mers.
+    :param segment_kmers_list: 
+    :returns: List of formatted strings representing the sequence with overlapping k-mers.
     :rtype: list
+
     """
         
     shift = tokenizer_params['shift']
@@ -667,15 +644,15 @@ def pretty_print_overlapping_sequence(segment, segment_kmers_list, tokenizer_par
 
 
 def generate_kmers(abc, k):
-    """
-    Generates all possible k-mers from a given alphabet.
-    
-    Args:
-    - abc (set): The alphabet.
-    - k (int): Length of the k-mers.
+    """Generates all possible k-mers from a given alphabet.
 
-    Returns:
-    - List[str]: List of all possible k-mers.
+    :param abc: The alphabet.
+    :type abc: set
+    :param k: Length of the k-mers.
+    :type k: int
+    :returns: List of all possible k-mers.
+    :rtype: List[str]
+
     """
     return [''.join(p) for p in product(abc, repeat=k)]
 
@@ -683,27 +660,27 @@ def save_to_hdf(X: np.ndarray, hdf_file_path: str,
                    database: pd.DataFrame = None, 
                    compression: bool = False, 
                    pd_chunksize: int = 10_000_000) -> None:
-    """
-    Save a numpy array and an optional pandas DataFrame to an HDF5 file.
-    
-    Args:
-        X (np.ndarray): 2D numpy array to be saved.
-        hdf_file_path (str): Path to the HDF5 file.
-        database (pd.DataFrame, optional): Pandas DataFrame to be saved. Defaults to None.
-        compression (bool, optional): Whether to apply compression. Defaults to False.
-        pd_chunksize (int, optional): Number of rows per chunk for saving the DataFrame. Defaults to 10,000,000.
-    
-    Raises:
-        ValueError: If the provided numpy array is not 2D.
-        OSError: If there's an error creating the directory structure or removing an existing HDF5 file.
-    
+    """Save a numpy array and an optional pandas DataFrame to an HDF5 file.
+
+    :param X: 2D numpy array to be saved.
+    :type X: np.ndarray
+    :param hdf_file_path: Path to the HDF5 file.
+    :type hdf_file_path: str
+    :param database: Pandas DataFrame to be saved. Defaults to None.
+    :type database: pd.DataFrame
+    :param compression: Whether to apply compression. Defaults to False.
+    :type compression: bool
+    :param pd_chunksize: Number of rows per chunk for saving the DataFrame. Defaults to 10,000,000.
+    :type pd_chunksize: int
+    :raises ValueError: If the provided numpy array is not 2D.
+    :raises OSError: If there's an error creating the directory structure or removing an existing HDF5 file.
     Example:
-        >>> import numpy as np
+
+    >>> import numpy as np
         >>> import pandas as pd
         >>> array = np.random.random((100, 100))
         >>> df = pd.DataFrame({'A': range(1, 101), 'B': range(101, 201)})
         >>> save_to_hdf(array, "sample.hdf5", database=df, compression=True)
-    
     """
     
     # Check if X is a 2D numpy array
