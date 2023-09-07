@@ -157,8 +157,24 @@ def check_file_exists(file_path: str) -> bool:
 
 def count_gpus(method="clinfo"):
     """
+    Count the number of available GPUs using the specified method.
 
-    :param method:  (Default value = "clinfo")
+    This function counts the number of NVIDIA and AMD GPUs using the chosen method. By default, it uses the 'clinfo'
+    method for AMD GPUs.
+
+    :param method: The method to use for GPU counting. Choose between 'clinfo' (default) and 'rocm'.
+    :type method: str, optional
+
+    :return: The total number of GPUs detected.
+    :rtype: int
+
+    :raises ValueError: If an unknown method is provided.
+
+    :raises Exception: If an error occurs while querying AMD GPUs using the specified method.
+
+    .. note::
+        - The 'clinfo' method queries AMD GPUs by running the 'clinfo' command.
+        - The 'rocm' method queries AMD GPUs by running 'rocm-smi --list' command.
 
     """
     import torch
