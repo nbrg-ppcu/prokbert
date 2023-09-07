@@ -11,7 +11,9 @@ Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor i
 
    Home <self>
    sequtils
-   dnadatasets
-   dnatokenizer
-   evalutils
-   preproclib
+   config_utils
+   general_utils
+   datacollator
+   prok_datasets
+   prokbert_tokenizer
+   training_utils

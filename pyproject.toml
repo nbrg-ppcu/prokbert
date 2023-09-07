@@ -7,11 +7,11 @@ name = "prokbert"
 version = "0.0.20"
 description = "ProkBERT"
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.7"
 dependencies = ["transformers>=4.23", "biopython>=1.79", "pandas>=2.0.0", "h5py>=3.9.0", "torch>=2.0.0", "torchvision>=0.15.0", "datasets>2.0.1", "scikit-learn>=1.2.2", "scipy>=1.10.1","tables>=3.8.0","accelerate>=0.20.1",]
 classifiers = [ "Programming Language :: Python :: 3", "License :: OSI Approved :: MIT License", "Operating System :: OS Independent",]
 [[project.authors]]
-name = "nbrg-ppcu"
+name = "nbrg-ppcu"cd doc
 email = "obalasz@gmail.com"
 
 [project.urls]
@@ -19,4 +19,3 @@ Homepage = "https://github.com/nbrg-ppcu/prokbert"
 "Bug Tracker" = "https://github.com/nbrg-ppcu/prokbert/issues"
 
 [tool.setuptools_scm]
-
