@@ -39,7 +39,7 @@ def load_contigs(fasta_files_list, adding_reverse_complement=True, IsAddHeader=F
     """Load contigs from a list of fasta files.
 
     :param fasta_files_list: List of paths to fasta files. Compressed (gz) fasta files are accepted as well.
-    :type fasta_files_list: list: list
+    :type fasta_files_list: list: list: list
     :param adding_reverse_complement: If True, add the reverse complement of each sequence. Defaults to True.
     :type adding_reverse_complement: bool, optional
     :param IsAddHeader: If True, include the fasta ID and description in the output. Defaults to False.
@@ -101,41 +101,24 @@ def load_contigs(fasta_files_list, adding_reverse_complement=True, IsAddHeader=F
 
 
 def segment_sequence_contiguous(sequence, params, sequence_id=np.NaN):
-    """_summary_
-
-    :param sequence: _description_
-    :type sequence: _type_
-    :param params: _description_
-    :type params: _type_
-    :param sequence_id: _description_, defaults to np.NaN
-    :type sequence_id: _type_, optional
-    :returns: _description_
-    :rtype: _type_
-
-    """
-    """
-    Create end-to-end, disjoint segments of a sequence without overlaps.
-
-    Segments smaller than the predefined minimum length will be discarded. 
+    """Create end-to-end, disjoint segments of a sequence without overlaps.
+    
+    Segments smaller than the predefined minimum length will be discarded.
     This function returns a list of segments along with their positions in the original sequence.
 
-    Parameters
-    ----------
-    sequence : str
-        The input nucleotide sequence to be segmented.
-    params : dict
-        Dictionary containing the segmentation parameters. Must have 'min_length' 
+    :param sequence: The input nucleotide sequence to be segmented.
+    :type sequence: str
+    :param params: Dictionary containing the segmentation parameters. Must have 'min_length'
         and 'max_length' keys specifying the minimum and maximum lengths of the segments, respectively.
-    sequence_id : numeric, optional
-        An identifier for the sequence. Defaults to NaN.
+    :type params: dict
+    :param sequence_id: An identifier for the sequence. Defaults to NaN.
+    :type sequence_id: numeric, optional
 
-    Returns
-    -------
-    list of dict
-        Each dictionary in the list represents a segment and contains the segment's sequence, 
+    :returns: Each dictionary in the list represents a segment and contains the segment's sequence, 
         start position, end position, and sequence ID.
+    :rtype: list of dict
 
-
+    
     """
     
     # Extract segmentation parameters
@@ -168,7 +151,8 @@ def segment_sequence_contiguous(sequence, params, sequence_id=np.NaN):
     return segments
 
 def segment_sequences_random(sequences, params):
-    """Randomly segment the input sequences.
+    """
+    Randomly segment the input sequences.
     
     This function takes a list of sequences or a DataFrame containing sequences.
     If a DataFrame is provided, it's assumed to be preprocessed, where the "sequence" column
@@ -189,10 +173,10 @@ def segment_sequences_random(sequences, params):
         generated in this function.
     :rtype: list of dict
 
-:notes:
+    :notes:
 
-The actual number of segments may differ from the expected number due to the random sampling nature
-and the presence of sequences shorter than the segment size.
+    The actual number of segments may differ from the expected number due to the random sampling nature
+    and the presence of sequences shorter than the segment size.
 
     """
     
@@ -267,13 +251,14 @@ def segment_sequences(sequences, params, AsDataFrame=False):
     :rtype: list or pd.DataFrame
     :raises ValueError: If the provided sequences DataFrame does not have the required attributes.
     :raises ValueError: If the "sequence_id" column is not a valid primary key.
-
+    
     Notes
     -----
     If the segmentation type is 'random', the functionality is yet to be implemented.
     Examples
     --------
     TODO: Add examples after finalizing the function's behavior and output.
+
     """
     segmentation_type = params['type']
 
@@ -347,13 +332,14 @@ def lca_tokenize_segment(segment, params):
             - 'token_limit' (int): Maximum number of tokens allowed in the tokenized output.
             - 'vocabmap' (dict[str, int]): Dictionary that maps k-mers to their respective token values.
     :type params: dict
-    :returns: - list[list[int]]: List containing tokenized segments.
+    :returns: list[list[int]]: List containing tokenized segments.
         - list[list[str]]: List containing k-merized segments with different shifts.
     :rtype: tuple
     :raises ValueError: If the segment length exceeds the `max_segment_length`.
-
+    
     Examples
     --------
+
     >>> vocabmap_example = {"[CLS]": 2, "[SEP]": 3, "[UNK]": 0, "TCTTT": 4, "CTTTG": 5, "TTTGC": 6, "TTGCT": 7}
     >>> segment_example = 'TCTTTGCTAAG'
     >>> params_example = {'shift': 1, 'max_segment_length': 512, 'max_unknown_token_proportion': 0.2, 'kmer': 5, 'token_limit': 10, 'vocabmap': vocabmap_example}
@@ -407,9 +393,10 @@ def tokenize_kmerized_segment_list(kmerized_segments: List[List[str]],
     :returns: List containing tokenized segments.
     :rtype: List[List[int]]
     :raises ValueError: If the expected number of tokens in a segment exceeds `token_limit`.
-
+    
     Examples
     --------
+
     >>> vocabmap_example = {"[CLS]": 2, "[SEP]": 3, "[UNK]": 0, "TCTTTG": 4, "CTTTGC": 5, "TTTGCT": 6, "TTGCTA": 7}
     >>> kmerized_segment_example = [['TCTTTG', 'CTTTGC', 'TTTGCT', 'TTGCTA']]
     >>> tokenize_kmerized_segment_list(kmerized_segment_example, vocabmap_example, 10, 0.2)
@@ -469,12 +456,11 @@ def process_batch_tokenize_segments_with_ids(segments, segment_ids, tokenization
     :type segment_ids: list
     :param tokenization_params: A dictionary containing tokenization parameters.
     :type tokenization_params: dict
-    :param np_token_type:  (Default value = np.uint16)
+    :param np_token_type: Default value = np.uint16
     :returns: A dictionary where keys are segment IDs and values are lists of numpy arrays representing
         tokenized segments.
     :rtype: dict
 
-    
     """
     #logging.info('Tokenization of a list of segments')
     tokenized_segments_with_ids = {}
@@ -495,11 +481,11 @@ def batch_tokenize_segments_with_ids(segment_data, tokenization_params, num_core
     The default number of cores are the maximum available ones. If the segment data is a tuple, then it is expected the first element is the list segments, while the second elements are the ids.
     Please note that the segment_ids should be unique. The segments should quality controlloed.
 
-    :param segment_data: 
+    :param segment_data: param tokenization_params:
+    :param num_cores: Default value = 1)
+    :param batch_size: Default value = 10000)
+    :param np_token_type: Default value = np.uint16)
     :param tokenization_params: 
-    :param num_cores:  (Default value = 1)
-    :param batch_size:  (Default value = 10000)
-    :param np_token_type:  (Default value = np.uint16)
 
     """
 
@@ -536,44 +522,31 @@ def get_rectangular_array_from_tokenized_dataset(tokenized_segments_data: Dict[i
                                                  randomize: bool = True, 
                                                  numpy_dtype: Type = np.uint16) -> Tuple[np.ndarray, pd.DataFrame]:
     """Create a rectangular numpy array that can be used as input to a Language Model (LM) from tokenized segment data.
-    
-    Parameters:
-    ----------
-    tokenized_segments_data : Dict[int, List[np.ndarray]]
-        A dictionary where keys are segment ids and values are lists of possible LCA tokenized vectors.
-    
-    shift : int
-        Number of LCA offsets.
-    
-    max_token_count : int
-        Maximum allowed token count in the output numpy array.
-    
-    truncate_zeros : bool, optional (default=True)
-        If True, truncate columns from the end of the numpy array that only contain zeros.
-    
-    randomize : bool, optional (default=True)
-        If True, randomize the order of the rows in the output numpy array.
-    
-    numpy_dtype : Type, optional (default=np.uint16)
-        Data type of the values in the output numpy array.
-    
-    Returns:
-    -------
-    np.ndarray
-        A rectangular numpy array suitable for input to an LM.
-    
-    pd.DataFrame
-        A dataframe that describes which row in the numpy array corresponds to which segment and its LCA offset.
+
+    :param tokenized_segments_data: A dictionary where keys are segment ids and values are lists of possible LCA tokenized vectors.
+    :type tokenized_segments_data: Dict[int, List[np.ndarray]]
+
+    :param shift: Number of LCA offsets.
+    :type shift: int
+
+    :param max_token_count: Maximum allowed token count in the output numpy array.
+    :type max_token_count: int
+
+    :param truncate_zeros: If True, truncate columns from the end of the numpy array that only contain zeros. (default=True)
+    :type truncate_zeros: bool, optional
+
+    :param randomize: If True, randomize the order of the rows in the output numpy array. (default=True)
+    :type randomize: bool, optional
+
+    :param numpy_dtype: Data type of the values in the output numpy array. (default=np.uint16)
+    :type numpy_dtype: Type, optional
+
+    :returns: A rectangular numpy array suitable for input to an LM.
+    :rtype: np.ndarray
+
+    :returns: A dataframe that describes which row in the numpy array corresponds to which segment and its LCA offset.
         Columns are: ['torch_id', 'segment_id', 'offset']
-
-    :param tokenized_segments_data: Dict[int: 
-    :param List[np.ndarray]]: 
-    :param shift: int: 
-    :param max_token_count: int: 
-    :param truncate_zeros: bool:  (Default value = True)
-    :param randomize: bool:  (Default value = True)
-    :param numpy_dtype: Type:  (Default value = np.uint16)
-
+    :rtype: pd.DataFrame
     
     """
     # ... [rest of the function code]
@@ -610,11 +583,10 @@ def pretty_print_overlapping_sequence(segment, segment_kmers_list, tokenizer_par
 
     :param segment: DNA sequence.
     :type segment: str
-    :param segment_kmers: List of k-mers in the segment.
-    :type segment_kmers: list
+    :param segment_kmers_list: List of k-mers in the segment.
+    :type segment_kmers_list: list: list
     :param tokenizer_params: Dictionary containing tokenization parameters.
     :type tokenizer_params: dict
-    :param segment_kmers_list: 
     :returns: List of formatted strings representing the sequence with overlapping k-mers.
     :rtype: list
 
