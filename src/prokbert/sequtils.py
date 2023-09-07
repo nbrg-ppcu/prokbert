@@ -163,26 +163,29 @@ def segment_sequences_random(sequences, params):
     """
     Randomly segment the input sequences.
 
-    The input can be a list of sequences or a DataFrame containing sequences.
-    If a DataFrame is provided, it's assumed to be preprocessed: 
-    the "sequence" column stores the sequences to be segmented, and "sequence_id" is a valid primary key.
-    
-    The actual coverage might differ from the expected one. 
-    The output is a list of dictionaries. Note that segment IDs are not generated in this function.
+    This function takes a list of sequences or a DataFrame containing sequences.
+    If a DataFrame is provided, it's assumed to be preprocessed, where the "sequence" column
+    stores the sequences to be segmented, and "sequence_id" serves as a valid primary key.
+
+    The actual coverage may differ from the expected one. The function returns a list of dictionaries,
+    each containing information about a segment, including its sequence, start position, end position,
+    associated sequence ID, and a segment ID. Note that segment IDs are not generated in this function.
 
     Parameters:
     ----------
-    sequences (pd.DataFrame):DataFrame containing sequences in the "sequence" column and their associated IDs in "sequence_id".
-    params (dict):Dictionary containing segmentation parameters including 'coverage', 'min_length', and 'max_length'.
+    sequences (pd.DataFrame or list): A DataFrame containing sequences in the "sequence" column
+        and their associated IDs in "sequence_id" or a list of sequences.
+    params (dict): A dictionary containing segmentation parameters, including 'coverage', 'min_length',
+        and 'max_length'.
 
     Returns:
     -------
-    list of dict:Each dictionary contains information about a segment including its sequence, start position, 
-    end position, associated sequence ID, and a segment ID.
+    list of dict: Each dictionary contains information about a segment, including its sequence,
+        start position, end position, associated sequence ID, and a segment ID.
 
     Notes:
     -----
-    The actual number of segments might differ from the expected number due to the random sampling nature 
+    The actual number of segments may differ from the expected number due to the random sampling nature
     and the presence of sequences shorter than the segment size.
 
     """
