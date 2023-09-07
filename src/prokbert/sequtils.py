@@ -172,14 +172,12 @@ def segment_sequences_random(sequences, params):
     associated sequence ID, and a segment ID. Note that segment IDs are not generated in this function.
 
     Parameters:
-    ----------
     sequences (pd.DataFrame or list): A DataFrame containing sequences in the "sequence" column
         and their associated IDs in "sequence_id" or a list of sequences.
     params (dict): A dictionary containing segmentation parameters, including 'coverage', 'min_length',
         and 'max_length'.
 
     Returns:
-    -------
     list of dict: Each dictionary contains information about a segment, including its sequence,
         start position, end position, associated sequence ID, and a segment ID.
 
