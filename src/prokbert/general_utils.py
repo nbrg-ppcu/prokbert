@@ -11,26 +11,18 @@ creating directories, checking files, etc.
 
 
 def check_expected_columns(df: pd.DataFrame, expected_columns: list) -> bool:
-    """
-    Checks if a DataFrame contains the expected columns.
-    
-    Parameters
-    ----------
-    df : pd.DataFrame
-        The input DataFrame to be checked.
-    expected_columns : list
-        A list of columns that are expected to be present in the DataFrame.
-        
-    Returns
-    -------
-    bool
-        True if all expected columns are present in the DataFrame, False otherwise.
-        
-    Raises
-    ------
-    ValueError
-        If any of the expected columns are not present in the DataFrame.
-        
+    """Checks if a DataFrame contains the expected columns.
+
+    :param df: The input DataFrame to be checked.
+    :type df: pd.DataFrame
+    :param expected_columns: A list of columns that are expected to be present in the DataFrame.
+    :type expected_columns: list
+    :param df: pd.DataFrame: 
+    :param expected_columns: list: 
+    :returns: True if all expected columns are present in the DataFrame, False otherwise.
+    :rtype: bool
+    :raises ValueError: If any of the expected columns are not present in the DataFrame.
+
     Examples
     --------
     >>> df = pd.DataFrame({'A': [1, 2], 'B': [3, 4]})
@@ -50,26 +42,16 @@ def check_expected_columns(df: pd.DataFrame, expected_columns: list) -> bool:
 
 
 def is_valid_primary_key(df: pd.DataFrame, column_name: str) -> bool:
-    """
-    Checks if a specified column in a DataFrame can serve as a valid primary key.
-    
-    Parameters
-    ----------
-    df : pd.DataFrame
-        The input DataFrame to be checked.
-    column_name : str
-        The name of the column to check.
-        
-    Returns
-    -------
-    bool
-        True if the column can serve as a valid primary key, False otherwise.
-        
-    Raises
-    ------
-    ValueError
-        If the specified column does not exist in the DataFrame.
-        
+    """Checks if a specified column in a DataFrame can serve as a valid primary key.
+
+    :param df: The input DataFrame to be checked.
+    :type df: pd.DataFrame
+    :param column_name: The name of the column to check.
+    :type column_name: str
+    :returns: True if the column can serve as a valid primary key, False otherwise.
+    :rtype: bool
+    :raises ValueError: If the specified column does not exist in the DataFrame.
+
     Examples
     --------
     >>> df = pd.DataFrame({'A': [1, 2, 3], 'B': [4, 5, 6]})
@@ -95,18 +77,16 @@ def is_valid_primary_key(df: pd.DataFrame, column_name: str) -> bool:
     return True
 
 def get_non_empty_files(start_path: str, extensions: tuple = ('.fasta', '.fna')) -> str:
-    """
-    Generator that yields non-empty files from a specified directory and its subdirectories based on the given extensions.
+    """Generator that yields non-empty files from a specified directory and its subdirectories based on the given extensions.
 
     :param start_path: The path to the directory from which to start the search.
     :type start_path: str
-
     :param extensions: A tuple of file extensions to look for (default is ('.fasta', '.fna')).
                        The function also automatically checks for compressed versions with '.gz'.
     :type extensions: tuple
-
-    :return: Yields filenames that match the specified extensions and are non-empty.
+    :returns: Yields filenames that match the specified extensions and are non-empty.
     :rtype: str
+
     """
     
     for dirpath, _, filenames in os.walk(start_path):
@@ -118,14 +98,13 @@ def get_non_empty_files(start_path: str, extensions: tuple = ('.fasta', '.fna'))
 
 
 def truncate_zero_columns(arr: np.ndarray) -> np.ndarray:
-    """
-    Truncate all trailing columns composed entirely of zeros in a given 2D numpy array.
-    
+    """Truncate all trailing columns composed entirely of zeros in a given 2D numpy array.
+
     :param arr: Input 2D numpy array.
     :type arr: np.ndarray
-
-    :return: A new array with trailing zero columns removed.
+    :returns: A new array with trailing zero columns removed.
     :rtype: np.ndarray
+
     """
     
     # Iterate over columns from the end
@@ -138,15 +117,13 @@ def truncate_zero_columns(arr: np.ndarray) -> np.ndarray:
 import os
 
 def create_directory_for_filepath(filepath: str) -> None:
-    """
-    Given a file path, creates the underlying directory structure if it doesn't already exist.
+    """Given a file path, creates the underlying directory structure if it doesn't already exist.
 
-    Args:
-        filepath (str): The path to the file for which the directory structure should be created.
+    :param filepath: The path to the file for which the directory structure should be created.
+    :type filepath: str 
+    :raises ValueError: If the provided path is empty or None.
+    :raises OSError: If there's an error creating the directory structure.
 
-    Raises:
-        ValueError: If the provided path is empty or None.
-        OSError: If there's an error creating the directory structure.
     """
     
     if not filepath:
@@ -165,14 +142,13 @@ def create_directory_for_filepath(filepath: str) -> None:
 # create_directory_for_filepath("/path/to/directory/that/might/not/exist/filename.txt")
 
 def check_file_exists(file_path: str) -> bool:
-    """
-    Checks if the provided file path exists.
+    """Checks if the provided file path exists.
 
-    Args:
-        file_path (str): Path to the file.
+    :param file_path: Path to the file.
+    :type file_path: str 
+    :returns: True if the file exists, raises ValueError otherwise.
+    :rtype: bool
 
-    Returns:
-        bool: True if the file exists, raises ValueError otherwise.
     """
     if os.path.exists(file_path):
         return True
@@ -180,6 +156,27 @@ def check_file_exists(file_path: str) -> bool:
         raise ValueError(f"The provided file path '{file_path}' does not exist.")
 
 def count_gpus(method="clinfo"):
+    """
+    Count the number of available GPUs using the specified method.
+
+    This function counts the number of NVIDIA and AMD GPUs using the chosen method. By default, it uses the 'clinfo'
+    method for AMD GPUs.
+
+    :param method: The method to use for GPU counting. Choose between 'clinfo' (default) and 'rocm'.
+    :type method: str, optional
+
+    :return: The total number of GPUs detected.
+    :rtype: int
+
+    :raises ValueError: If an unknown method is provided.
+
+    :raises Exception: If an error occurs while querying AMD GPUs using the specified method.
+
+    .. note::
+        - The 'clinfo' method queries AMD GPUs by running the 'clinfo' command.
+        - The 'rocm' method queries AMD GPUs by running 'rocm-smi --list' command.
+
+    """
     import torch
     import subprocess
 
@@ -207,16 +204,16 @@ def count_gpus(method="clinfo"):
 
 
 def create_hard_links(source_directory: str, target_directory: str, blacklist: list = []) -> None:
-    """
-    Creates hard links for all files from the source directory to the target directory.
-    
-    Args:
-        source_directory (str): The directory containing the original files.
-        target_directory (str): The directory where hard links will be created.
-        blacklist (list): List of filenames to exclude from creating hard links.
-    
-    Returns:
-        None
+    """Creates hard links for all files from the source directory to the target directory.
+
+    :param source_directory: The directory containing the original files.
+    :type source_directory: str
+    :param target_directory: The directory where hard links will be created.
+    :type target_directory: str
+    :param blacklist: List of filenames to exclude from creating hard links.
+    :type blacklist: list
+    :returns: None
+
     """
     
     # Ensure the provided directories exist
@@ -246,16 +243,16 @@ def create_hard_links(source_directory: str, target_directory: str, blacklist: l
 # create_hard_links("/path/to/source_directory", "/path/to/target_directory", blacklist=["file_to_skip.txt"])
 
 def create_selected_hard_links(source_directory: str, target_directory: str, filenames: list) -> None:
-    """
-    Creates hard links for the specified files from the source directory to the target directory.
-    
-    Args:
-        source_directory (str): The directory containing the original files.
-        target_directory (str): The directory where hard links will be created.
-        filenames (list): List of filenames for which hard links should be created.
-    
-    Returns:
-        None
+    """Creates hard links for the specified files from the source directory to the target directory.
+
+    :param source_directory: The directory containing the original files.
+    :type source_directory: str
+    :param target_directory: The directory where hard links will be created.
+    :type target_directory: str
+    :param filenames: List of filenames for which hard links should be created.
+    :type filenames: list
+    :returns: None
+
     """
     
     # Ensure the provided directories exist
@@ -283,14 +280,12 @@ def create_selected_hard_links(source_directory: str, target_directory: str, fil
     return f"Hard links for specified files created in {target_directory} from {source_directory}."
 
 def remove_hidden_files(directory: str) -> None:
-    """
-    Removes all files recursively in a folder that start with '.' or '_'.
-    
-    Args:
-        directory (str): The directory from which hidden files should be removed.
-    
-    Returns:
-        None
+    """Removes all files recursively in a folder that start with '.' or '_'.
+
+    :param directory: The directory from which hidden files should be removed.
+    :type directory: str
+    :returns: None
+
     """
     
     # Ensure the directory exists

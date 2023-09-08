@@ -1,4 +1,5 @@
 _build/
+api/
 
 deploy_version.py
 # macOS system files
@@ -111,3 +112,4 @@ target/
 # Jupyter Notebook
 .ipynb_checkpoints
 
+src/prokbert/dev_notebooks/dev_tokenizer.ipynb
