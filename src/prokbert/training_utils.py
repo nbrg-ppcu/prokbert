@@ -328,20 +328,16 @@ def compute_metrics(eval_preds: Tuple) -> Dict:
         This function assumes that `evaluate_binary_classification_bert_build_pred_results`
         and `evaluate_binary_classification_bert` are available in the scope.
     """
-    
+ 
     logits, labels = eval_preds
     logits = torch.tensor(logits)
     labels = torch.tensor(labels)
-    
     # Generate prediction results (assuming this function is available in the scope)
     pred_results = evaluate_binary_classification_bert_build_pred_results(logits, labels)
-    
     # Evaluate binary classification (assuming this function is available in the scope)
     eval_results, eval_results_ls = evaluate_binary_classification_bert(pred_results)
-    
+   
     return eval_results
-
-
 
 
 class ProkBERTTrainer(Trainer):
@@ -379,4 +375,3 @@ class ProkBERTTrainer(Trainer):
 
         self.optimizer = optimizer
         self.lr_scheduler = scheduler
-        
