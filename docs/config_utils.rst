@@ -70,3 +70,19 @@ ProkBERTConfig
 .. autoclass:: prokbert.config_utils.ProkBERTConfig
     :members:
     :show-inheritance:
+
+
+---------------------------
+Config YAMLs
+---------------------------
+
+
+.. literalinclude:: ../src/prokbert/configs/pretraining.yaml
+    :language: yaml
+    :caption: pretraining.yaml
+
+.. literalinclude:: ../src/prokbert/configs/sequence_processing.yaml
+    :language: yaml
+    :caption: sequence_processing.yaml
+    :name: sequence_processing.yaml
+

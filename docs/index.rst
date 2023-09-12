@@ -16,6 +16,3 @@ Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor i
    datacollator
    prok_datasets
    prokbert_tokenizer
-
-.. toctree::
-   examples/dev_yaml_reader
