@@ -141,6 +141,16 @@ class TestSegmentSequenceContiguous(unittest.TestCase):
         # Here, the segments 'AG' will be discarded since its length 
         # is shorter than min_length, so only one segment should be returned.
         self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]['segment'], 'TAGAAT')
+
+    def test_segment_start_end(self):
+        sequence = 'TAGAATAG'
+        params = {'type': 'contiguous', 'min_length': 3, 'max_length': 4, 'coverage': 1.0}
+        result = segment_sequence_contiguous(sequence, params)
+        self.assertEqual(result[0]['segment_start'], 0)
+        self.assertEqual(result[0]['segment_end'], 4)
+        self.assertEqual(result[1]['segment_start'], 4)
+        self.assertEqual(result[1]['segment_end'], 7)
 
     def test_with_sequence_id(self):
         sequence_id = 1001
