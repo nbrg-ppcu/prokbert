@@ -72,6 +72,7 @@ def load_contigs(fasta_files_list, adding_reverse_complement=True, IsAddHeader=F
             act_seq = str(contig.seq)[:]
             act_header = str(contig.id)
             act_description = str(contig.description)
+            
             if adding_reverse_complement:
                 # Compute the reverse complement of the sequence
                 act_reverse_complement = str(contig.seq.reverse_complement())
@@ -379,7 +380,7 @@ def tokenize_kmerized_segment_list(kmerized_segments: List[List[str]],
     tokens in a segment exceeds the maximum allowed tokens (`token_limit`), the function raises an error. For segments
     where unknown k-mers exceed the proportion set by `max_unknown_token_proportion`, the output is a special token
     sequence indicating an empty sentence.
-
+tokenize_kmerized_segment_list
     :param kmerized_segments: List containing k-merized segments.
     :type kmerized_segments: List[List[str]]
     :param vocabmap: Dictionary that maps k-mers to their respective token values.
@@ -420,7 +421,8 @@ def tokenize_kmerized_segment_list(kmerized_segments: List[List[str]],
         if len(act_kmer_list)+2 > token_limit:
             raise(ValueError(f'The expected number of tokens in the segment ({L_kmerized_segment+2}) is larger, then the maximum allowed number of tokens = ({token_limit}). '))
         if L_kmerized_segment == 0:
-            logging.info('Its and empty sentence')
+            #logging.info(f'Its and empty sentence: {act_kmer_list}')
+            #print(kmerized_segments)
             tokenized_kmerized_segment = empty_sentence
             tokenized_segments.append(empty_sentence)
             continue
