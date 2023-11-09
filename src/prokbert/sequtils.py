@@ -27,8 +27,7 @@ from typing import Dict, List, Type, Tuple
 from itertools import product
 
 from .general_utils import *
-# Ezt a felhasználónak kellene biztosatania 
-# VOCAB_FILES_NAMES = {"vocab_file": "vocab.txt"}
+
 
 import h5py
 
