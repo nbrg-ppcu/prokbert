@@ -7,6 +7,7 @@ The ProkBERT model family is a transformer-based, encoder-only architecture base
 
 ## Pretraining the models
 
+
 ### Sequence segmentation and tokenization
 
 
@@ -31,7 +32,39 @@ To get started with ProkBERT, clone the repository and follow the setup instruct
 ```bash
 pip install prokbert
 cd prokbert
+```
 
-# Follow the setup instructions in the documentation
+## 4. Quick Start
+Our model is easy to use with the [transformers](https://github.com/huggingface/transformers) package.
+
+
+To load the model from huggingface:
+```python
+import torch
+from transformers import AutoTokenizer, AutoModel
+from prokbert.prokbert_tokenizer import ProkBERTTokenizer
+
+tokenizer = ProkBERTTokenizer(tokenization_params={'kmer' : 6, 'shift' : 1})
+model = AutoModel.from_pretrained("nerualbioinfo/prokbert-mini-k6s1", trust_remote_code=True)
+
+segment = "ACGTAGCATCGGATCTATCTATCGACACTTGGTTATCGATCTACGAGCATCTCGTTAGC"
+inputs = tokenizer(segment)['input_ids']
+
+tokenizer.batch_encode_plus([segment])
+
+```
+
+
+## 5. Pre-Training
+
+Codes for pre-training is coming soon.
+
+## 6. Finetune
+
+Codes for pre-training is coming soon.
+
+
+
+# Documentation
 
 [Read the Docs](https://prokbert.readthedocs.io/en/latest/)
