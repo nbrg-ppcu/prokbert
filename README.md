@@ -47,7 +47,7 @@ from prokbert.prokbert_tokenizer import ProkBERTTokenizer
 tokenizer = ProkBERTTokenizer(tokenization_params={'kmer' : 6, 'shift' : 1})
 model = AutoModel.from_pretrained("nerualbioinfo/prokbert-mini-k6s1", trust_remote_code=True)
 
-segment = "ACGTAGCATCGGATCTATCTATCGACACTTGGTTATCGATCTACGAGCATCTCGTTAGC"
+segment = "TATGTAACATAATGCGACCAATAATCGTAATGAATATGAGAAGTGTGATATTATAACATTTCATGACTACTGCAAGACTAA"
 inputs = tokenizer(segment)['input_ids']
 
 tokenizer.batch_encode_plus([segment])
