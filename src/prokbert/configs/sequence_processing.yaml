@@ -49,14 +49,14 @@ tokenization:
     description: "Gives the maximum number of characters in a segment. This should be consistent with the language model's capability. It can be alternated with token_limit."
     constraints:
       min: 6
-      max: 2056
+      max: 4294967296
   token_limit:
-    default: 2050
+    default: 4096
     type: "integer"
     description: "States the maximum token count that the language model can process, inclusive of special tokens like CLS and SEP. This is interchangeable with max_segment_length."
     constraints:
       min: 1
-      max: 2056
+      max: 4294967296
   max_unknown_token_proportion:
     default: 0.9999
     type: "float"
