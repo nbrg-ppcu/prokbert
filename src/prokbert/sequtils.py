@@ -25,31 +25,34 @@ import operator
 import pathlib
 from typing import Dict, List, Type, Tuple
 from itertools import product
-
+from typing import List, Union, Dict, Any, Optional
 from .general_utils import *
 
 
 import h5py
 
+def load_contigs(
+    fasta_files_list: Union[List[str], str],
+    adding_reverse_complement: bool = True,
+    IsAddHeader: bool = False,
+    AsDataFrame: bool = False
+) -> Union[List[Union[str, List[str]]], pd.DataFrame]:
+    """
+    Load contigs from a list of fasta files.
 
-
-
-def load_contigs(fasta_files_list, adding_reverse_complement=True, IsAddHeader=False, AsDataFrame=False):
-    """Load contigs from a list of fasta files.
-
-    :param fasta_files_list: List of paths to fasta files. Compressed (gz) fasta files are accepted as well.
-    :type fasta_files_list: list: list: list
-    :param adding_reverse_complement: If True, add the reverse complement of each sequence. Defaults to True.
-    :type adding_reverse_complement: bool, optional
-    :param IsAddHeader: If True, include the fasta ID and description in the output. Defaults to False.
-    :type IsAddHeader: bool, optional
-    :param AsDataFrame: If True, return the sequences as a pandas DataFrame. Defaults to False.
-    :type AsDataFrame: bool, optional
-    :returns: The loaded sequences. Each sequence is represented as a string if IsAddHeader is False,
-             or as a list [fasta_id, description, source_file, sequence, orientation] if IsAddHeader is True.
-             If AsDataFrame is True, the sequences are returned as a DataFrame.
-    :rtype: list or DataFrame
-
+    Args:
+        fasta_files_list (Union[List[str], str]): List of paths to fasta files or a single file path.
+                                                 Compressed (gz) fasta files are accepted as well.
+        adding_reverse_complement (bool, optional): If True, add the reverse complement of each sequence.
+                                                    Defaults to True.
+        IsAddHeader (bool, optional): If True, include the fasta ID and description in the output.
+                                      Defaults to False.
+        AsDataFrame (bool, optional): If True, return the sequences as a pandas DataFrame. Defaults to False.
+    
+    Returns:
+        Union[List[Union[str, List[str]]], pd.DataFrame]: The loaded sequences. Each sequence is represented as a 
+        string if IsAddHeader is False, or as a list [fasta_id, description, source_file, sequence, orientation] 
+        if IsAddHeader is True. If AsDataFrame is True, the sequences are returned as a DataFrame.
     """
     
     logging.info('Loading sequence data into memory!')
@@ -93,31 +96,33 @@ def load_contigs(fasta_files_list, adding_reverse_complement=True, IsAddHeader=F
         if IsAddHeader:
             sequences = pd.DataFrame(sequences, columns = df_cols)
         else:
-            logging.info('Are you sure do you want to use DataFrame for the list of sequences?')
-            sequences = pd.DataFrame(sequences, columns = ['sequence'])
-    
+            logging.info('Are you sure do you want to use DataFrame for the list of sequences? May be is not neccessery')
+            sequences = pd.DataFrame(sequences, columns = ['sequence'])    
     return sequences
 
 
-def segment_sequence_contiguous(sequence, params, sequence_id=np.NaN):
-    """Create end-to-end, disjoint segments of a sequence without overlaps.
-    
+
+def segment_sequence_contiguous(
+    sequence: str, 
+    params: Dict[str, Any], 
+    sequence_id: Optional[Any] = np.NaN
+) -> List[Dict[str, Any]]:
+    """
+    Create end-to-end, disjoint segments of a sequence without overlaps.
+
     Segments smaller than the predefined minimum length will be discarded.
     This function returns a list of segments along with their positions in the original sequence.
 
-    :param sequence: The input nucleotide sequence to be segmented.
-    :type sequence: str
-    :param params: Dictionary containing the segmentation parameters. Must have 'min_length'
-        and 'max_length' keys specifying the minimum and maximum lengths of the segments, respectively.
-    :type params: dict
-    :param sequence_id: An identifier for the sequence. Defaults to NaN.
-    :type sequence_id: numeric, optional
+    Args:
+        sequence (str): The input nucleotide sequence to be segmented.
+        params (Dict[str, Any]): Dictionary containing the segmentation parameters. Must include 'min_length'
+                                 and 'max_length' keys specifying the minimum and maximum lengths of the segments, respectively.
+                                 Can contain other parameters of various types.
+        sequence_id (Optional[Any], optional): An identifier for the sequence. Defaults to NaN.
 
-    :returns: Each dictionary in the list represents a segment and contains the segment's sequence, 
-        start position, end position, and sequence ID.
-    :rtype: list of dict
-
-    
+    Returns:
+        List[Dict[str, Any]]: A list of dictionaries, each representing a segment. Each dictionary contains 
+                              the segment's sequence, start position, end position, and sequence ID.
     """
     
     # Extract segmentation parameters
@@ -149,35 +154,38 @@ def segment_sequence_contiguous(sequence, params, sequence_id=np.NaN):
     
     return segments
 
-def segment_sequences_random(sequences, params):
+
+def segment_sequences_random(
+    sequences: Union[pd.DataFrame, List[str]],
+    params: Dict[str, Union[int, float]]
+) -> List[Dict[str, Union[int, str]]]:
     """
     Randomly segment the input sequences.
-    
+
     This function takes a list of sequences or a DataFrame containing sequences.
     If a DataFrame is provided, it's assumed to be preprocessed, where the "sequence" column
     stores the sequences to be segmented, and "sequence_id" serves as a valid primary key.
-    
+
     The actual coverage may differ from the expected one. The function returns a list of dictionaries,
     each containing information about a segment, including its sequence, start position, end position,
     associated sequence ID, and a segment ID. Note that segment IDs are not generated in this function.
 
-    :param sequences: A DataFrame containing sequences in the "sequence" column
-        and their associated IDs in "sequence_id" or a list of sequences.
-    :type sequences: pd.DataFrame or list
-    :param params: A dictionary containing segmentation parameters, including 'coverage', 'min_length',
-        and 'max_length'.
-    :type params: dict
-    :returns: A list of dictionaries. Each dictionary contains information about a segment, including its sequence,
-        start position, end position, associated sequence ID, and a segment ID. Note that segment IDs are not
-        generated in this function.
-    :rtype: list of dict
+    Args:
+        sequences (Union[pd.DataFrame, List[str]]): A DataFrame containing sequences in the "sequence" column
+            and their associated IDs in "sequence_id" or a list of sequences.
+        params (Dict[str, Union[int, float]]): A dictionary containing segmentation parameters, including 'coverage',
+            'min_length', and 'max_length'.
 
-    :notes:
+    Returns:
+        List[Dict[str, Union[int, str]]]: A list of dictionaries. Each dictionary contains information about a segment,
+            including its sequence, start position, end position, associated sequence ID, and a segment ID. 
+            Note that segment IDs are not generated in this function.
 
-    The actual number of segments may differ from the expected number due to the random sampling nature
-    and the presence of sequences shorter than the segment size.
-
+    Notes:
+        The actual number of segments may differ from the expected number due to the random sampling nature
+        and the presence of sequences shorter than the segment size.
     """
+
     
     # Calculate sequence lengths and cumulative sum of lengths
     sequences['seq_lengths'] = sequences.apply(lambda x: len(x['sequence']), axis=1)
@@ -209,7 +217,9 @@ def segment_sequences_random(sequences, params):
         
         # Skip the segment if it's shorter than the minimum segment length
         if segment_end - rel_coord < params['min_length']:
-            logging.info('Too short segment, skip!')
+            pred_seqgment = sequences['sequence'].iloc[i][rel_coord:segment_end]
+            minimum_len = params['min_length']
+            logging.info(f'Too short segment, skip! Sampled segment: {pred_seqgment},  Segment end coordinate: {segment_end}, relative coordinate: {rel_coord}, minimum length is: {minimum_len}')
             continue
         
         new_segment = sequences['sequence'].iloc[i][rel_coord:segment_end]
