@@ -613,18 +613,21 @@ def get_rectangular_array_from_tokenized_dataset(tokenized_segments_data: Dict[i
     return X, torch_tokenized_segment_db
 
         
-def pretty_print_overlapping_sequence(segment, segment_kmers_list, tokenizer_params):
-    """Format the sequence for pretty printing with overlapping k-mers.
+def pretty_print_overlapping_sequence(segment, segment_kmers, tokenizer_params):
+    """
+    Format the sequence for pretty printing with overlapping k-mers.
 
     :param segment: DNA sequence.
     :type segment: str
-    :param segment_kmers_list: List of k-mers in the segment.
-    :type segment_kmers_list: list: list
+
+    :param segment_kmers: List of k-mers in the segment.
+    :type segment_kmers: list
+
     :param tokenizer_params: Dictionary containing tokenization parameters.
     :type tokenizer_params: dict
-    :returns: List of formatted strings representing the sequence with overlapping k-mers.
-    :rtype: list
 
+    :return: List of formatted strings representing the sequence with overlapping k-mers.
+    :rtype: list
     """
         
     shift = tokenizer_params['shift']
@@ -633,21 +636,17 @@ def pretty_print_overlapping_sequence(segment, segment_kmers_list, tokenizer_par
     lines = []
     base_offset = len(str( int((k+3)/shift))) + 3
     first_line = ' '*base_offset + segment
+    lines.append(first_line)
     nr_lines = int(np.ceil((k+sep_c)/shift))
     logging.info('Nr. line to cover the seq:  {0}'.format(nr_lines))
 
-    
-    for i in range(len(segment_kmers_list)):
-        lines.append(first_line)
-        for line_id in range(nr_lines):
+    for line_id in range(nr_lines):
 
-            line_mers = [k_mer for j, k_mer in enumerate(segment_kmers_list[i]) if j % nr_lines == line_id]
-            act_line = str(line_id) + '.  ' + ' ' * (line_id * shift + i) + (' ' * (sep_c)).join(line_mers)
-            lines.append(act_line)
-        lines.extend(['', ''])  # Add empty lines between iterations
-
-    formatted_lines = '\n'.join(lines)
-    return formatted_lines
+        line_mers = [k_mer for j, k_mer in enumerate(segment_kmers) if j%nr_lines== line_id]
+        act_line = str(line_id) + '.  ' + ' '*(line_id*shift)  + (' '*(sep_c)).join(line_mers)
+        lines.append(act_line)
+    lines = '\n'.join(lines)
+    return lines
 
 
 def generate_kmers(abc, k):
