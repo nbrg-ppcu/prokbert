@@ -24,28 +24,27 @@ import logging as logger
 
 VOCAB_FILES_NAMES = {"vocab_file": "vocab.txt"}
 
-# models prokbert-mini-k6s1, prokbert-large-k6s2, prokbert-large-k6s1
 
 
 PRETRAINED_VOCAB_FILES_MAP = {
     "vocab_file": {
         "prokbert-mini-k6s1": "prokbert-base-dna6/vocab.txt",
-        "prokbert-large-k6s1": "prokbert-base-dna6/vocab.txt",
-        "prokbert-large-k6s2": "prokbert-base-dna6/vocab.txt"
+        "prokbert-mini-k6s2": "prokbert-base-dna6/vocab.txt",
+        "prokbert-mini-k1s1": "prokbert-base-dna1/vocab.txt"
     }
 }
 
 
 PRETRAINED_POSITIONAL_EMBEDDINGS_SIZES = {
     "prokbert-mini-k6s1": 1024,
-    "prokbert-large-k6s1": 1024,
-    "prokbert-large-k6s2": 1024
+    "prokbert-mini-k1s1": 1024,
+    "prokbert-mini-k6s2": 2048
 }
 
 PRETRAINED_INIT_CONFIGURATION = {
     "prokbert-mini-k6s1": {"do_upper_case": True},
-    "prokbert-large-k6s1": {"do_upper_case": True},
-    "prokbert-large-k6s2": {"do_upper_case": True}
+    "prokbert-mini-k1s1": {"do_upper_case": True},
+    "prokbert-mini-k6s2": {"do_upper_case": True}
 
 }
 
@@ -92,8 +91,7 @@ class ProkBERTTokenizer(PreTrainedTokenizer):
             comp_params (Dict, optional): Computational parameters. Defaults to {}.
             operation_space (str, optional): Specifies the operation mode. Can be 'kmer' or 'sequence'. Defaults to 'kmer'.
         """
-        super().__init__(cls_token=ProkBERTTokenizer.default_cls_token,
-                         **kwargs)
+        
         
         self.defconfig = SeqConfig()
         self.tokenization_params = self.defconfig.get_and_set_tokenization_parameters(tokenization_params)
@@ -105,6 +103,7 @@ class ProkBERTTokenizer(PreTrainedTokenizer):
         self.vocab = self.tokenization_params['vocabmap']
         self.id2token = {v: k for k, v in self.vocab.items()}
         self.max_len = self.tokenization_params['max_segment_length']
+        super().__init__(cls_token=ProkBERTTokenizer.default_cls_token, **kwargs)
 
         if self.operation_space == 'sequence':
             token_extension = sorted(list(set(generate_kmers(ProkBERTTokenizer.extended_nucleotide_abc, self.tokenization_params['kmer'])) - \
@@ -130,6 +129,9 @@ class ProkBERTTokenizer(PreTrainedTokenizer):
         self.pad_token = '[PAD]'
         self.mask_token = '[MASK]'
         self.special_tokens = list(self.special_tokens_map.values())
+
+        
+        
 
     def __len__(self) -> int:
         return len(self.vocab)-1
@@ -427,6 +429,11 @@ class ProkBERTTokenizer(PreTrainedTokenizer):
             ...
         """
         return [self.decode(token_ids) for token_ids in token_ids_list]
+
+    def get_vocab(self):
+
+        return self.vocab
+    
     
     def get_positions_tokens(self, sequence: str, position: int) -> List[str]:
         """

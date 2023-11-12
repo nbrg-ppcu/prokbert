@@ -22,6 +22,11 @@ class TestSeqUtils(unittest.TestCase):
 
         self.test_fasta_filename = 'tests/data/test.fasta'
         self.test_fasta_gz_filename = 'tests/data/test.fasta.gz'
+
+        self.test_fasta_filename = '/tmp/test.fasta'
+        self.test_fasta_gz_filename = '/tmp/test.fasta.gz'
+
+
         self.sequences = [SeqRecord(Seq("ATGC"), id="test1", description="test sequence 1"),
                           SeqRecord(Seq("CGTA"), id="test2", description="test sequence 2")]
         SeqIO.write(self.sequences, self.test_fasta_filename, "fasta")
@@ -144,13 +149,15 @@ class TestSegmentSequenceContiguous(unittest.TestCase):
         self.assertEqual(result[0]['segment'], 'TAGAAT')
 
     def test_segment_start_end(self):
+        print('Testing test_segment_start_end')
+
         sequence = 'TAGAATAG'
         params = {'type': 'contiguous', 'min_length': 3, 'max_length': 4, 'coverage': 1.0}
         result = segment_sequence_contiguous(sequence, params)
         self.assertEqual(result[0]['segment_start'], 0)
         self.assertEqual(result[0]['segment_end'], 4)
         self.assertEqual(result[1]['segment_start'], 4)
-        self.assertEqual(result[1]['segment_end'], 7)
+        self.assertEqual(result[1]['segment_end'], 8)
 
     def test_with_sequence_id(self):
         sequence_id = 1001
