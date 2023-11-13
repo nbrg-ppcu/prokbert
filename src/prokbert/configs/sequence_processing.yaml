@@ -116,7 +116,7 @@ computation:
     constraints:
       options: [1, 2, 4, 8]
   np_tokentype:
-    default: np.int16
+    default: np.int64
     type: "type"
     description: "Dummy"
 
