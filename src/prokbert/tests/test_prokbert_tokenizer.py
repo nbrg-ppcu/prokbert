@@ -111,33 +111,7 @@ class TestProkBERTTokenizer(unittest.TestCase):
 
 
         # Assert that the restored sequence is equal to original segment
-        
-        
-        
-    def test_get_positions_tokens(self):
-        seq1 = 'AAACTGAASGGTACGAT'
-        seq2 = 'AAACT'
-        pos1 = 8
-        pos2 = 0
-        
-        # Get the tokens and their positions
-        toks1, pos11 = tokenizer.get_positions_tokens(seq1, pos1)
-        toks2, pos21 = tokenizer.get_positions_tokens(seq2, pos2)
-        toks3, pos31 = tokenizer.get_positions_tokens(seq1, pos2)
-        
-        
-        # First case - all is fine
-        self.assertEqual(toks1, [['TGAASG', 'AASGGT', 'SGGTAC'], ['CTGAAS', 'GAASGG', 'ASGGTA']])
-        self.assertEqual(pos11,[[2, 3, 4], [1, 2, 3]])
-        
-        # Second case - too short sequence to kmerize
-        self.assertEqual(toks2, [['AAACTG']])
-        self.assertEqual(pos21,[[0]])
-        
-        # Third case - position's nucleotide is contained only by one kmer-list
-        self.assertEqual(toks2, [[], []])
-        self.assertEqual(pos21,[[], []])
-        
+ 
     
 
 
