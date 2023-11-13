@@ -153,8 +153,6 @@ class ProkBERTTokenizer(PreTrainedTokenizer):
 
         :return: None
 
-
-
         Example:
             >>> tokenizer = ProkBERTTokenizer(tokenization_params={'kmer': 6, 'shift': 1}, operation_space='sequence')
             >>> tokenizer.tokenize("ACGTACGT")
@@ -201,85 +199,95 @@ class ProkBERTTokenizer(PreTrainedTokenizer):
         
 
     def __len__(self) -> int:
+        """
+        Returns the length of the tokenizer's vocabulary.
+
+        The length returned is one less than the actual number of items in the vocabulary
+        to account for a specific offset or adjustment in token indexing.
+
+        :return: The adjusted length of the vocabulary.
+        :rtype: int
+        """
         return len(self.vocab)-1
 
 
     def tokenize(self, text: str, lca_shift: int = 0, all: bool = False) -> Union[List[str], Tuple[List[List[str]], List[List[str]]]]:
         """
-        Tokenizes a given segment.
+        Tokenizes a given DNA segment using the Local Context Aware (LCA) approach. Depending on the parameters, it can return 
+        either a single tokenized sequence or all possible tokenizations.
 
-        Args:
-            text (str): The DNA segment to tokenize.
-            lca_shift (int, optional): Which tokenized vector belonging to the specified LCA offset should be returned. Defaults to 0.
-            all (bool, optional): If True, returns all possible tokenizations. Defaults to False.
-        
-        Returns:
-            Union[List[str], Tuple[List[List[str]], List[List[str]]]]: Tokenized segment or tuple of all possible tokenizations.
-        
+        :param text: The DNA segment to be tokenized. Represents a sequence of nucleotides.
+        :type text: str
+        :param lca_shift: Specifies the LCA offset for tokenization. Determines which specific tokenized vector to return.
+            A value of 0 returns the first vector, while higher values return subsequent vectors. Defaults to 0.
+        :type lca_shift: int, optional
+        :param all: If set to True, the method returns all possible tokenizations for the given segment. 
+            When False, it returns only the tokenized vector corresponding to the specified LCA offset.
+        :type all: bool, optional
+
+        :return: If 'all' is False, returns a list of tokenized segments corresponding to the specified LCA shift.
+            If 'all' is True, returns a tuple containing two lists: one with all possible tokenized segments, 
+            and the other with k-merized segments.
+        :rtype: Union[List[str], Tuple[List[List[str]], List[List[str]]]]
+
         Usage Example:
-            >>> tokenizer = ProkBERTTokenizer(...)
+            >>> tokenizer = ProkBERTTokenizer(tokenization_params={'kmer': 6, 'shift': 1}, operation_space='sequence')
             >>> segment = 'AATCAAGGAATTATTATCGTT'
             >>> tokens, kmers = tokenizer.tokenize(segment, all=True)
             >>> print(tokens)
             ...
         """
-        tokenized_segments, kmerized_segments = lca_tokenize_segment(text, self.tokenization_params)
+        tokenized_segments, kmerized_segments = lca_tokenize_segment(text.upper(), self.tokenization_params)
         if all:
             return tokenized_segments, kmerized_segments
         else:
             return kmerized_segments[lca_shift]
 
-    def _convert_token_to_id(self, token):
-        """Converts a token (str) in an id using the vocab."""
+
+    def _convert_token_to_id(self, token: str) -> int:
+        """
+        Converts a token to its corresponding ID using the tokenizer's vocabulary.
+
+        :param token: The token to be converted into an ID.
+        :type token: str
+        :return: The ID corresponding to the given token. If the token is not found in the vocabulary, 
+                 the ID for the unknown token is returned.
+        :rtype: int
+
+        Internal method used mainly during the tokenization process.
+        """
         return self.vocab.get(token, self.vocab.get(self.unk_token))
 
-    def _convert_id_to_token(self, index):
-        """Converts an index (integer) in a token (str) using the vocab."""
+
+    def _convert_id_to_token(self, index: int) -> str:
+        """
+        Converts an ID to its corresponding token using the tokenizer's vocabulary.
+
+        :param index: The ID to be converted into a token.
+        :type index: int
+        :return: The token corresponding to the given ID. If the ID is not found in the vocabulary,
+                 the unknown token is returned.
+        :rtype: str
+
+        Internal method used mainly during the detokenization process.
+        """
         return self.ids_to_tokens.get(index, self.unk_token)
+
             
 
-    def depr_convert_ids_to_tokens(self, ids: Union[int, List[int]]) -> List[str]:
+    def convert_ids_to_tokens(self, ids: Union[int, List[int], torch.Tensor]) -> Union[str, List[str]]:
         """
-        Converts tokens to their corresponding IDs.
+        Converts token IDs back to their original tokens. This function can handle a single ID or a list of IDs. 
+        It also supports handling IDs provided as a PyTorch tensor.
 
-        Args:
-            tokens (List[str]): List of tokens to convert.
-        
-        Returns:
-            List[int]: List of corresponding token IDs.
-        
+        :param ids: A single token ID or a list of token IDs. Can also be a PyTorch tensor of token IDs.
+        :type ids: Union[int, List[int], torch.Tensor]
+        :return: The corresponding token or list of tokens. If `ids` is a single integer or a tensor with a single value, 
+                 a single token string is returned. If `ids` is a list or tensor with multiple values, a list of token strings is returned.
+        :rtype: Union[str, List[str]]
+
         Usage Example:
-            >>> tokenizer = ProkBERTTokenizer(...)
-            >>> tokens = ['AATCAA', 'TCAAGG']
-            >>> ids = tokenizer.convert_tokens_to_ids(tokens)
-            >>> print(ids)
-            ...
-        """
-
-        if isinstance(ids, int):
-            token_ids = self.vocab.get(ids, self.vocab[self.unk_token])
-
-
-        if self.operation_space == 'sequence':
-            token_ids = [self.vocab.get(token, self.vocab[self.full_unk_token]) for token in tokens]
-        
-        else:
-            token_ids = [self.vocab.get(token, self.vocab[self.unk_token]) for token in tokens]
-        
-        return token_ids
-
-    def convert_ids_to_tokens(self, ids: Union[int, List[int]]) -> Union[str, List[str]]:
-        """
-        Converts token IDs back to their original tokens.
-        
-        Args:
-            ids (List[int]): List of token IDs to convert.
-        
-        Returns:
-            List[str]: List of corresponding tokens.
-        
-        Usage Example:
-            >>> tokenizer = ProkBERTTokenizer(...)
+            >>> tokenizer = ProkBERTTokenizer()
             >>> ids = [213, 3343]
             >>> tokens = tokenizer.convert_ids_to_tokens(ids)
             >>> print(tokens)
@@ -326,7 +334,26 @@ class ProkBERTTokenizer(PreTrainedTokenizer):
     
     
     def save_vocabulary(self, save_directory: str, filename_prefix: Optional[str] = None) -> Tuple[str]:
-        """Saves the vocabulary to a file."""
+        """
+        Saves the tokenizer's vocabulary to a file in the specified directory.
+
+        This method writes the vocabulary tokens to a text file, with each token on a new line. 
+        The filename can be prefixed with an optional string for clearer identification.
+
+        :param save_directory: The directory where the vocabulary file will be saved.
+        :type save_directory: str
+        :param filename_prefix: An optional prefix to the filename of the vocabulary file. Defaults to None, 
+                                which means no prefix is added.
+        :type filename_prefix: Optional[str]
+        :return: A tuple containing the path to the saved vocabulary file.
+        :rtype: Tuple[str]
+
+        Usage Example:
+            >>> tokenizer = ProkBERTTokenizer()
+            >>> saved_path = tokenizer.save_vocabulary("/path/to/save", filename_prefix="prokbert_")
+            >>> print(saved_path)
+            ...
+        """
         if filename_prefix is None:
             filename_prefix = ""
         vocab_file_path = os.path.join(save_directory, filename_prefix + "vocab.txt")
@@ -347,22 +374,27 @@ class ProkBERTTokenizer(PreTrainedTokenizer):
         """
         return cls(vocab_file)
 
-    def encode_plus(self, text: str, lca_shift: int = 0, padding_to_max=False, **kwargs) -> Dict[str, Union[torch.Tensor, np.ndarray]]:
+    def encode_plus(self, text: str, lca_shift: int = 0, padding_to_max: bool = False, **kwargs) -> Dict[str, Union[torch.Tensor, np.ndarray]]:
         """
-        Tokenizes a sequence and returns it in a format suitable for model input.
-        
-        Args:
-            text (str): The sequence to tokenize.
-            lca_shift (int, optional): LCA offset for tokenization. Defaults to 0.
-        
-        Returns:
-            Dict[str, np.ndarray]: Dictionary containing token IDs and attention masks.
-        
+        Tokenizes a sequence and returns it in a format suitable for model input, including attention masks.
+
+        :param text: The DNA sequence to tokenize.
+        :type text: str
+        :param lca_shift: LCA offset for tokenization. Specifies the offset in the tokenization process, defaults to 0.
+        :type lca_shift: int, optional
+        :param padding_to_max: If True, pads the tokenized sequence to the maximum length. Defaults to False.
+        :type padding_to_max: bool, optional
+        :param return_tensors: Optional argument to specify the return type (numpy ndarray or PyTorch tensor).
+        :type return_tensors: str, optional
+        :return: A dictionary containing 'input_ids' and 'attention_mask', either as numpy arrays or PyTorch tensors, 
+                 based on 'return_tensors' parameter.
+        :rtype: Dict[str, Union[torch.Tensor, np.ndarray]]
+
         Usage Example:
-            >>> tokenizer = ProkBERTTokenizer(...)
+            >>> tokenizer = ProkBERTTokenizer()
             >>> segment = 'AATCAAGGAATTATTATCGTT'
             >>> encoded = tokenizer.encode_plus(segment)
-            >>> print(encoded)
+            >>> print(encoded['input_ids'])
             ...
         """
         tokenized_segments, kmerized_segments = lca_tokenize_segment(text, self.tokenization_params)
@@ -391,23 +423,38 @@ class ProkBERTTokenizer(PreTrainedTokenizer):
                 "attention_mask": np.array(attention_mask, dtype=self.comp_params['np_tokentype'])
             }
 
-        return simplified_results    
-    def batch_encode_plus(self, batch_text_or_text_pairs: List[str], lca_shift: int = 0, all: bool = False, **kwargs) -> Dict[str, List[List[int]]]:
+        return simplified_results
+        
+    def batch_encode_plus(self, 
+                          batch_text_or_text_pairs: List[str], 
+                          lca_shift: int = 0, 
+                          all: bool = False, 
+                          **kwargs) -> Dict[str, List[List[int]]]:
         """
-        Tokenizes multiple sequences and returns them in a format suitable for model input. It is assumed that sequences 
-        have already been preprocessed (i.e., segmented) and quality controlled. 
+        Tokenizes multiple sequences and returns them in a format suitable for model input. 
+        Assumes that sequences have already been preprocessed (segmented) and quality controlled (i.e. all uppercase).
 
-        Args:
-        - batch_text_or_text_pairs (List[str]): A list of DNA sequences to be tokenized.
-        - lca_shift (int, default=0): The LCA offset or windows to get the tokenized vector. If the required offset is >= shift, 
-        an error is raised.
-        - all (bool, default=False): Whether all possible tokenization vectors should be returned. If False, only the specified 
-        offset is used. 
-        - **kwargs: Additional arguments (like max_length, padding, etc.)
+        :param batch_text_or_text_pairs: A list of DNA sequences to be tokenized.
+        :type batch_text_or_text_pairs: List[str]
+        :param lca_shift: Specifies the LCA offset for tokenization. If the required offset is >= shift, 
+                          an error is raised. Defaults to 0.
+        :type lca_shift: int, optional
+        :param all: If True, returns all possible tokenization vectors. If False, only the tokenization 
+                    corresponding to the specified offset is used. Defaults to False.
+        :type all: bool, optional
+        :param return_tensors: Optional argument to specify the return type (numpy ndarray or PyTorch tensor).
+        :type return_tensors: str, optional
+        :return: A dictionary containing 'input_ids', 'token_type_ids', and 'attention_mask' as lists of lists. 
+                 If 'return_tensors' is specified as 'pt', these are returned as PyTorch tensors.
+        :rtype: Dict[str, List[List[int]]]
 
-        Returns:
-        - Dict[str, List[List[int]]]: A dictionary containing token IDs, attention masks, and token type IDs.
-        """
+        Usage Example:
+            >>> tokenizer = ProkBERTTokenizer()
+            >>> segments = ['AATCAAGGA', 'ATTATTATCGTT']
+            >>> encoded = tokenizer.batch_encode_plus(segments)
+            >>> print(encoded['input_ids'])
+            ...
+        """        
         sequences = batch_text_or_text_pairs
         shift = self.tokenization_params['shift']
         if lca_shift >= shift:
@@ -425,11 +472,8 @@ class ProkBERTTokenizer(PreTrainedTokenizer):
             self.comp_params['batch_size_tokenization'],
             self.comp_params['np_tokentype']
         )
-        #print('BFS batch encode plus')
-        #print(tokenization_results)
+
         expected_max_token = max(len(arr) for arrays in tokenization_results.values() for arr in arrays)
-        #print(kwargs)
-        #print(f'expected_max_token: {expected_max_token}')
 
         if kwargs and 'return_tensors' in kwargs and kwargs['return_tensors']=='pt':
             X, _ = get_rectangular_array_from_tokenized_dataset(tokenization_results, 
@@ -477,22 +521,30 @@ class ProkBERTTokenizer(PreTrainedTokenizer):
 
         return return_data
     
-
-
-    
-    def encode(self, segment: str,  lca_shift: int = 0, all: bool = False, add_special_tokens: bool = True, **kwargs) -> List[int]:
+ 
+    def encode(self, 
+               segment: str,  
+               lca_shift: int = 0, 
+               all: bool = False, 
+               add_special_tokens: bool = True, 
+               **kwargs) -> List[int]:
         """
-        Encode a DNA sequence into its corresponding token IDs.
-        
-        Args:
-            text (str): The DNA segment to encode.
-            add_special_tokens (bool, optional): Whether to add special tokens like [CLS] and [SEP]. Defaults to True.
-        
-        Returns:
-            List[int]: Encoded token IDs.
-        
+        Encode a DNA sequence into its corresponding token IDs using LCA tokenization.
+
+        :param segment: The DNA segment to encode.
+        :type segment: str
+        :param lca_shift: Specifies the LCA offset for tokenization. If the required offset is >= shift, 
+                          an error is raised. Defaults to 0.
+        :type lca_shift: int, optional
+        :param all: If True, returns all possible tokenizations. Defaults to False.
+        :type all: bool, optional
+        :param add_special_tokens: Whether to add special tokens like [CLS] and [SEP]. Defaults to True.
+        :type add_special_tokens: bool, optional
+        :return: A list of encoded token IDs. If 'all' is True, a list of lists is returned for each possible tokenization.
+        :rtype: List[int]
+
         Usage Example:
-            >>> tokenizer = ProkBERTTokenizer(...)
+            >>> tokenizer = ProkBERTTokenizer()
             >>> segment = 'AATCAAGGAATTATTATCGTT'
             >>> ids = tokenizer.encode(segment)
             >>> print(ids)
@@ -531,20 +583,40 @@ class ProkBERTTokenizer(PreTrainedTokenizer):
 
         return token_ids
     
-    def decode(self, ids):
+    def decode(self, ids: Union[List[int], torch.Tensor]) -> str:
+        """
+        Decodes a list of token IDs back to the original DNA sequence.
+
+        This method converts token IDs back to their corresponding tokens and then concatenates them 
+        to form the original sequence. It is capable of handling token IDs provided as a list or a PyTorch tensor.
+
+        :param ids: Token IDs to be decoded. Can be a list of integers or a PyTorch tensor.
+        :type ids: Union[List[int], torch.Tensor]
+        :return: The decoded DNA sequence as a string.
+        :rtype: str
+
+        Usage Example:
+            >>> tokenizer = ProkBERTTokenizer(...)
+            >>> ids = [213, 3343]
+            >>> sequence = tokenizer.decode(ids)
+            >>> print(sequence)
+            ...
+        """
         tokens = self.convert_ids_to_tokens(ids)
         return ''.join(tokens)
     
+    
     def batch_decode(self, token_ids_list: List[List[int]], **kwargs) -> List[str]:
         """
-        Decodes multiple token ID sequences back into their original sequences.
-        
-        Args:
-            token_ids_list (List[List[int]]): List of token ID sequences.
-        
-        Returns:
-            List[str]: List of decoded sequences.
-        
+        Decodes multiple token ID sequences back into their original DNA sequences.
+
+        This method converts each list of token IDs in the batch back to its corresponding sequence.
+
+        :param token_ids_list: A list of token ID sequences to be decoded. Each element in the list is a list of token IDs.
+        :type token_ids_list: List[List[int]]
+        :return: A list containing the decoded DNA sequences.
+        :rtype: List[str]
+
         Usage Example:
             >>> tokenizer = ProkBERTTokenizer(...)
             >>> ids = [[2, 213, 3343, 165, 2580, 248, 3905, 978, 3296, 3]]
@@ -554,8 +626,15 @@ class ProkBERTTokenizer(PreTrainedTokenizer):
         """
         return [self.decode(token_ids) for token_ids in token_ids_list]
 
-    def get_vocab(self):
+    def get_vocab(self) -> Dict[str, int]:
+        """
+        Returns the vocabulary dictionary used by the tokenizer.
 
+        This method provides access to the tokenizer's vocabulary, which maps tokens to their corresponding IDs.
+
+        :return: The vocabulary dictionary.
+        :rtype: Dict[str, int]
+        """
         return self.vocab
     
     
