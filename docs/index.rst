@@ -4,15 +4,19 @@ ProkBERT
 
 Documentation
 -----------------------------
-
-Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum.
-
-.. toctree::
+ProkBERT is a genomic language model specifically designed for microbiome applications. It leverages the power of machine learning to decipher complex microbial interactions,
+predict functionalities, and uncover novel patterns in extensive datasets. The ProkBERT model family, built on transfer learning and self-supervised methodologies,
+ capitalizes on the abundant genomic data available, demonstrating remarkable adaptability across various scenarios. These models can efficiently capture and represent genomic structure and phylogeny, aligning with established biological understandings.
+ 
+ .. toctree::
 
    Home <self>
+   prokbert_tokenizer
    sequtils
    config_utils
-   general_utils
-   datacollator
    prok_datasets
-   prokbert_tokenizer
+   datacollator
+   general_utils
+   
+   
+   
