@@ -173,7 +173,13 @@ class ProkBERTPretrainingHDFDataset(Dataset):
         self.file_path = hdf_file_path
         self.dataset_file = h5py.File(self.file_path, 'r')
         logging.info(f'Loading and converting file {hdf_file_path}')
-        self.dataset = torch.tensor(np.array(self.dataset_file['training_data']['X']), dtype = self.default_dtype)
+        if self.dataset_file['training_data']['X'].dtype == 'uint16':
+            #print('Its an uint dataset converting first')
+            self.dataset = np.array(self.dataset_file['training_data']['X']).astype(np.int32)
+            self.dataset = torch.tensor(self.dataset, dtype = self.default_dtype)
+
+        else:
+            self.dataset = torch.tensor(np.array(self.dataset_file['training_data']['X']), dtype = self.default_dtype)
         logging.info(f'Loading finished!')
 
     def _ensure_file_open(self):
@@ -232,19 +238,20 @@ class TestDS(torch.utils.data.Dataset):
     
 
 class ProkBERTTrainingDatasetPT(Dataset):
-    def __init__(self, X, y, attention_masks=None):
+    def __init__(self, X, y=None, attention_masks=None):
         self.input_ids = X  # Assuming X is a tensor containing input_ids
-        self.labels = y  # Assuming y is a tensor containing labels
+        self.labels = y
         self.attention_masks = attention_masks  # Optional attention masks
 
     def __len__(self):
-        return len(self.labels)  # Number of samples
+        return len(self.input_ids)  # Number of samples
 
     def __getitem__(self, idx):
         sample = {
             'input_ids': self.input_ids[idx],  # input_ids for this sample
-            'labels': self.labels[idx],  # label for this sample
         }
+        if self.labels is not None:
+            sample['labels'] = self.labels[idx]
         
         # Include attention_mask in the sample if it is provided
         if self.attention_masks is not None:

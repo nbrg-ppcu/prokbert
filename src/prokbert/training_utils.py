@@ -180,9 +180,8 @@ def get_pretrained_model(prokbert_config):
     #new_model_args = MegatronBertConfig(**prokbert_config.model_params)
     #model = MegatronBertForMaskedLM(new_model_args)
 
-    #new_model_args = BertConfig(**prokbert_config.model_params)
+    new_model_args = MegatronBertConfig(**prokbert_config.model_params)
     #model = BertForMaskedLM(new_model_args)
-
     #return model
 
 
@@ -197,7 +196,8 @@ def get_pretrained_model(prokbert_config):
         [init_m_exists, init_m_cp_dir, init_m_cp, init_m_cps] = check_model_existance_and_checkpoint(prokbert_config.model_params['resume_or_initiation_model_path'], 
                                         prokbert_config.model_params['model_name'])
         if not init_m_exists:
-            print(f'The expected model does not exist {0}')
+            model_output_path = prokbert_config.model_params['model_outputpath']
+            print(f'The expected model does not exist at the path {model_output_path}. Creating a new modell with parameters: {new_model_args}')
             model = MegatronBertForMaskedLM(new_model_args)
             
         else:
@@ -215,7 +215,6 @@ def run_pretraining(model,tokenizer, data_collator,training_dataset, prokbert_co
     [m_exists, cp_dir, cp, cps] = check_model_existance_and_checkpoint(prokbert_config.model_params['model_outputpath'], 
                                      prokbert_config.model_params['model_name'])
 
-
     trainer = Trainer(
         model=model,
         args=training_args,
@@ -230,6 +229,8 @@ def run_pretraining(model,tokenizer, data_collator,training_dataset, prokbert_co
 
     else:
         trainer.train()
+    final_model_output = join(prokbert_config.model_params['model_outputpath'],prokbert_config.model_params['model_name'])
+    model.save_pretrained(final_model_output)
 
 
 def evaluate_binary_classification_bert_build_pred_results(logits: torch.Tensor, labels: torch.Tensor) -> np.ndarray:

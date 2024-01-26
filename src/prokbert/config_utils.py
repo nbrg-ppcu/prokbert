@@ -6,6 +6,8 @@ import os
 import numpy as np
 import torch
 from multiprocessing import cpu_count
+from transformers import TrainingArguments
+
 
 class BaseConfig:
     """Base class for managing and validating configurations."""
@@ -358,6 +360,9 @@ class ProkBERTConfig(BaseConfig):
 
         self.default_torchtype = ProkBERTConfig.torch_dtype_mapping[self.computation_params['numpy_token_integer_prec_byte']]
 
+        hf_training_args = TrainingArguments("working_dir")
+        self.hf_training_args_dict = hf_training_args.to_dict()
+
     def _get_default_pretrain_config_file(self) -> str:
         """
         Retrieve the default pretraining configuration file.
@@ -391,6 +396,7 @@ class ProkBERTConfig(BaseConfig):
         """
         class_params = {k: self.get_parameter(parameter_class, k) for k in self.parameters[parameter_class]}
 
+
         # First validatiading the class parameters as well
         for param, param_value in class_params.items():
 
@@ -398,15 +404,26 @@ class ProkBERTConfig(BaseConfig):
 
 
         for param, param_value in parameters.items():
-            if param not in class_params:
+            if param not in class_params and parameter_class!='pretraining':
                 raise ValueError(f"The provided {param} is an INVALID {parameter_class} parameter! The valid parameters are: {list(class_params.keys())}")
-            self.validate(parameter_class, param, param_value)
-            class_params[param] = param_value
+            else:
+                if parameter_class == 'pretraining':
+                    if param in self.hf_training_args_dict or param in class_params:
+                        if param in class_params:
+                            self.validate(parameter_class, param, param_value)
+                        class_params[param] = param_value
+                    else:
+                        raise ValueError(f"The provided {param} is an INVALID {parameter_class} parameter! In addition is not a valid training argument.")
+                else:
+                    self.validate(parameter_class, param, param_value)
+                    class_params[param] = param_value
 
         return class_params
     
     def get_and_set_model_parameters(self, parameters: dict = {}) -> dict:
         """ Setting the model parameters """
+
+        # Here we include the additional training arguments available for the trainer
 
         self.model_params = self.get_set_parameters('model', parameters)
 
