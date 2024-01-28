@@ -38,7 +38,7 @@ random.seed(seed)
 np.random.seed(seed)
 
 ### This is an example for the a pretarining
-def main(input_args):
+def mainddd(input_args):
     print('Running the pretraining from scratch!')
     #DATASET
 
@@ -261,21 +261,28 @@ def parsing_arguments_loading_env_variables():
 
     combined_params, cmd_argument2group_param, group2param2cmdarg = rename_non_unique_parameters(combined_params)
     print(group2param2cmdarg)
-
     #new_params = {'test' : seq_config['segmentation']}
     #print(new_params)
     #parser = create_parser(combined_params)
 
-    args = parser.parse_args()
-    
+    args = parser.parse_args()    
     input_args =  {'parsed_args': args,
                 'dataset_path': dataset_path,
                 'output_dir': output_dir,
                 'prokbert_params' : prokbert_params,
-                'model_name': model_name}
-    
+                'model_name': model_name}    
 
     return input_args
+
+def get_user_provided_args(args, parser):
+    user_provided_args = {}
+    for action in parser._actions:
+        arg_name = action.dest
+        default_value = action.default
+        user_value = getattr(args, arg_name, None)
+        if user_value != default_value:
+            user_provided_args[arg_name] = user_value
+    return user_provided_args
 
 
 def prepare_input_arguments():
@@ -283,14 +290,36 @@ def prepare_input_arguments():
     prokbert_config = ProkBERTConfig()
     parser, cmd_argument2group_param, group2param2cmdarg = prokbert_config.get_cmd_arg_parser()
     args = parser.parse_args()
+    user_provided_args = get_user_provided_args(args, parser)
+    input_args2check = list(set(user_provided_args.keys()) - {'help'})
+    print(input_args2check)
+    for k in input_args2check:
+        arg_value = getattr(args, k)
+        print(k, arg_value)
+
+    # Creating the input parameters for the training
+    
+    print(prokbert_config.parameters.keys())
+    # Létrehozunk valamilyen default kulcsokat
+
+
+
+
+    print(user_provided_args)
 
     return args, cmd_argument2group_param, group2param2cmdarg
 
+
+def main(input_args):
+    print('Running the pretraining from scratch!')
+
+    #print(input_args)
 
 if __name__ == "__main__":
     print(f'Parsing')
 
     input_args, cmd_argument2group_param, group2param2cmdarg = prepare_input_arguments()
+    main(input_args)
 
 
     #main(input_args)

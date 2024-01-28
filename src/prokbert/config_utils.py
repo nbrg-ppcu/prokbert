@@ -214,7 +214,6 @@ class BaseConfig:
                 param_counts[param_name] = param_counts.get(param_name, 0) + 1
 
         non_unique_params = {param for param, count in param_counts.items() if count > 1}
-        print('non_unique_params: ', non_unique_params)
 
         cmd_argument2group_param = {}
         group2param2cmdarg = {}
