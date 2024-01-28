@@ -5,9 +5,11 @@ from os.path import join
 import os
 import numpy as np
 import torch
+import argparse
 from multiprocessing import cpu_count
 from transformers import TrainingArguments
-
+from copy import deepcopy
+import re
 
 class BaseConfig:
     """Base class for managing and validating configurations."""
@@ -181,6 +183,134 @@ class BaseConfig:
         :rtype: str
         """
         return self.parameters[parameter_class][parameter_name]['description']
+
+    @staticmethod
+    def rename_non_unique_parameters(config: dict) -> tuple[dict, dict, dict]:
+        """
+        Rename parameters in the configuration to ensure uniqueness across different groups.
+
+        This method identifies parameters with the same name across different groups and renames them
+        by prefixing the group name. This is to prevent conflicts when parameters are used in a context
+        where the group name is not specified.
+
+        :param config: A dictionary where each key is a group name and each value is a dict
+                       of parameters for that group.
+        :type config: dict
+
+        :return: A tuple containing:
+                 - renamed_config: A dictionary with the same structure as the input, but with non-unique parameter
+                   names renamed. The structure is {group_name: {param_name: param_info}}.
+                 - cmd_argument2group_param: A dictionary mapping the new parameter names to their original group
+                   and parameter name. The structure is {new_param_name: [group_name, original_param_name]}.
+                 - group2param2cmdarg: A dictionary mapping each group to a dict that maps the original parameter
+                   names to the new parameter names. The structure is {group_name: {original_param_name: new_param_name}}.
+        :rtype: tuple[dict, dict, dict]
+        """
+
+        # Identify non-unique parameter names
+        param_counts = {}
+        for group_name, parameters in config.items():
+            for param_name in parameters.keys():
+                param_counts[param_name] = param_counts.get(param_name, 0) + 1
+
+        non_unique_params = {param for param, count in param_counts.items() if count > 1}
+        print('non_unique_params: ', non_unique_params)
+
+        cmd_argument2group_param = {}
+        group2param2cmdarg = {}
+        for group_name, parameters in config.items():
+            group2param2cmdarg[group_name]={}
+            for param_name in parameters.keys():
+                group2param2cmdarg[group_name][param_name] = param_name
+
+
+        # Rename only the non-unique parameters
+        renamed_config = {}
+        for group_name, parameters in config.items():
+            renamed_group = {}
+            for param_name, param_info in parameters.items():        
+
+                new_param_name = f"{group_name}_{param_name}" if param_name in non_unique_params else param_name
+                cmd_argument2group_param[new_param_name] = [group_name, param_name]
+                group2param2cmdarg[group_name][param_name]=new_param_name
+
+                renamed_group[new_param_name] = param_info
+            renamed_config[group_name] = renamed_group
+        return renamed_config, cmd_argument2group_param, group2param2cmdarg
+
+    @staticmethod
+    def create_parser(config: dict) -> argparse.ArgumentParser:
+        """
+        Create and configure an argparse parser based on the given configuration.
+
+        This method sets up a command-line argument parser with arguments defined in the configuration. 
+        Each top-level key in the configuration represents a group of related arguments.
+
+        :param config: A dictionary where each key is a group name and each value is a dict
+                       of parameters for that group. Each parameter's information should include 
+                       its type, default value, and help description.
+        :type config: dict
+
+        :return: Configured argparse.ArgumentParser instance with arguments added as specified
+                 in the configuration.
+        :rtype: argparse.ArgumentParser
+
+        :raises ValueError: If an unknown or unsupported type is specified for a parameter.
+        """
+        parser = argparse.ArgumentParser(description="Command-line parser for project settings")
+        # Mapping of type strings to Python types
+        type_mapping = {
+            'integer': int,
+            'int': int,
+            'float': float,
+            'string': str,
+            'str': str, 
+            'bool': bool,
+            'boolean': bool,
+            'list': list
+            # Complex types like 'dict' and 'type' are intentionally excluded
+        }
+
+        # List of types to handle as strings
+        handle_as_string = ['dict', 'type', 'list']
+        excluded_parameters = ['vocabmap', 'np_tokentype']
+
+
+        for group_name, parameters in config.items():
+            group = parser.add_argument_group(group_name)
+            for param_name, param_info in parameters.items():
+                param_type_str = param_info['type']
+                description = param_info['description']
+                escaped_description = re.sub(r"([^%])%", r"\1%%", description)
+                if param_name in excluded_parameters:
+                    continue
+                if param_type_str in handle_as_string:
+                    # Handle these types as strings in argparse, conversion will be done later in the program
+                    param_type = str
+                elif param_type_str not in type_mapping:
+                    raise ValueError(f"Unknown or unsupported type '{param_type_str}' for parameter '{param_name}'")
+                else:
+                    param_type = type_mapping[param_type_str]
+
+                #print(f'The current type is: {param_type}')
+                default_param = param_info['default']
+                description = param_info['description']
+                kwargs = {
+                    'type': param_type,
+                    'default': param_info['default'],
+                    'help': escaped_description
+                }            # Add constraints if they exist
+                if 'constraints' in param_info:
+                    constraints = param_info['constraints']
+                    if 'min' in constraints:
+                        kwargs['type'] = lambda x: eval(param_info['type'])(x) if eval(param_info['type'])(x) >= constraints['min'] else sys.exit(f"Value for {param_name} must be at least {constraints['min']}")
+                    if 'max' in constraints:
+                        kwargs['type'] = lambda x: eval(param_info['type'])(x) if eval(param_info['type'])(x) <= constraints['max'] else sys.exit(f"Value for {param_name} must be at most {constraints['max']}")
+                    if 'options' in constraints:
+                        kwargs['choices'] = constraints['options']
+                # Add argument to the group
+                group.add_argument(f'--{param_name}', **kwargs)
+        return parser
 
 
 
@@ -459,3 +589,47 @@ class ProkBERTConfig(BaseConfig):
     def get_and_set_computation_params(self, parameters: dict = {}) -> dict:
         self.computation_params = self.def_seq_config.get_and_set_computational_parameters(parameters)
         return self.computation_params    
+
+
+    def get_cmd_arg_parser(self) -> tuple[argparse.ArgumentParser, dict, dict]:
+        """
+        Create and return a command-line argument parser for ProkBERT configurations, along with mappings 
+        between command-line arguments and configuration parameters.
+
+        This method combines sequence configuration parameters with training configuration parameters 
+        and sets up a command-line argument parser using these combined settings. It ensures that parameter
+        names are unique across different groups by renaming any non-unique parameters.
+
+        :return: A tuple containing:
+                 - Configured argparse.ArgumentParser instance for handling ProkBERT configurations.
+                 - A dictionary mapping new command-line arguments to their original group and parameter name.
+                 - A dictionary mapping each group to a dict that maps the original parameter names 
+                   to the new command-line argument names.
+        :rtype: tuple[argparse.ArgumentParser, dict, dict]
+
+        Note: The method assumes that the configuration parameters for training and sequence configuration
+        are available within the class.
+        """
+
+        trainin_conf_keysets = ['data_collator', 'model', 'dataset', 'pretraining']
+        seq_config = deepcopy(self.def_seq_config.parameters)
+        default_other_config = deepcopy(self.parameters)
+        combined_params = {}
+        for k,v in seq_config.items():
+            combined_params[k] = v
+        for k in trainin_conf_keysets:
+            combined_params[k] = default_other_config[k]
+
+        combined_params, cmd_argument2group_param, group2param2cmdarg = BaseConfig.rename_non_unique_parameters(combined_params)
+        parser = BaseConfig.create_parser(combined_params)
+
+        return parser,cmd_argument2group_param, group2param2cmdarg
+
+
+
+            
+
+
+
+
+
