@@ -10,6 +10,7 @@ from multiprocessing import cpu_count
 from transformers import TrainingArguments
 from copy import deepcopy
 import re
+import sys
 
 class BaseConfig:
     """Base class for managing and validating configurations."""
@@ -272,7 +273,7 @@ class BaseConfig:
 
         # List of types to handle as strings
         handle_as_string = ['dict', 'type', 'list']
-        excluded_parameters = ['vocabmap', 'np_tokentype']
+        excluded_parameters = ['vocabmap', 'np_tokentype', 'pretraining_dataset_data', 'optim']
 
 
         for group_name, parameters in config.items():
@@ -299,14 +300,16 @@ class BaseConfig:
                     'default': param_info['default'],
                     'help': escaped_description
                 }            # Add constraints if they exist
+                """
                 if 'constraints' in param_info:
                     constraints = param_info['constraints']
                     if 'min' in constraints:
-                        kwargs['type'] = lambda x: eval(param_info['type'])(x) if eval(param_info['type'])(x) >= constraints['min'] else sys.exit(f"Value for {param_name} must be at least {constraints['min']}")
+                        kwargs['type'] = lambda x: eval(param_type_str)(x) if eval(param_type_str)(x) >= constraints['min'] else sys.exit(f"Value for {param_name} must be at least {constraints['min']}")
                     if 'max' in constraints:
-                        kwargs['type'] = lambda x: eval(param_info['type'])(x) if eval(param_info['type'])(x) <= constraints['max'] else sys.exit(f"Value for {param_name} must be at most {constraints['max']}")
+                        kwargs['type'] = lambda x: eval(param_type_str)(x) if eval(param_type_str)(x) <= constraints['max'] else sys.exit(f"Value for {param_name} must be at most {constraints['max']}")
                     if 'options' in constraints:
                         kwargs['choices'] = constraints['options']
+                """
                 # Add argument to the group
                 group.add_argument(f'--{param_name}', **kwargs)
         return parser
@@ -444,6 +447,41 @@ class SeqConfig(BaseConfig):
         max_token_count = self.get_maximum_token_count_from_max_length(max_segment_length, shift, kmer)
 
         return max_token_count
+    
+    def get_cmd_arg_parser(self) -> tuple[argparse.ArgumentParser, dict, dict]:
+        """
+        Create and return a command-line argument parser for ProkBERT configurations, along with mappings 
+        between command-line arguments and configuration parameters.
+
+        This method combines sequence configuration parameters with training configuration parameters 
+        and sets up a command-line argument parser using these combined settings. It ensures that parameter
+        names are unique across different groups by renaming any non-unique parameters.
+
+        :return: A tuple containing:
+                 - Configured argparse.ArgumentParser instance for handling ProkBERT configurations.
+                 - A dictionary mapping new command-line arguments to their original group and parameter name.
+                 - A dictionary mapping each group to a dict that maps the original parameter names 
+                   to the new command-line argument names.
+        :rtype: tuple[argparse.ArgumentParser, dict, dict]
+
+        Note: The method assumes that the configuration parameters for training and sequence configuration
+        are available within the class.
+        """
+        combined_params = deepcopy(self.parameters)
+        combined_params['Sequence'] = {}
+        combined_params['Sequence']['fasta_file_dir'] = {'default': 'None',
+                                                         'description' : 'Directory where the input fasta file are located for the pretraining',
+                                                         'type': 'string'}
+        combined_params['Sequence']['out'] = {'default': 'pretrain.h5',
+                                                         'description' : 'Output path',
+                                                         'type': 'string'}
+
+
+        combined_params, cmd_argument2group_param, group2param2cmdarg = BaseConfig.rename_non_unique_parameters(combined_params)
+        
+        parser = BaseConfig.create_parser(combined_params)
+        return parser,cmd_argument2group_param, group2param2cmdarg
+    
 
     @staticmethod
     def get_maximum_segment_length_from_token_count(max_token_counts, shift, kmer):
@@ -491,6 +529,7 @@ class ProkBERTConfig(BaseConfig):
 
         hf_training_args = TrainingArguments("working_dir")
         self.hf_training_args_dict = hf_training_args.to_dict()
+
 
     def _get_default_pretrain_config_file(self) -> str:
         """
@@ -625,6 +664,27 @@ class ProkBERTConfig(BaseConfig):
         return parser,cmd_argument2group_param, group2param2cmdarg
 
 
+def get_user_provided_args(args, parser):
+    """
+    Extract arguments provided by the user from the parsed arguments.
+
+    Args:
+        args (argparse.Namespace): Parsed command-line arguments.
+        parser (argparse.ArgumentParser): The argument parser instance.
+
+    Returns:
+        dict: A dictionary of user-provided arguments and their values.
+    """
+        
+    user_provided_args = {}
+    for action in parser._actions:
+        arg_name = action.dest
+        default_value = action.default
+        user_value = getattr(args, arg_name, None)
+        if user_value != default_value:
+            user_provided_args[arg_name] = user_value
+
+    return user_provided_args
 
             
 

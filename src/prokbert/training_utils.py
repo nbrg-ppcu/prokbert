@@ -376,3 +376,26 @@ class ProkBERTTrainer(Trainer):
 
         self.optimizer = optimizer
         self.lr_scheduler = scheduler
+
+
+def check_nvidia_gpu():
+    """
+    Check if NVIDIA GPU is available for PyTorch and print an appropriate message.
+    """
+    if torch.cuda.is_available():
+        gpu_count = torch.cuda.device_count()
+        gpu_names = ', '.join(torch.cuda.get_device_name(i) for i in range(gpu_count))
+        print(f"NVIDIA GPU is available. Total GPUs: {gpu_count}, Names: {gpu_names}")
+    else:
+        print("NVIDIA GPU is not available.")
+
+
+def check_amd_gpu():
+    """
+    Check if AMD GPU is available for PyTorch (ROCm) and print an appropriate message.
+    """
+    # This is a placeholder function. PyTorch does not natively support AMD GPUs as of now.
+    # Checking for AMD GPU support requires specific setup and installation of PyTorch with ROCm.
+    print("Checking for AMD GPU is not directly supported in PyTorch as of now.")
+    print("For AMD GPU support, ensure PyTorch is installed with ROCm and consult the ROCm documentation.")
+
