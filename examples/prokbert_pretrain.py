@@ -47,17 +47,13 @@ def prepare_input_arguments():
     args = parser.parse_args()
     user_provided_args = get_user_provided_args(args, parser)
     input_args2check = list(set(user_provided_args.keys()) - {'help'})
-    print(user_provided_args)
-    print(input_args2check)
-    
-    print(prokbert_config.parameters.keys())
     parameter_group_names = list(prokbert_config.parameters.keys())
     # Initialization of the input parameterset
     parameters = {k: {} for k in parameter_group_names}
     for provided_input_argument in input_args2check:
-        print(f'Setting: {provided_input_argument}')
+        #print(f'Setting: {provided_input_argument}')
         param_group, param_name = cmd_argument2group_param[provided_input_argument]
-        print(f'It belongs to group: {param_group}. Maps to the parameter: {param_name}')
+        #print(f'It belongs to group: {param_group}. Maps to the parameter: {param_name}')
         act_value = getattr(args, provided_input_argument)
         parameters[param_group][param_name]=act_value    
         prokbert_config = ProkBERTConfig()
@@ -85,15 +81,20 @@ def main(prokbert_config):
     Args:
         prokbert_config (ProkBERTConfig): Configuration object containing all necessary parameters for pretraining.
     """
-
+    check_nvidia_gpu()
+    #print(prokbert_config.model_params)
     tokenizer = get_training_tokenizer(prokbert_config)
     prokbert_dc = get_data_collator_for_overlapping_sequences(tokenizer, prokbert_config)
     hdf_file_exists, ds_size = check_hdf_dataset_file(prokbert_config)
     dataset_path = prokbert_config.dataset_params['dataset_path']
     #print(dataset_path)
     training_dataset = ProkBERTPretrainingHDFDataset(dataset_path)
+    #print(training_dataset[0:10])
+    #print(training_dataset[0:10].shape)
+
     model = get_pretrained_model(prokbert_config)
-    run_pretraining(model,tokenizer, prokbert_dc,training_dataset, prokbert_config)
+    run_pretraining(model,tokenizer, prokbert_dc, training_dataset, prokbert_config)
+
 
     #print(input_args)
 

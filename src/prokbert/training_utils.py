@@ -229,7 +229,7 @@ def run_pretraining(model,tokenizer, data_collator,training_dataset, prokbert_co
 
     else:
         trainer.train()
-    final_model_output = join(prokbert_config.model_params['model_outputpath'],prokbert_config.model_params['model_name'])
+    final_model_output = join(prokbert_config.model_params['model_outputpath'], prokbert_config.model_params['model_name'])
     model.save_pretrained(final_model_output)
 
 

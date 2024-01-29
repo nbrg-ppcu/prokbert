@@ -55,21 +55,23 @@ def prepare_input_arguments():
     
     parameter_group_names = list(def_seq_config.parameters.keys())
     parameter_group_names = ['segmentation', 'tokenization', 'computation']
-    print(parameter_group_names)
+    #print(parameter_group_names)
     seq_params = list(set(input_args2check) - set(non_optional_params) )
 
     parameters = {k: {} for k in parameter_group_names}
     for provided_input_argument in seq_params:
-        print(f'Setting: {provided_input_argument}')
+        #print(f'Setting: {provided_input_argument}')
         param_group, param_name = cmd_argument2group_param[provided_input_argument]
-        print(f'It belongs to group: {param_group}. Maps to the parameter: {param_name}')
+        #print(f'It belongs to group: {param_group}. Maps to the parameter: {param_name}')
         act_value = getattr(args, provided_input_argument)
         parameters[param_group][param_name]=act_value    
 
     def_seq_config = SeqConfig()
     _ = def_seq_config.get_and_set_segmentation_parameters(parameters['segmentation'])
     _ = def_seq_config.get_and_set_tokenization_parameters(parameters['tokenization'])
-    _ = def_seq_config.get_and_set_tokenization_parameters(parameters['computation'])
+    _ = def_seq_config.get_and_set_computational_parameters(parameters['computation'])
+
+    #print(def_seq_config.tokenization_params)
 
     return def_seq_config, args
 
@@ -98,6 +100,10 @@ def main(seq_config, args):
     segmentation_params = seq_config.segmentation_params
     tokenization_params = seq_config.tokenization_params
     computational_params = seq_config.computational_params
+
+    #print(tokenization_params)
+    #print(segmentation_params)
+
 
 
     # Load and segment sequences
