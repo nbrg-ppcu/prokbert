@@ -95,6 +95,7 @@ ProkBERT demonstrated outstanding performance in phage sequence identification, 
 ProkBERT's superiority was further highlighted in its ability to maintain high sensitivity in identifying actual phage sequences and specificity in discerning non-phage sequences. Additionally, the ProkBERT family shone in terms of evaluation speed, consistently registering times under 10 seconds for all sequence lengths, making it an invaluable tool for applications that require rapid and accurate phage sequence predictions. These results underline ProkBERT's exceptional capabilities and mark it as a leading solution in the field of genomic sequence analysis, especially in the challenging area of phage sequence classification.
 
 ![ProkBERT Phages](assets/Figure7_phag_res.png)
+*Figure 3: ProkBERT identifies phage sequences accurately and rapidly*
 
 # Citing this work
 
