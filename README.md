@@ -55,7 +55,13 @@ Codes for pre-training are coming soon.
 
 Codes for pre-training are coming soon.
 
+# Tutorials and examples
 
+In addition to the information on this page, you can refer to the following additional resources.
+
+- The [ProkBERT documentation](https://prokbert.readthedocs.io/en/latest/).
+- Examples in jupyter notebook.
+  
 # Detailed pre-training and evaluation process
 
 ## The pre-training process
@@ -76,9 +82,6 @@ Our models were evaluated in a binary classification setting, distinguishing bet
 *Figure 2: Comparative analysis of ProkBERT's promoter prediction performance*
 
 
-# Documentation
-
-[Read the Docs](https://prokbert.readthedocs.io/en/latest/)
 
 # Citing this work
 
