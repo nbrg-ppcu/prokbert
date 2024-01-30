@@ -82,7 +82,19 @@ Our models were evaluated in a binary classification setting, distinguishing bet
 ![ProkBERT Promoters](assets/Figure6_prom_res.png)
 *Figure 2: Comparative analysis of ProkBERT's promoter prediction performance*
 
+### ProkBERT in phage identification
 
+ProkBERT was secondly tested on phage sequence analysis, highlighting its critical role in understanding bacteriophages within microbiomes. Phages are instrumental in influencing host dynamics and driving horizontal gene transfer, pivotal in the spread of antibiotic resistance and virulence genes. Grasping phage diversity is essential for addressing global challenges such as climate change and various diseases. However, quantifying and characterizing phages accurately faces obstacles due to the limited viral sequences in databases and the complexities of viral taxonomy. To address these issues, we developed a unique phage sequence database with recent genomic data, employing a balanced benchmarking approach to reduce bias in viral group categorization.
+
+In compiling this database, we assembled an extensive collection of phage sequences from various sources, including the RefSeq database. We utilized the CD-HIT algorithm to eliminate redundancy, resulting in a dataset of 40,512 unique phage sequences. This dataset was meticulously mapped to their bacterial hosts, shedding light on phage-bacteria interactions. Special emphasis was placed on the relationships between phages and key bacterial genera like Salmonella and Escherichia, due to their significant health impacts. This balanced dataset is crucial for exploring the intricate relationships between phages and bacteria, furthering our understanding of microbial ecology.
+
+For the phage sequence analysis, we adopted a binary classification methodology akin to the approach used for promoter training.
+
+ProkBERT demonstrated outstanding performance in phage sequence identification, excelling in both accuracy and speed. In our comprehensive evaluation against various established methods, ProkBERT models consistently outperformed others across different sequence lengths. _ProkBERT-mini_ showed exceptional accuracy with shorter sequences, maintaining high accuracy without increased false positives or negatives. Notably, for 2kb sequences, _ProkBERT-mini-long_ achieved an impressive accuracy of 92.90% and a Matthews Correlation Coefficient (MCC) of 0.859, indicating its high reliability and precision in prediction.
+
+ProkBERT's superiority was further highlighted in its ability to maintain high sensitivity in identifying actual phage sequences and specificity in discerning non-phage sequences. Additionally, the ProkBERT family shone in terms of evaluation speed, consistently registering times under 10 seconds for all sequence lengths, making it an invaluable tool for applications that require rapid and accurate phage sequence predictions. These results underline ProkBERT's exceptional capabilities and mark it as a leading solution in the field of genomic sequence analysis, especially in the challenging area of phage sequence classification.
+
+![ProkBERT Phages](assets/Figure7_phag_res.png)
 
 # Citing this work
 
