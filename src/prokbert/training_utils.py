@@ -1,7 +1,8 @@
 # Training utils i.e. loading stuff, investiageting stuffs, etc
 from sklearn.metrics import roc_auc_score, accuracy_score, f1_score, matthews_corrcoef, confusion_matrix
 from torch.optim.lr_scheduler import CosineAnnealingLR
-from transformers import Trainer, AdamW, TrainingArguments
+from transformers import Trainer, AdamW, TrainingArguments, get_linear_schedule_with_warmup, EvalPrediction
+from importlib import import_module
 
 from typing import List, Tuple, Dict, Union
 
@@ -312,6 +313,13 @@ def evaluate_binary_classification_bert(pred_results: np.ndarray) -> Tuple[Dict,
     
     return eval_results, eval_results_ls
 
+def compute_metrics_eval_prediction(eval_preds: EvalPrediction) -> Dict:
+    eval_preds_tuple = eval_preds.predictions, eval_preds.label_ids
+    eval_results = compute_metrics(eval_preds_tuple)
+
+    return eval_results
+
+
 
 def compute_metrics(eval_preds: Tuple) -> Dict:
     """
@@ -329,7 +337,7 @@ def compute_metrics(eval_preds: Tuple) -> Dict:
         This function assumes that `evaluate_binary_classification_bert_build_pred_results`
         and `evaluate_binary_classification_bert` are available in the scope.
     """
- 
+
     logits, labels = eval_preds
     logits = torch.tensor(logits)
     labels = torch.tensor(labels)
@@ -342,23 +350,7 @@ def compute_metrics(eval_preds: Tuple) -> Dict:
 
 
 class ProkBERTTrainer(Trainer):
-    """
-    ProkBERTTrainer is a custom Trainer class that inherits from Hugging Face's Trainer.
-    It overrides the create_optimizer_and_scheduler method to customize the learning rate
-    scheduler and optimizer.
-    """
-
     def create_optimizer_and_scheduler(self, num_training_steps: int):
-        """
-        Create and set the AdamW optimizer and CosineAnnealingLR scheduler for training.
-        
-        Parameters:
-            num_training_steps (int): The total number of training steps for the scheduler.
-        
-        Returns:
-            None: Sets the optimizer and lr_scheduler attributes.
-        """
-
         # Create AdamW optimizer with the largest learning rate
         optimizer = torch.optim.AdamW(
             self.model.parameters(),
@@ -366,16 +358,99 @@ class ProkBERTTrainer(Trainer):
             eps=self.args.adam_epsilon,
             weight_decay=self.args.weight_decay,
         )
-
-        # Create Cosine Annealing scheduler
-        scheduler = CosineAnnealingLR(
+        
+        #optimizer = AdamW(self.model.parameters(), lr=self.learning_rate)
+        scheduler = get_linear_schedule_with_warmup(
             optimizer,
-            T_max=num_training_steps,  # Number of steps in one cycle
-            eta_min=1e-6  # Smallest learning rate
-        )
-
+            num_warmup_steps=0,  # Default to 0, but you can specify a different number
+            num_training_steps=num_training_steps  # This is typically the number of epochs * number of batches per epoch
+        )        
         self.optimizer = optimizer
         self.lr_scheduler = scheduler
+
+
+def get_torch_data_from_segmentdb_classification(tokenizer, segmentdb, L=None):
+
+    if L is None:
+        L = tokenizer.tokenization_params['token_limit']-2
+
+    tokenized_sets = batch_tokenize_segments_with_ids(segmentdb, tokenizer.tokenization_params, 
+                                                    batch_size=50000,
+                                                    num_cores=tokenizer.comp_params['cpu_cores_for_tokenization'], 
+                                                    np_token_type= np.int32)
+    
+    X, torchdb = get_rectangular_array_from_tokenized_dataset(tokenized_sets, 
+                                                shift=tokenizer.tokenization_params['shift'],
+                                                max_token_count=L+2,
+                                                randomize=True,
+                                                truncate_zeros = True,
+                                                numpy_dtype = np.int32)
+    
+    torchdb_annot = torchdb.merge(segmentdb[['segment_id', 'y', 'label']], how='left', left_on = 'segment_id', right_on = 'segment_id')
+    y=torch.tensor(torchdb_annot['y'], dtype=torch.long)
+    X = torch.tensor(X, dtype=torch.long)
+
+    return X, y, torchdb
+
+def get_default_pretrained_model_parameters(model_name, model_class, output_hidden_states=False,
+                                             output_attentions=False,
+                                             move_to_gpu=True):
+    """
+    Loading a default pretrained model with the corresponding tokenier and segmenation data.
+    Model name should be a valid model stored locally and should be registered in our database.
+    model_class: should be a valid transformer class in which the parameters will be loaded. 
+    return: the loaded model to GPU or cpu and a valid tokenizer and it's default parameters, requeired for tokenization and prosseing input data
+    """
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    match = re.search(r'k(\d+)s(\d+)', model_name)
+    if not match:
+        raise ValueError("Model name does not match the expected pattern.")
+    
+    kmer, shift = map(int, match.groups())
+    tokenization_params= {
+            'kmer': kmer,
+            'shift': shift
+        }
+    tokenizer = ProkBERTTokenizer(tokenization_params=tokenization_params,
+                                     operation_space='sequence')
+    model = load_pretrained_model(
+        model_path=model_name, 
+        model_class=model_class,  # Example model class
+        device=device,  # Use 'cpu' if you are not using a GPU
+        output_hidden_states=output_hidden_states, 
+        output_attentions=output_attentions,
+        move_to_gpu=move_to_gpu
+    )
+
+    return model, tokenizer
+    
+
+
+
+def load_pretrained_model(model_path, model_class, device, output_hidden_states=False, output_attentions=False, move_to_gpu=False):
+    """
+    Load Megatron BERT model and prepare for evaluation.
+
+    Parameters:
+    model_path (str): Path to the model.
+    device (str): Device to load the model onto.
+
+    Returns:
+    MegatronBertForMaskedLM: Loaded model.
+    """
+    torch.cuda.empty_cache()
+    ModelClass = getattr(import_module('transformers'), model_class)
+    model = ModelClass.from_pretrained(model_path, output_attentions=output_attentions,output_hidden_states=output_hidden_states)
+    #model = torch.compile(model)
+
+    if move_to_gpu:
+        model.to(device)
+        num_gpus = torch.cuda.device_count()
+        print('num_gpus: ', num_gpus)
+        print('No of parameters: ', model.num_parameters()/1000000)
+        if num_gpus > 1 and torch.cuda.device_count() >= num_gpus:
+            model = torch.nn.DataParallel(model, device_ids=list(range(num_gpus)))
+    return model
 
 
 def check_nvidia_gpu():
