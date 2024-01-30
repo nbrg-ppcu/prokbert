@@ -85,14 +85,14 @@ Our models were evaluated in a binary classification setting, distinguishing bet
 If you use the code or data in this package, please cite:
 
 ```bibtex
-@Article{AlphaFold2021,
-  author  = {Jumper, John and Evans, Richard and Pritzel, Alexander and Green, Tim and Figurnov, Michael and Ronneberger, Olaf and Tunyasuvunakool, Kathryn and Bates, Russ and {\v{Z}}{\'\i}dek, Augustin and Potapenko, Anna and Bridgland, Alex and Meyer, Clemens and Kohl, Simon A A and Ballard, Andrew J and Cowie, Andrew and Romera-Paredes, Bernardino and Nikolov, Stanislav and Jain, Rishub and Adler, Jonas and Back, Trevor and Petersen, Stig and Reiman, David and Clancy, Ellen and Zielinski, Michal and Steinegger, Martin and Pacholska, Michalina and Berghammer, Tamas and Bodenstein, Sebastian and Silver, David and Vinyals, Oriol and Senior, Andrew W and Kavukcuoglu, Koray and Kohli, Pushmeet and Hassabis, Demis},
-  journal = {Nature},
-  title   = {Highly accurate protein structure prediction with {AlphaFold}},
-  year    = {2021},
-  volume  = {596},
-  number  = {7873},
-  pages   = {583--589},
-  doi     = {10.1038/s41586-021-03819-2}
+@Article{ProkBERT2024,
+  author  = {Ligeti, Balázs and Szepesi-Nagy, István and Bodnár, Babett and Ligeti-Nagy, Noémi and Juhász, János},
+  journal = {Frontiers in Microbiology},
+  title   = {{ProkBERT} family: genomic language models for microbiome applications},
+  year    = {2024},
+  volume  = {14},
+  URL={https://www.frontiersin.org/articles/10.3389/fmicb.2023.1331233},       
+	DOI={10.3389/fmicb.2023.1331233},      
+	ISSN={1664-302X}
 }
 ```
