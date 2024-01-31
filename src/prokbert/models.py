@@ -7,8 +7,9 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from transformers import MegatronBertConfig, MegatronBertModel
+from transformers.utils.hub import cached_file
 
-
+import transformers
 
 class BertForBinaryClassificationWithPooling(nn.Module):
     def __init__(self, base_model: MegatronBertModel):        
@@ -63,30 +64,34 @@ class BertForBinaryClassificationWithPooling(nn.Module):
         
         self.base_model.config.save_pretrained(save_directory)
 
-
     @classmethod
-    def from_pretrained(cls, pretrained_directory, config=None):
+    def from_pretrained(cls, pretrained_model_name_or_path, *model_args, **kwargs):
         """
-        Load the model weights and configuration from a directory.
+        Load the model weights and configuration from a local directory or Hugging Face Hub.
 
         Args:
-            pretrained_directory (str): Directory where the model and configuration were saved.
+            pretrained_model_name_or_path (str): Directory path where the model and configuration were saved, or name of the model in Hugging Face Hub.
 
         Returns:
             model: Instance of BertForBinaryClassificationWithPooling.
         """
-        # Load the base model's configuration
-        if config is None:
-            megatron_bert_config = MegatronBertConfig.from_pretrained(pretrained_directory)
-            base_model = MegatronBertModel(config=megatron_bert_config)
-        else:
+        # Determine if the path is local or from Hugging Face Hub
+        if os.path.exists(pretrained_model_name_or_path):
+            # Path is local
+            config = MegatronBertConfig.from_pretrained(pretrained_model_name_or_path, **kwargs)
             base_model = MegatronBertModel(config=config)
+            model = cls(base_model=base_model)
+            model_path = os.path.join(pretrained_model_name_or_path, "pytorch_model.bin")
+            model.load_state_dict(torch.load(model_path, map_location=torch.device('cpu')))
+        else:
+            # Path is from Hugging Face Hub
+            config = kwargs.pop('config', None)
+            if config is None:
+                config = MegatronBertConfig.from_pretrained(pretrained_model_name_or_path, **kwargs)
 
-      # Create model instance using loaded configuration
-        model = cls(base_model=base_model)
-        model_path = os.path.join(pretrained_directory, "pytorch_model.bin")
-        model.load_state_dict(torch.load(model_path))
-        
+            base_model = MegatronBertModel(config=config)
+            model = cls(base_model=base_model)
+            model_file = cached_file(pretrained_model_name_or_path, "pytorch_model.bin")
+            model.load_state_dict(torch.load(model_file, map_location=torch.device('cpu')))
+
         return model
-
-    
