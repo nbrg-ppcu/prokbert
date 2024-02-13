@@ -238,21 +238,27 @@ class TestDS(torch.utils.data.Dataset):
     
 
 class ProkBERTTrainingDatasetPT(Dataset):
-    def __init__(self, X, y=None, attention_masks=None):
+    def __init__(self, X, y, attention_masks=None, AddAttentionMask=False):
         self.input_ids = X  # Assuming X is a tensor containing input_ids
-        self.labels = y
+        self.labels = y  # Assuming y is a tensor containing labels
         self.attention_masks = attention_masks  # Optional attention masks
+        self.AddAttentionMask = AddAttentionMask
 
     def __len__(self):
-        return len(self.input_ids)  # Number of samples
+        return len(self.labels)  # Number of samples
 
     def __getitem__(self, idx):
         sample = {
             'input_ids': self.input_ids[idx],  # input_ids for this sample
+            'labels': self.labels[idx],  # label for this sample
+            
         }
-        if self.labels is not None:
-            sample['labels'] = self.labels[idx]
-        
+        if self.AddAttentionMask:
+            attention_mask = (self.input_ids[idx] > 3) |  (self.input_ids[idx] == 2) | (self.input_ids[idx] == 1)
+            attention_mask = attention_mask.float()
+            #sample['attention_mask'] = (self.input_ids[idx] != 0).float()
+            sample['attention_mask'] = attention_mask
+
         # Include attention_mask in the sample if it is provided
         if self.attention_masks is not None:
             sample['attention_mask'] = self.attention_masks[idx]
