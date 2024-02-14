@@ -392,32 +392,60 @@ def get_torch_data_from_segmentdb_classification(tokenizer, segmentdb, L=None):
 
     return X, y, torchdb
 
-def get_default_pretrained_model_parameters(model_name, model_class, output_hidden_states=False,
-                                             output_attentions=False,
-                                             move_to_gpu=True):
+def get_default_pretrained_model_parameters(model_name: str, model_class: str, output_hidden_states: bool = False,
+                                            output_attentions: bool = False, move_to_gpu: bool = True):
     """
-    Loading a default pretrained model with the corresponding tokenier and segmenation data.
-    Model name should be a valid model stored locally and should be registered in our database.
-    model_class: should be a valid transformer class in which the parameters will be loaded. 
-    return: the loaded model to GPU or cpu and a valid tokenizer and it's default parameters, requeired for tokenization and prosseing input data
+    Load a default pretrained model along with the corresponding tokenizer based on the model name.
+    
+    :param model_name: The name of the model to load. Should be a valid model stored locally or registered in the database.
+                       Can be provided with or without the 'neuralbioinfo/' prefix.
+    :type model_name: str
+    :param model_class: The class of the transformer model into which the parameters will be loaded.
+    :type model_class: str
+    :param output_hidden_states: Whether to output hidden states.
+    :type output_hidden_states: bool
+    :param output_attentions: Whether to output attentions.
+    :type output_attentions: bool
+    :param move_to_gpu: Whether to move the model to GPU if available.
+    :type move_to_gpu: bool
+    :return: The loaded model (moved to GPU or CPU as specified) and the tokenizer with its default parameters.
+    :rtype: tuple
+    
+    Raises:
+        ValueError: If the model name does not match the expected pattern and is not found in predefined exceptions.
     """
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    match = re.search(r'k(\d+)s(\d+)', model_name)
-    if not match:
-        raise ValueError("Model name does not match the expected pattern.")
     
-    kmer, shift = map(int, match.groups())
-    tokenization_params= {
-            'kmer': kmer,
-            'shift': shift
-        }
-    tokenizer = ProkBERTTokenizer(tokenization_params=tokenization_params,
-                                     operation_space='sequence')
+    # Normalize the model name by removing the 'neuralbioinfo/' prefix if present
+    normalized_model_name = model_name.replace('neuralbioinfo/', '')
+
+    print(f'normalized_model_name: {normalized_model_name}, model name_ {model_name}')
+    # Predefined exceptions for model names and their tokenization parameters
+    model_tokenization_params = {
+        'prokbert-mini': {'kmer': 6, 'shift': 1},
+        'prokbert-mini-long': {'kmer': 6, 'shift': 2},
+        'prokbert-mini-c': {'kmer': 1, 'shift': 1},
+    }
+    
+    # Check for predefined exceptions first
+    if normalized_model_name in model_tokenization_params:
+        tokenization_params = model_tokenization_params[normalized_model_name]
+    else:
+        # If not found, try to parse using regex
+        match = re.search(r'k(\d+)s(\d+)', normalized_model_name)
+        if match:
+            kmer, shift = map(int, match.groups())
+            tokenization_params = {'kmer': kmer, 'shift': shift}
+        else:
+            print('fdsgfdgfgfggfgfgf')
+            raise ValueError(f"Model name '{model_name}' does not match the expected pattern and is not a predefined exception.")
+    
+    tokenizer = ProkBERTTokenizer(tokenization_params=tokenization_params, operation_space='sequence')
     model = load_pretrained_model(
-        model_path=model_name, 
-        model_class=model_class,  # Example model class
-        device=device,  # Use 'cpu' if you are not using a GPU
-        output_hidden_states=output_hidden_states, 
+        model_path=model_name,  # Use original model_name here to preserve 'neuralbioinfo/' if it was included
+        model_class=model_class,
+        device=device,
+        output_hidden_states=output_hidden_states,
         output_attentions=output_attentions,
         move_to_gpu=move_to_gpu
     )
