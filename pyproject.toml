@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "prokbert"
-version = "0.0.42"
+version = "0.0.43"
 description = "ProkBERT"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -19,4 +19,3 @@ Homepage = "https://github.com/nbrg-ppcu/prokbert"
 "Bug Tracker" = "https://github.com/nbrg-ppcu/prokbert/issues"
 
 [tool.setuptools_scm]
- 
