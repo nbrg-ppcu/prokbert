@@ -121,7 +121,7 @@ pretraining:
     description: "Output directory for training artifacts."
   num_train_epochs:
     default: 1
-    type: "integer"
+    type: "float"
     description: "Total number of training epochs."
   save_steps:
     default: 1000
