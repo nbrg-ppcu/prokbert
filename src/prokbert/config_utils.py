@@ -518,6 +518,7 @@ class ProkBERTConfig(BaseConfig):
         self.model_params = self.get_set_parameters('model')
         self.dataset_params = self.get_set_parameters('dataset')
         self.pretraining_params = self.get_set_parameters('pretraining')
+        self.finetuning_params = self.get_set_parameters('finetuning')
         # Getting the sequtils params as well
 
         self.def_seq_config = SeqConfig()
@@ -572,10 +573,10 @@ class ProkBERTConfig(BaseConfig):
 
 
         for param, param_value in parameters.items():
-            if param not in class_params and parameter_class!='pretraining':
+            if param not in class_params and (parameter_class!='pretraining'):
                 raise ValueError(f"The provided {param} is an INVALID {parameter_class} parameter! The valid parameters are: {list(class_params.keys())}")
             else:
-                if parameter_class == 'pretraining':
+                if parameter_class == 'pretraining' or parameter_class == 'finetuning' :
                     if param in self.hf_training_args_dict or param in class_params:
                         if param in class_params:
                             self.validate(parameter_class, param, param_value)
@@ -628,8 +629,17 @@ class ProkBERTConfig(BaseConfig):
         self.computation_params = self.def_seq_config.get_and_set_computational_parameters(parameters)
         return self.computation_params    
 
+    def get_and_set_finetuning_parameters(self, parameters: dict = {}) -> dict:
+        """ Setting the finetuning parameters """
 
-    def get_cmd_arg_parser(self) -> tuple[argparse.ArgumentParser, dict, dict]:
+        # Here we include the additional training arguments available for the trainer
+
+        self.finetuning_params = self.get_set_parameters('finetuning', parameters)
+
+        return self.finetuning_params
+    
+
+    def get_cmd_arg_parser(self, keyset=[]) -> tuple[argparse.ArgumentParser, dict, dict]:
         """
         Create and return a command-line argument parser for ProkBERT configurations, along with mappings 
         between command-line arguments and configuration parameters.
@@ -648,8 +658,11 @@ class ProkBERTConfig(BaseConfig):
         Note: The method assumes that the configuration parameters for training and sequence configuration
         are available within the class.
         """
+        if len(keyset) ==0:
+            trainin_conf_keysets = ['data_collator', 'model', 'dataset', 'pretraining', 'finetuning']
+        else:
+            trainin_conf_keysets = keyset
 
-        trainin_conf_keysets = ['data_collator', 'model', 'dataset', 'pretraining']
         seq_config = deepcopy(self.def_seq_config.parameters)
         default_other_config = deepcopy(self.parameters)
         combined_params = {}

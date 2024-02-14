@@ -41,7 +41,7 @@ model:
   model_name:
     default: 'mini'
     type: "string"
-    description: "Name of the ProkBERT model."
+    description: "Name of the pretrained ProkBERT model."
   model_outputpath:
     default: '/scratch/fastscratch/NBL/trained_models/test'
     type: "string"
@@ -193,7 +193,14 @@ tokenization:
 # For full definiation, please see the documentation of the sequitls parameters
 computation:
   numpy_token_integer_prec_byte: 2
-
-
+finetuning:
+  ftmodel:
+    default: ""
+    type: "string"
+    description: "Model name for the finetuning"
+  modelclass:
+    default: ""
+    type: "string"
+    description: "Modell class to perform the analysis weights."
 
     
