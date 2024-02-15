@@ -155,8 +155,8 @@ python finetuning.py \
 For practical applications or for larger training tasks we recommend to use the [Distributed DataParallel](https://huggingface.co/docs/transformers/en/perf_train_gpu_many). 
 
 
-
 ### Pretraining Example
+
 Here you can find an example for pretraining ProkBERT from scratch. Pretraining is an essential step, allowing the model to learn the underlying patterns before being fine-tuned for downstream tasks. All of the pretrained models are available on Hugging Face.
 
 #### Pretrained Models:
@@ -168,7 +168,8 @@ Here you can find an example for pretraining ProkBERT from scratch. Pretraining 
 | ProkBERT-mini-long | 6 | 2 | [Link](https://huggingface.co/neuralbioinfo/prokbert-mini-long) |
 
 #### Preprocessing the Example Data:
-It is a good practice the preprocess and larger sequence sets (>100MB) in advance. This is an example script for achiveing this by running on multiple fasta files:
+
+It is a good practice to preprocess larger sequence sets (>100MB) in advance. Below is an example script for achieving this by running on multiple fasta files:
 
 Clone the ProkBERT repository and navigate to the examples directory. Then, preprocess the example data into a format suitable for training. This involves converting sequences into k-mer representations. Run the following commands:
 
@@ -181,6 +182,12 @@ python prokbert_seqpreprocess.py \
   --fasta_file_dir ../src/prokbert/data/pretraining \
   --out ../src/prokbert/data/preprocessed/pretraining_k6s1.h5
 ```
+
+Parameters:
+- `--kmer`: The size of the k-mer (number of bases) to use for sequence encoding.
+- `--shift`: The shift size for sliding the k-mer window across sequences.
+- `--fasta_file_dir`: Directory containing your FASTA files for pretraining.
+- `--out`: Output file path for the preprocessed data in HDF5 format.
 
 #### Running the Pretraining from Scratch:
 
@@ -195,6 +202,11 @@ python prokbert_pretrain.py \
   --output_dir ./tmppretraining \
   --model_outputpath ./tmppretraining
 ```
+
+Parameters:
+- `--model_name`: Name for the model configuration to be used or saved.
+- `--output_dir`: Directory where the training logs and temporary files will be saved.
+- `--model_outputpath`: Path where the final trained model should be saved.
 
 
 # About ProkBERT  
