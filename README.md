@@ -245,6 +245,39 @@ In phage sequence analysis, ProkBERT outperforms traditional methods, proving it
 Our evaluations demonstrate the performance of ProkBERT in classifying phage sequences. It achieves high sensitivity and specificity even in challenging cases where available sequence information is limited. However, this exercise also highlights an inherent limitation of ProkBERT, the restricted context window size. 
 In comparative benchmarks with varying short sequence lengths, ProkBERT consistently surpassed established tools like VirSorter2 and DeepVirFinder
 
+## Available Models and Datasets
+
+### Pretrained Models
+
+| Model Name | k-mer | Shift | Hugging Face URL |
+| --- | --- | --- | --- |
+| `neuralbioinfo/prokbert-mini` | 6 | 1 | [Link](https://huggingface.co/neuralbioinfo/prokbert-mini) |
+| `neuralbioinfo/prokbert-mini-long` | 6 | 2 | [Link](https://huggingface.co/neuralbioinfo/prokbert-mini-long) |
+| `neuralbioinfo/prokbert-mini-c` | 1 | 1 | [Link](https://huggingface.co/neuralbioinfo/prokbert-mini-c) |
+
+### Finetuned Models for Promoter Prediction
+
+| Model Name | k-mer | Shift | Hugging Face URL |
+| --- | --- | --- | --- |
+| `neuralbioinfo/prokbert-mini-promoter` | 6 | 1 | [Link](https://huggingface.co/neuralbioinfo/prokbert-mini-promoter) |
+| `neuralbioinfo/prokbert-mini-long-promoter` | 6 | 2 | [Link](https://huggingface.co/neuralbioinfo/prokbert-mini-long-promoter) |
+| `neuralbioinfo/prokbert-mini-c-promoter` | 1 | 1 | [Link](https://huggingface.co/neuralbioinfo/prokbert-mini-c-promoter) |
+
+### Finetuned Models for Phage Identification
+
+| Model Name | k-mer | Shift | Hugging Face URL |
+| --- | --- | --- | --- |
+| `neuralbioinfo/prokbert-mini-phage` | 6 | 1 | [Link](https://huggingface.co/neuralbioinfo/prokbert-mini-phage) |
+| `neuralbioinfo/prokbert-mini-long-phage` | 6 | 2 | [Link](https://huggingface.co/neuralbioinfo/prokbert-mini-long-phage) |
+| `neuralbioinfo/prokbert-mini-c-phage` | 1 | 1 | [Link](https://huggingface.co/neuralbioinfo/prokbert-mini-c-phage) |
+
+### Datasets
+
+| Dataset Name | Hugging Face URL |
+| --- | --- |
+| `neuralbioinfo/ESKAPE-genomic-features` | [Link](https://huggingface.co/datasets/neuralbioinfo/ESKAPE-genomic-features) |
+| `neuralbioinfo/phage-test-10k` | [Link](https://huggingface.co/datasets/neuralbioinfo/phage-test-10k) |
+
 
 
 # Citing this work
