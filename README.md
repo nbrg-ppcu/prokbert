@@ -39,6 +39,52 @@ The recommended way to install ProkBERT is through pip, which will handle most d
 ```bash
 pip install prokbert
 ```
+### Installing with conda
+ProkBERT is also available as a conda package from the Bioconda channel. To install it using conda, run:
+```bash
+conda install prokbert -c bioconda
+```
+
+### Using Docker
+Before using the ProkBERT container with GPU support, make sure you have the following installed on your system:
+- Python (3.10 or later)
+- [Docker](https://docs.docker.com/get-docker/) (only if you plan to use the Docker image)
+- [NVIDIA Docker](https://github.com/NVIDIA/nvidia-docker) (only if you intend to use Docker with GPU support)
+
+To pull and run the ProkBERT Docker image, use:
+```bash
+docker pull obalasz/prokbert
+```
+For running the container with GPU support. Then, you can run:
+```bash
+docker run --gpus all -it --rm -v $(pwd):/app obalasz/prokbert python /app/finetuning.py --help
+```
+This command runs the ProkBERT Docker container with GPU support, mounts the current directory to the container (allowing access to your local files), and shows the help message for the finetuning.py script.
+
+### Using Singularity
+For users who prefer Singularity (Apptainer), a Singularity (Apptainer) container definition is also provided ([link](https://github.com/nbrg-ppcu/prokbert/blob/main/envs/prokbert.def)). Please refer to the official documentation for instructions on building and running Singularity containers.
+A prebuilt container is avaialble on the zenodo: https://zenodo.org/records/10659030 
+Building the Singularity container:
+```bash
+apptainer build prokbert.sif prokbert.def
+```
+To pull directly from Docker Hub and convert to a Singularity image file:
+
+```bash
+singularity pull prokbert.sif docker://obalasz/prokbert
+```
+Once you have your .sif file, you can run ProkBERT with the following command:
+```bash
+singularity run --nv prokbert.sif python /opt/prokbert/examples/finetuning.py --help
+```
+The --nv flag enables NVIDIA GPU support, assuming your system has NVIDIA drivers and CUDA installed. Remove this flag if you're running on a CPU-only system.
+You can also shell into the container or execute specific commands as follows:
+Shell into the container:
+```bash
+singularity shell --nv prokbert.sif
+```
+
+
 
 ### Applications
 
