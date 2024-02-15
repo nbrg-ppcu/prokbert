@@ -13,14 +13,14 @@ ProkBERT is an advanced genomic language model specifically designed for microbi
   - [Using Docker](#using-docker)
   - [Using Singularity (Apptainer)](#using-singularity-apptainer)
 - [Applications](#applications)
-- [Quick Start](#quick-start)
-- [Tutorials and Examples](#tutorials-and-examples)
-  - [Tokenization and Segmentation](#tokenization-and-segmentation)
-  - [Visualizing Sequence Representations](#visualizing-sequence-representations)
-  - [Finetuning Example for Promoter Sequences](#finetuning-example-for-promoter-sequences)
-  - [Pretraining Example](#pretraining-example)
+- [Quick start](#quick-start)
+- [Tutorials and examples](#tutorials-and-examples)
+  - [Tokenization and segmentation](#tokenization-and-segmentation-(sequence-preprocessing))
+  - [Visualizing sequence representations](#visualizing-sequence-representations)
+  - [Finetuning example for promoter sequences](#finetuning-example-for-promoter-sequences)
+  - [Pretraining example](#pretraining-example)
 - [About ProkBERT](#about-prokbert)
-- [Citing This Work](#citing-this-work)
+- [Citing this work](#citing-this-work)
 
 
 ### Introduction
@@ -132,8 +132,8 @@ tokenizer.batch_encode_plus([segment])
 
 ## Tutorials and examples:
 
-### Tokenization and Segmentation (sequence preprocessing)
-For examples for how to preprocess the raw seqeuence data, which are freqently stored in fasta format:
+### Tokenization and segmentation (sequence preprocessing)
+For examples of how to preprocess the raw sequence data, which are frequently stored in fasta format:
 Examples:
 - Segmentation (sequence preprocessing): [colab link](https://colab.research.google.com/github/nbrg-ppcu/prokbert/blob/main/examples/Segmentation.ipynb)
 - Tokenization [colab link](https://colab.research.google.com/github/nbrg-ppcu/prokbert/blob/main/examples/Tokenization.ipynb)
@@ -141,12 +141,12 @@ Examples:
   
 
 ### Visualizing sequence representations (embeddings)
-An example for how to visualize the genomic features of ESKAPE pathogens. More description about the dataset is available on huggingface
+An example of how to visualize the genomic features of ESKAPE pathogens. More description about the dataset is available on Hugging Face
 Example:
  - ESKAPE pathogen genomic features: [colab link](https://colab.research.google.com/github/nbrg-ppcu/prokbert/blob/main/examples/Embedding_visualization.ipynb) 
 
 ### Finetuning example for promoter sequences
-Here we provide an example for a practical transfer learning task. It is formulated as binary classification. We provide a notebook for presenting the basic concepts and a command line script as template. 
+Here we provide an example of a practical transfer learning task. It is formulated as a binary classification. We provide a notebook for presenting the basic concepts and a command line script as a template. 
 Examples:
 - Finetuning for promoter identification task: [colab link](https://colab.research.google.com/github/nbrg-ppcu/prokbert/blob/main/examples/Embedding_visualization.ipynb)
 - Python script for the finetuning: [link](https://github.com/nbrg-ppcu/prokbert/blob/main/examples/finetuning.py)
@@ -162,12 +162,12 @@ python finetuning.py \
   --num_train_epochs 1 \
   --per_device_train_batch_size 128 
 ```
-For practical applications or for larger training tasks we recommend to use the [Distributed DataParallel](https://huggingface.co/docs/transformers/en/perf_train_gpu_many). 
+For practical applications or for larger training tasks we recommend using the [Distributed DataParallel](https://huggingface.co/docs/transformers/en/perf_train_gpu_many). 
 
 
 ### Pretraining Example
 
-Here you can find an example for pretraining ProkBERT from scratch. Pretraining is an essential step, allowing the model to learn the underlying patterns before being fine-tuned for downstream tasks. All of the pretrained models are available on Hugging Face.
+Here you can find an example of pretraining ProkBERT from scratch. Pretraining is an essential step, allowing the model to learn the underlying patterns before being fine-tuned for downstream tasks. All of the pretrained models are available on Hugging Face.
 
 #### Pretrained Models:
 
