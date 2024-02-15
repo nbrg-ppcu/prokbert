@@ -18,6 +18,7 @@ ProkBERT is an advanced genomic language model specifically designed for microbi
 The ProkBERT model family is a transformer-based, encoder-only architecture based on [BERT](https://github.com/google-research/bert). Built on transfer learning and self-supervised methodologies, ProkBERT models capitalize on the abundant available data, demonstrating adaptability across diverse scenarios. The models’ learned representations align with established biological understanding, shedding light on phylogenetic relationships. With the novel Local Context-Aware (LCA) tokenization, the ProkBERT family overcomes the context size limitations of traditional transformer models without sacrificing performance or the information-rich local context. In bioinformatics tasks like promoter prediction and phage identification, ProkBERT models excel. For promoter predictions, the best-performing model achieved an MCC of 0.74 for E. coli and 0.62 in mixed-species contexts. In phage identification, they all consistently outperformed tools like VirSorter2 and DeepVirFinder, registering an MCC of 0.85. Compact yet powerful, the ProkBERT models are efficient, generalizable, and swift.
 
 ### Features
+- Tailored to microbes. 
 - Local Context-Aware (LCA) tokenization for better genomic sequence understanding.
 - Pre-trained models available for immediate use and fine-tuning.
 - High performance in various bioinformatics tasks.
@@ -210,40 +211,38 @@ Parameters:
 
 
 # About ProkBERT  
+ProkBERT is a novel genomic language model family tailored for microbiome research. The models were pretrained on large corpora of reresentative genomes 206,65billions of token of NCBI RefSeq database retreived on January 6th, 2023. It included reference or representative genomes from bacteria, viruses, archaea, and fungi.  After filtering, the sequence database consisted of 976,878 unique contigs derived from 17,178 assemblies. These assemblies represent 3,882 distinct genera, amounting to approximately 0.18 petabase pairs. Tokenization was performed using various k-mer sizes and shift parameters.
+For the detailed description please read our [paper](https://www.frontiersin.org/journals/microbiology/articles/10.3389/fmicb.2023.1331233/full) 
 
-## Detailed pre-training and evaluation process
-
-### The pre-training process
-
-ProkBERT models were pre-trained using a modified Masked Language Modeling (MLM) approach, tailored to handle the unique characteristics of genomic sequences. This involved the innovative use of overlapping and shifted k-mers for tokenization (LCA tokenization), which allowed for a richer contextual understanding of sequences. The pretraining process was conducted on a diverse dataset from the NCBI RefSeq database, ensuring comprehensive coverage of various genomic entities. This rigorous approach has equipped ProkBERT models with the capability to accurately interpret and analyze complex microbiome data.
-
-### ProkBERT trained for promoter prediction
-
-In the first application of ProkBERT models, we focused on differentiating bacterial promoter from non-promoter sequences. Our database, mainly derived from the Prokaryotic Promoter Database (PPD), included experimentally validated promoter sequences from 75 organisms, complemented by an independent test set of _E. coli_ sigma70 promoters. To generate a comprehensive negative dataset, we combined non-promoter sequences (CDS), sequences generated via a 3rd-order Markov chain, and purely random sequences, ensuring a diverse and challenging training environment. For fine-tuning, we adapted the Megatron BERT architecture for binary classification, employing a novel weighting mechanism to integrate representations of all tokens, rather than relying on the conventional [CLS] token. This approach, combined with a tailored softmax operation, yielded a weighted sum of sequence representations for accurate classification. Our fine-tuning process involved the AdamW optimizer, a linear learning rate scheduler with warmup, and training on NVIDIA A100-40GB GPUs for two epochs. The comprehensive training and validation process, illustrated in Figure 1, ensured that ProkBERT models could efficiently and accurately predict bacterial promoters, setting a new standard in genomic sequence analysis.
+## Genomic features
+ProkBERT's learned representations capture genomic structure and phylogeny. We assessed the zero-shot capabilities of our models by examining their proficiency in predicting genomic features based solely on embedding vectors
 
 ![ProkBERT Promoters](assets/Figure4_promoter_db.png)
-*Figure 1: Promoter dataset schematic*
+*Figure 1: UMAP embeddings of genomic segment representations. The figure presents the two-dimensional UMAP projections of embedded vector representations for various genomic features*
 
-Our models were evaluated in a binary classification setting, distinguishing between promoter and non-promoter sequences, and trained on a diverse set of data, including _E. coli_ sigma70 promoters. ProkBERT models demonstrated superior performance with an impressive accuracy and MCC (Matthews Correlation Coefficient) of 0.87 and 0.74 respectively, outperforming other established tools such as CNNProm and iPro70-FMWin (see Figure 2). This highlights ProkBERT's effectiveness in correctly identifying both promoters and non-promoters, with consistent results across various model variants. The evaluation also included a comparative analysis with newer tools like Promotech and iPromoter-BnCNN, where ProkBERT maintained its lead, especially in specificity and sensitivity. This robust performance is further emphasized in diverse testing scenarios, showcasing ProkBERT's generalizability and reliability in promoter prediction tasks across different bacterial species. The success of ProkBERT in this domain underscores its potential as a powerful tool in genomic sequence analysis, particularly in accurately predicting bacterial promoters.
+Our results affirm the robust generalization capabilities of the ProkBERT family. The learned representations are not only consistent but also harmonize well with established biological understanding. Specifically, the embeddings effectively delineate genomic features such as coding sequences (CDS), intergenic regions, and non-coding RNAs (ncRNA). Beyond capturing genomic attributes, the embeddings also encapsulate phylogenetic relationships. A case in point is the close proximity in the embedding space between \textit{Klebsiella pneumoniae} and \textit{Escherichia coli}, both belonging to the \textit{Enterobacteriaceae} family.
 
+
+## Promoter identification
+In the first application of ProkBERT models, we focused on differentiating bacterial promoter from non-promoter sequences. 
+For the detailed description please read our [paper](https://www.frontiersin.org/journals/microbiology/articles/10.3389/fmicb.2023.1331233/full) 
 
 ![ProkBERT Promoters](assets/Figure6_prom_res.png)
-*Figure 2: Comparative analysis of ProkBERT's promoter prediction performance*
+*Figure 2: Promoter prediction performance metrics on a diverse test set*
 
-### ProkBERT in phage identification
 
-ProkBERT was secondly tested on phage sequence analysis, highlighting its critical role in understanding bacteriophages within microbiomes. Phages are instrumental in influencing host dynamics and driving horizontal gene transfer, pivotal in the spread of antibiotic resistance and virulence genes. Grasping phage diversity is essential for addressing global challenges such as climate change and various diseases. However, quantifying and characterizing phages accurately faces obstacles due to the limited viral sequences in databases and the complexities of viral taxonomy. To address these issues, we developed a unique phage sequence database with recent genomic data, employing a balanced benchmarking approach to reduce bias in viral group categorization.
+ProkBERT models demonstrated high performance with an impressive accuracy and MCC (Matthews Correlation Coefficient) of 0.87 and 0.74, outperforming other established tools such as CNNProm and iPro70-FMWin. This highlights ProkBERT's effectiveness in correctly identifying both promoters and non-promoters, with consistent results across various model variants. The evaluation also included a comparative analysis with newer tools like Promotech and iPromoter-BnCNN.
 
-In compiling this database, we assembled an extensive collection of phage sequences from various sources, including the RefSeq database. We utilized the CD-HIT algorithm to eliminate redundancy, resulting in a dataset of 40,512 unique phage sequences. This dataset was meticulously mapped to their bacterial hosts, shedding light on phage-bacteria interactions. Special emphasis was placed on the relationships between phages and key bacterial genera like Salmonella and Escherichia, due to their significant health impacts. This balanced dataset is crucial for exploring the intricate relationships between phages and bacteria, furthering our understanding of microbial ecology.
 
-For the phage sequence analysis, we adopted a binary classification methodology akin to the approach used for promoter training.
+## Phage prediction
+rokBERT was secondly tested on phage sequence analysis. 
 
-ProkBERT demonstrated outstanding performance in phage sequence identification, excelling in both accuracy and speed. In our comprehensive evaluation against various established methods, ProkBERT models consistently outperformed others across different sequence lengths. _ProkBERT-mini_ showed exceptional accuracy with shorter sequences, maintaining high accuracy without increased false positives or negatives. Notably, for 2kb sequences, _ProkBERT-mini-long_ achieved an impressive accuracy of 92.90% and a Matthews Correlation Coefficient (MCC) of 0.859, indicating its high reliability and precision in prediction.
+![ProkBERT Promoters](assets/Figure7_phag_res.png)
+*Figure 3: Comparative analysis of ProkBERT's promoter prediction performance*
 
-ProkBERT's superiority was further highlighted in its ability to maintain high sensitivity in identifying actual phage sequences and specificity in discerning non-phage sequences. Additionally, the ProkBERT family shone in terms of evaluation speed, consistently registering times under 10 seconds for all sequence lengths, making it an invaluable tool for applications that require rapid and accurate phage sequence predictions. These results underline ProkBERT's exceptional capabilities and mark it as a leading solution in the field of genomic sequence analysis, especially in the challenging area of phage sequence classification.
+Our evaluations demonstrate the performance of ProkBERT in classifying phage sequences. It achieves high sensitivity and specificity even in challenging cases where available sequence information is limited. However, this exercise also highlights an inherent limitation of ProkBERT, and more broadly of transformer models: the restricted context window size. 
+ In comparative benchmarks with varying sequence lengths, ProkBERT consistently surpassed established tools like VirSorter2 and DeepVirFinder
 
-![ProkBERT Phages](assets/Figure7_phag_res.png)
-*Figure 3: ProkBERT identifies phage sequences accurately and rapidly*
 
 # Citing this work
 
