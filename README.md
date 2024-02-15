@@ -128,18 +128,7 @@ Examples:
 - Segmentation (sequence preprocessing): [colab link](https://colab.research.google.com/github/nbrg-ppcu/prokbert/blob/main/examples/Segmentation.ipynb)
 - Tokenization [colab link](https://colab.research.google.com/github/nbrg-ppcu/prokbert/blob/main/examples/Tokenization.ipynb)
 - Preprocessing for pretraining
-It is a good practice the preprocess and larger sequence sets (>100MB) in advance. This is an example script for achiveing this by running on multiple fasta files:
-Usage example:
-```bash
-git clone https://github.com/nbrg-ppcu/prokbert
-cd examples
-python prokbert_seqpreprocess.py \
-  --kmer 6 \
-  --shift 1 \
-  --fasta_file_dir ../src/prokbert/data/pretraining \
-  --out ../src/prokbert/data/preprocessed/pretraining_k6s1.h5
-```
-
+  
 
 ### Visualizing sequence representations (embeddings)
 An example for how to visualize the genomic features of ESKAPE pathogens. More description about the dataset is available on huggingface
@@ -151,6 +140,7 @@ Here we provide an example for a practical transfer learning task. It is formula
 Examples:
 - Finetuning for promoter identification task: [colab link](https://colab.research.google.com/github/nbrg-ppcu/prokbert/blob/main/examples/Embedding_visualization.ipynb)
 - Python script for the finetuning: [link](https://github.com/nbrg-ppcu/prokbert/blob/main/examples/finetuning.py)
+  
 Usage example:
 ```bash
 git clone https://github.com/nbrg-ppcu/prokbert
@@ -164,6 +154,47 @@ python finetuning.py \
 ```
 For practical applications or for larger training tasks we recommend to use the [Distributed DataParallel](https://huggingface.co/docs/transformers/en/perf_train_gpu_many). 
 
+
+
+### Pretraining Example
+Here you can find an example for pretraining ProkBERT from scratch. Pretraining is an essential step, allowing the model to learn the underlying patterns before being fine-tuned for downstream tasks. All of the pretrained models are available on Hugging Face.
+
+#### Pretrained Models:
+
+| Model | k-mer | Shift | Hugging Face URL |
+| ----- | ----- | ----- | ---------------- |
+| ProkBERT-mini | 6 | 1 | [Link](https://huggingface.co/neuralbioinfo/prokbert-mini) |
+| ProkBERT-mini-c | 1 | 1 | [Link](https://huggingface.co/neuralbioinfo/prokbert-mini-c) |
+| ProkBERT-mini-long | 6 | 2 | [Link](https://huggingface.co/neuralbioinfo/prokbert-mini-long) |
+
+#### Preprocessing the Example Data:
+It is a good practice the preprocess and larger sequence sets (>100MB) in advance. This is an example script for achiveing this by running on multiple fasta files:
+
+Clone the ProkBERT repository and navigate to the examples directory. Then, preprocess the example data into a format suitable for training. This involves converting sequences into k-mer representations. Run the following commands:
+
+```bash
+git clone https://github.com/nbrg-ppcu/prokbert
+cd prokbert/examples
+python prokbert_seqpreprocess.py \
+  --kmer 6 \
+  --shift 1 \
+  --fasta_file_dir ../src/prokbert/data/pretraining \
+  --out ../src/prokbert/data/preprocessed/pretraining_k6s1.h5
+```
+
+#### Running the Pretraining from Scratch:
+
+Use the preprocessed HDF file as input for pretraining. Execute the commands below:
+
+```bash
+python prokbert_pretrain.py \
+  --kmer 6 \
+  --shift 1 \
+  --dataset_path ../src/prokbert/data/preprocessed/pretraining_k6s1.h5 \
+  --model_name prokbert_k6s1 \
+  --output_dir ./tmppretraining \
+  --model_outputpath ./tmppretraining
+```
 
 
 # About ProkBERT  
