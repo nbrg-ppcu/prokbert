@@ -114,7 +114,6 @@ The models are easy to use with the [transformers](https://github.com/huggingfac
 We provide examples and descriptions as notebooks in the next chapter and some example scsripts regarging how to preprocess your sequence data and how to finetune the available models. The examples are available in the [example](https://github.com/nbrg-ppcu/prokbert/tree/main/examples) folder of this repository. 
 
 ### TLDR example
-
 To load the model from Hugging Face:
 ```python
 import torch
@@ -126,9 +125,11 @@ model = AutoModel.from_pretrained("nerualbioinfo/prokbert-mini", trust_remote_co
 
 segment = "TATGTAACATAATGCGACCAATAATCGTAATGAATATGAGAAGTGTGATATTATAACATTTCATGACTACTGCAAGACTAA"
 inputs = tokenizer(segment)['input_ids']
-tokenizer.batch_encode_plus([segment])
+encoded_sequence = tokenizer.batch_encode_plus([segment])
+# Converting the ids to tensors of int64
+encoded_sequence = {key: torch.tensor(val, dtype=torch.int64) for key, val in encoded_sequence.items()}
+model(**encoded_sequence)
 ```
-
 
 ## Tutorials and examples:
 
