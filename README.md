@@ -218,7 +218,7 @@ Parameters:
 - `--output_dir`: Directory where the training logs and temporary files will be saved.
 - `--model_outputpath`: Path where the final trained model should be saved.
 
-# About ProkBERT
+# ProkBERT’s results
 ProkBERT is a novel genomic language model family designed for microbiome studies, pretrained on extensive genomic datasets from the NCBI RefSeq database. The pretraining covered a diverse range of organisms, utilizing over 206.65 billion tokens from various genomes, encompassing bacteria, viruses, archaea, and fungi. The final dataset included 976,878 unique contigs from 17,178 assemblies, representing 3,882 distinct genera. Detailed methodology and tokenization strategies are elaborated in our [paper](https://www.frontiersin.org/journals/microbiology/articles/10.3389/fmicb.2023.1331233/full).
 
 ## Genomic Features
