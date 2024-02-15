@@ -23,6 +23,7 @@ The ProkBERT model family is a transformer-based, encoder-only architecture base
 - High performance in various bioinformatics tasks.
 - Facilitation of both supervised and unsupervised learning.
 
+
 ## Installation
 
 ### Installing with pip
@@ -93,24 +94,19 @@ singularity shell --nv prokbert.sif
 
 
 
-### Applications
+## Applications
 
 ProkBERT has been validated in several key genomic tasks, including:
 - Accurate bacterial promoter prediction.
 - Detailed phage sequence analysis within complex microbiome datasets.
 
-## Getting Started
 
-To get started with ProkBERT, clone the repository and follow the setup instructions in the documentation.
+## Quick Start
+Our models and datasets are avaialble on the [hugginface page](https://huggingface.co/neuralbioinfo). 
+The models are easy to use with the [transformers](https://github.com/huggingface/transformers) package.
+We provide examples and descriptions as notebook in the next chapter and some example scsripts regarging how to preprocess your sequence data and how to finetune the available models. 
 
-```bash
-pip install prokbert
-cd prokbert
-```
-
-### Quick Start
-Our model is easy to use with the [transformers](https://github.com/huggingface/transformers) package.
-
+### TLDR example
 
 To load the model from Hugging Face:
 ```python
@@ -119,23 +115,30 @@ from transformers import AutoTokenizer, AutoModel
 from prokbert.prokbert_tokenizer import ProkBERTTokenizer
 
 tokenizer = ProkBERTTokenizer(tokenization_params={'kmer' : 6, 'shift' : 1})
-model = AutoModel.from_pretrained("nerualbioinfo/prokbert-mini-k6s1", trust_remote_code=True)
+model = AutoModel.from_pretrained("nerualbioinfo/prokbert-mini", trust_remote_code=True)
 
 segment = "TATGTAACATAATGCGACCAATAATCGTAATGAATATGAGAAGTGTGATATTATAACATTTCATGACTACTGCAAGACTAA"
 inputs = tokenizer(segment)['input_ids']
-
 tokenizer.batch_encode_plus([segment])
-
 ```
 
 
-### Pre-Training
+## Tutorials and examples:
 
-Codes for pre-training are coming soon.
+### Tokenization and Segmentation (sequence preprocessing)
+For examples for how to preprocess the raw seqeuence data, which are freqently stored in fasta format:
+Examples:
+- Segmentation (sequence preprocessing): [colab link]()
+- Tokenization [colab link]()
 
-### Finetune
+### Visualizing sequence representations (embeddings)
+An example for how to visualize the genomic features of ESKAPE pathogens. More description about the dataset is available on huggingface
+Example:
+ - ESKAPE pathogen genomic featers. 
 
-Codes for finetuning are coming soon.
+### Finetuning example for promoter sequences
+We provide 
+
 
 ## Tutorials and examples
 
