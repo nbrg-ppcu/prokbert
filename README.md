@@ -12,6 +12,15 @@ ProkBERT is an advanced genomic language model specifically designed for microbi
   - [Installing with conda](#installing-with-conda)
   - [Using Docker](#using-docker)
   - [Using Singularity (Apptainer)](#using-singularity-apptainer)
+- [Applications](#applications)
+- [Quick Start](#quick-start)
+- [Tutorials and Examples](#tutorials-and-examples)
+  - [Tokenization and Segmentation](#tokenization-and-segmentation)
+  - [Visualizing Sequence Representations](#visualizing-sequence-representations)
+  - [Finetuning Example for Promoter Sequences](#finetuning-example-for-promoter-sequences)
+  - [Pretraining Example](#pretraining-example)
+- [About ProkBERT](#about-prokbert)
+- [Citing This Work](#citing-this-work)
 
 
 ### Introduction
