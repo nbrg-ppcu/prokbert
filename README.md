@@ -89,14 +89,11 @@ Shell into the container:
 ```bash
 singularity shell --nv prokbert.sif
 ```
-
 **Note**: If you encounter any problems, please do not hesitate to contact us or open an issue. My email address is obalasz@gmail.com.
 
-
-
 ## Applications
-
 ProkBERT has been validated in several key genomic tasks, including:
+- Learning meaningful repreresentation for seqeuences (zero-shot capibility)
 - Accurate bacterial promoter prediction.
 - Detailed phage sequence analysis within complex microbiome datasets.
 
@@ -104,7 +101,7 @@ ProkBERT has been validated in several key genomic tasks, including:
 ## Quick Start
 Our models and datasets are avaialble on the [hugginface page](https://huggingface.co/neuralbioinfo). 
 The models are easy to use with the [transformers](https://github.com/huggingface/transformers) package.
-We provide examples and descriptions as notebook in the next chapter and some example scsripts regarging how to preprocess your sequence data and how to finetune the available models. 
+We provide examples and descriptions as notebooks in the next chapter and some example scsripts regarging how to preprocess your sequence data and how to finetune the available models. The examples are available in the [example](https://github.com/nbrg-ppcu/prokbert/tree/main/examples) folder of this repository. 
 
 ### TLDR example
 
@@ -128,26 +125,49 @@ tokenizer.batch_encode_plus([segment])
 ### Tokenization and Segmentation (sequence preprocessing)
 For examples for how to preprocess the raw seqeuence data, which are freqently stored in fasta format:
 Examples:
-- Segmentation (sequence preprocessing): [colab link]()
-- Tokenization [colab link]()
+- Segmentation (sequence preprocessing): [colab link](https://colab.research.google.com/github/nbrg-ppcu/prokbert/blob/main/examples/Segmentation.ipynb)
+- Tokenization [colab link](https://colab.research.google.com/github/nbrg-ppcu/prokbert/blob/main/examples/Tokenization.ipynb)
+- Preprocessing for pretraining
+It is a good practice the preprocess and larger sequence sets (>100MB) in advance. This is an example script for achiveing this by running on multiple fasta files:
+Usage example:
+```bash
+git clone https://github.com/nbrg-ppcu/prokbert
+cd examples
+python prokbert_seqpreprocess.py \
+  --kmer 6 \
+  --shift 1 \
+  --fasta_file_dir ../src/prokbert/data/pretraining \
+  --out ../src/prokbert/data/preprocessed/pretraining_k6s1.h5
+```
+
 
 ### Visualizing sequence representations (embeddings)
 An example for how to visualize the genomic features of ESKAPE pathogens. More description about the dataset is available on huggingface
 Example:
- - ESKAPE pathogen genomic featers. 
+ - ESKAPE pathogen genomic features: [colab link](https://colab.research.google.com/github/nbrg-ppcu/prokbert/blob/main/examples/Embedding_visualization.ipynb) 
 
 ### Finetuning example for promoter sequences
-We provide 
+Here we provide an example for a practical transfer learning task. It is formulated as binary classification. We provide a notebook for presenting the basic concepts and a command line script as template. 
+Examples:
+- Finetuning for promoter identification task: [colab link](https://colab.research.google.com/github/nbrg-ppcu/prokbert/blob/main/examples/Embedding_visualization.ipynb)
+- Python script for the finetuning: [link](https://github.com/nbrg-ppcu/prokbert/blob/main/examples/finetuning.py)
+Usage example:
+```bash
+git clone https://github.com/nbrg-ppcu/prokbert
+cd examples
+python finetuning.py \
+  --model_name neuralbioinfo/prokbert-mini \
+  --ftmodel mini_promoter \
+  --model_outputpath finetuning_outputs \
+  --num_train_epochs 1 \
+  --per_device_train_batch_size 128 
+```
+For practical applications or for larger training tasks we recommend to use the [Distributed DataParallel](https://huggingface.co/docs/transformers/en/perf_train_gpu_many). 
 
 
-## Tutorials and examples
-
-In addition to the information on this page, you can refer to the following additional resources.
-
-- The [ProkBERT documentation](https://prokbert.readthedocs.io/en/latest/).
-- Examples in jupyter notebook.
 
 # About ProkBERT  
+
 ## Detailed pre-training and evaluation process
 
 ### The pre-training process
