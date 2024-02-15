@@ -1,0 +1,48 @@
+Bootstrap: docker
+From: nvidia/cuda:12.1.1-base-ubuntu22.04
+
+%labels
+    MAINTAINER Balázs Ligeti <obbalasz@gmail.com>
+
+%environment
+    DEBIAN_FRONTEND=noninteractive
+    PATH=/opt/miniconda3/bin:$PATH
+
+%post
+    # Install necessary packages
+    apt-get update && apt-get install -y --no-install-recommends \
+        wget \
+        unzip \
+        lbzip2 \
+        mc \
+        libgtextutils-dev \
+        sudo \
+        curl \
+        gpg \
+        git \
+        && rm -rf /var/lib/apt/lists/*
+
+    # Check if Miniconda is already installed; if not, install it
+    if [ ! -d "/opt/miniconda3" ]; then
+        echo "Installing Miniconda..."
+        wget https://repo.anaconda.com/miniconda/Miniconda3-py311_23.10.0-1-Linux-x86_64.sh -O /tmp/miniconda.sh
+        bash /tmp/miniconda.sh -b -p /opt/miniconda3
+        rm /tmp/miniconda.sh
+    else
+        echo "/opt/miniconda3 exists. Skipping Miniconda installation."
+    fi
+
+    echo "source /opt/miniconda3/etc/profile.d/conda.sh" >> $SINGULARITY_ENVIRONMENT
+
+    # Install Python packages
+    /opt/miniconda3/bin/pip install prokbert seaborn umap-learn jupyterlab
+
+    # Clone the prokbert repository
+    git clone https://github.com/nbrg-ppcu/prokbert.git /opt/prokbert
+
+%runscript
+    # Define what happens when the container is run without specifying a command
+    exec /opt/miniconda3/bin/python "$@"
+
+%help
+    This container includes the prokbert environment with Miniconda and additional Python packages.
