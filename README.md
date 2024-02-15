@@ -215,7 +215,7 @@ ProkBERT is a novel genomic language model family designed for microbiome studie
 ## Genomic Features
 ProkBERT's embeddings provide insights into genomic structures and relationships, distinguishing between different genomic elements. The models showcase strong generalization abilities, aligning with established biological principles.
 
-![UMAP embeddings of genomic segment representations](assets/Figure4_promoter_db.png)
+![UMAP embeddings of genomic segment representations](assets/Figure5_umaps.jpg)
 *Figure 1: UMAP embeddings of genomic segment representations, highlighting the distinction between genomic features.*
 
 
