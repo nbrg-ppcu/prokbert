@@ -149,7 +149,7 @@ Example:
 ### Finetuning example for promoter sequences
 Here we provide an example of a practical transfer learning task. It is formulated as a binary classification. We provide a notebook for presenting the basic concepts and a command line script as a template. 
 Examples:
-- Finetuning for promoter identification task: [colab link](https://colab.research.google.com/github/nbrg-ppcu/prokbert/blob/main/examples/Embedding_visualization.ipynb)
+- Finetuning for promoter identification task: [colab link](https://colab.research.google.com/github/nbrg-ppcu/prokbert/blob/main/examples/Finetuning.ipynb)
 - Python script for the finetuning: [link](https://github.com/nbrg-ppcu/prokbert/blob/main/examples/finetuning.py)
   
 Usage example:
