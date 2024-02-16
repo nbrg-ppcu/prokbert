@@ -15,11 +15,11 @@ ProkBERT is an advanced genomic language model specifically designed for microbi
 - [Applications](#applications)
 - [Quick start](#quick-start)
 - [Tutorials and examples](#tutorials-and-examples)
-  - [Tokenization and segmentation](#tokenization-and-segmentation-(sequence-preprocessing))
+  - [Tokenization and segmentation](#tokenization-and-segmentation)
   - [Visualizing sequence representations](#visualizing-sequence-representations)
   - [Finetuning example for promoter sequences](#finetuning-example-for-promoter-sequences)
   - [Pretraining example](#pretraining-example)
-- [About ProkBERT](#about-prokbert)
+- [ProkBERT's results](#prokbert's-results)
 - [Citing this work](#citing-this-work)
 
 
@@ -133,7 +133,7 @@ model(**encoded_sequence)
 
 ## Tutorials and examples:
 
-### Tokenization and segmentation (sequence preprocessing)
+### Tokenization and segmentation
 For examples of how to preprocess the raw sequence data, which are frequently stored in fasta format:
 Examples:
 - Segmentation (sequence preprocessing): [colab link](https://colab.research.google.com/github/nbrg-ppcu/prokbert/blob/main/examples/Segmentation.ipynb)
@@ -141,7 +141,7 @@ Examples:
 - Preprocessing for pretraining
   
 
-### Visualizing sequence representations (embeddings)
+### Visualizing sequence representations
 An example of how to visualize the genomic features of ESKAPE pathogens. More description about the dataset is available on Hugging Face
 Example:
  - ESKAPE pathogen genomic features: [colab link](https://colab.research.google.com/github/nbrg-ppcu/prokbert/blob/main/examples/Embedding_visualization.ipynb) 
