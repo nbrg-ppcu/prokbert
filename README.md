@@ -172,7 +172,7 @@ In this section, we provide a practical example for evaluating finetuned ProkBER
 We have prepared a detailed example that guides you through the process of evaluating our finetuned models. This includes loading the model, preparing the data, running the inference, and interpreting the results.
 
 Example:
-- [Evaluation of the Finetuned Models](https://colab.research.google.com/github/nbrg-ppcu/prokbert/blob/main/examples/Inference.ipynb): This
+- [Evaluation of the Finetuned Models](https://colab.research.google.com/github/nbrg-ppcu/prokbert/blob/main/examples/Inference.ipynb)
 
 
 ### Pretraining Example
