@@ -165,6 +165,15 @@ python finetuning.py \
 ```
 For practical applications or for larger training tasks we recommend using the [Distributed DataParallel](https://huggingface.co/docs/transformers/en/perf_train_gpu_many). 
 
+### Evaluation and Inference Example
+
+In this section, we provide a practical example for evaluating finetuned ProkBERT models. This is crucial for understanding the model's performance on specific tasks, such as promoter prediction or phage identification. 
+
+We have prepared a detailed example that guides you through the process of evaluating our finetuned models. This includes loading the model, preparing the data, running the inference, and interpreting the results.
+
+Example:
+- [Evaluation of the Finetuned Models](https://colab.research.google.com/github/nbrg-ppcu/prokbert/blob/main/examples/Inference.ipynb): This
+
 
 ### Pretraining Example
 
@@ -279,6 +288,7 @@ In comparative benchmarks with varying short sequence lengths, ProkBERT consiste
 | `neuralbioinfo/ESKAPE-genomic-features` | [Link](https://huggingface.co/datasets/neuralbioinfo/ESKAPE-genomic-features) |
 | `neuralbioinfo/phage-test-10k` | [Link](https://huggingface.co/datasets/neuralbioinfo/phage-test-10k) |
 | `neuralbioinfo/bacterial_promoters` | [Link](https://huggingface.co/datasets/neuralbioinfo/bacterial_promoters) |
+| `neuralbioinfo/ESKAPE-masking` | [Link](https://huggingface.co/datasets/neuralbioinfo/ESKAPE-masking) |
 
 
 
