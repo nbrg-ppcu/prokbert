@@ -56,12 +56,13 @@ class BertForBinaryClassificationWithPooling(nn.Module):
         Args:
             save_directory (str): Directory where the model and configuration can be saved.
         """
+        print('The save pretrained is called!')
         if not os.path.exists(save_directory):
             os.makedirs(save_directory)
         
         model_path = os.path.join(save_directory, "pytorch_model.bin")
         torch.save(self.state_dict(), model_path)
-        
+        print(f'The save directory is: {save_directory}')        
         self.base_model.config.save_pretrained(save_directory)
 
     @classmethod
@@ -78,7 +79,12 @@ class BertForBinaryClassificationWithPooling(nn.Module):
         # Determine if the path is local or from Hugging Face Hub
         if os.path.exists(pretrained_model_name_or_path):
             # Path is local
-            config = MegatronBertConfig.from_pretrained(pretrained_model_name_or_path, **kwargs)
+            if 'config' in kwargs:
+                print('Config is in the parameters')
+                config = kwargs['config']
+                  
+            else:                
+                config = MegatronBertConfig.from_pretrained(pretrained_model_name_or_path, **kwargs)
             base_model = MegatronBertModel(config=config)
             model = cls(base_model=base_model)
             model_path = os.path.join(pretrained_model_name_or_path, "pytorch_model.bin")

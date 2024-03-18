@@ -1,5 +1,7 @@
 # Training utils i.e. loading stuff, investiageting stuffs, etc
 from sklearn.metrics import roc_auc_score, accuracy_score, f1_score, matthews_corrcoef, confusion_matrix
+from sklearn.metrics import balanced_accuracy_score
+from scipy.special import logit, expit  
 from torch.optim.lr_scheduler import CosineAnnealingLR
 from transformers import Trainer, AdamW, TrainingArguments, get_linear_schedule_with_warmup, EvalPrediction
 from importlib import import_module
@@ -234,7 +236,7 @@ def run_pretraining(model,tokenizer, data_collator,training_dataset, prokbert_co
     model.save_pretrained(final_model_output)
 
 
-def evaluate_binary_classification_bert_build_pred_results(logits: torch.Tensor, labels: torch.Tensor) -> np.ndarray:
+def oevaluate_binary_classification_bert_build_pred_results(logits: torch.Tensor, labels: torch.Tensor) -> np.ndarray:
     """
     Build prediction results for binary classification.
     
@@ -255,7 +257,102 @@ def evaluate_binary_classification_bert_build_pred_results(logits: torch.Tensor,
     
     return pred_results
 
+def evaluate_binary_classification_bert_build_pred_results(logits, labels):
+    """
+    Build prediction results for binary classification.
+    
+    Parameters:
+        logits: Raw model outputs (logits) as a tensor or numpy array.
+        labels: True labels as a tensor or numpy array.
+        
+    Returns:
+        np.ndarray: An array containing labels, predictions, and logits for each class.
+    """
+    
+    # Ensure logits and labels are torch Tensors
+    if not isinstance(logits, torch.Tensor):
+        logits = torch.tensor(logits)
+    if not isinstance(labels, torch.Tensor):
+        labels = torch.tensor(labels)
+    
+    # Calculate predictions
+    predictions = torch.argmax(logits, dim=-1)
+    
+    # Convert to numpy for concatenation
+    predictions_np = predictions.numpy() if predictions.is_cuda else predictions.detach().cpu().numpy()
+    labels_np = labels.numpy() if labels.is_cuda else labels.detach().cpu().numpy()
+    logits_np = logits.numpy() if logits.is_cuda else logits.detach().cpu().numpy()
+    
+    # Prepare the results
+    pred = np.stack((labels_np, predictions_np), axis=1)
+    pred_results = np.concatenate((pred, logits_np), axis=1)
+    
+    return pred_results
+
+import numpy as np
+from sklearn.metrics import (accuracy_score, balanced_accuracy_score, confusion_matrix, 
+                             f1_score, matthews_corrcoef, roc_auc_score)
+from scipy.special import logit, expit  # expit is the inverse of logit, equivalent to the sigmoid function
+from typing import Dict, List, Tuple
+
 def evaluate_binary_classification_bert(pred_results: np.ndarray) -> Tuple[Dict, List]:
+    y_true = pred_results[:, 0]
+    y_pred = pred_results[:, 1]
+    logits = pred_results[:, 2:]  # Logits for both classes
+    
+    # Compute probabilities using the sigmoid function on the logits for the positive class (index 1)
+    probabilities = expit(logits[:, 1])
+    
+    # Calculate Cross-Entropy Loss
+    cross_entropy_loss = -np.mean(y_true * np.log(probabilities) + (1 - y_true) * np.log(1 - probabilities))
+    
+    try:
+        auc_class1 = roc_auc_score(y_true, logits[:, 0])
+    except ValueError:
+        auc_class1 = -1
+    
+    try:
+        auc_class2 = roc_auc_score(y_true, logits[:, 1])
+    except ValueError:
+        auc_class2 = -1
+    
+    acc = accuracy_score(y_true, y_pred)
+    f1 = f1_score(y_true, y_pred)
+    mcc = matthews_corrcoef(y_true, y_pred)
+    bal_acc = balanced_accuracy_score(y_true, y_pred) 
+
+    tn, fp, fn, tp = confusion_matrix(y_true, y_pred).ravel()
+    recall = tp / (tp + fn)
+    specificity = tn / (tn + fp)
+    Np = tp + fn
+    Nn = tn + fp
+    
+    eval_results = {
+        'CE_loss': cross_entropy_loss,
+        'auc_class0': auc_class1,
+        'auc_class1': auc_class2,
+        'acc': acc,
+        'bal_acc': bal_acc,
+        'f1': f1,
+        'mcc': mcc,
+        'recall': recall,
+        'sensitivity': recall,
+        'specificity': specificity,
+        'tn': tn,
+        'fp': fp,
+        'fn': fn,
+        'tp': tp,
+        'Np': Np,
+        'Nn': Nn
+    }
+    
+    eval_results_ls = [cross_entropy_loss, auc_class1, auc_class2,acc,bal_acc,mcc, f1, tn, fp, fn, tp, Np, Nn]
+    
+    return eval_results, eval_results_ls
+
+
+
+def oldevaluate_binary_classification_bert(pred_results: np.ndarray) -> Tuple[Dict, List]:
     """
     Calculate various metrics for binary classification based on the prediction results.
     
@@ -286,6 +383,8 @@ def evaluate_binary_classification_bert(pred_results: np.ndarray) -> Tuple[Dict,
     acc = accuracy_score(y_true, y_pred)
     f1 = f1_score(y_true, y_pred)
     mcc = matthews_corrcoef(y_true, y_pred)
+    bal_acc = balanced_accuracy_score(y_true, y_pred) 
+
     tn, fp, fn, tp = confusion_matrix(y_true, y_pred).ravel()
     recall = tp / (tp + fn)
     specificity = tn / (tn + fp)
@@ -296,6 +395,7 @@ def evaluate_binary_classification_bert(pred_results: np.ndarray) -> Tuple[Dict,
         'auc_class0': auc_class1,
         'auc_class1': auc_class2,
         'acc': acc,
+        'bal_acc': bal_acc,
         'f1': f1,
         'mcc': mcc,
         'recall': recall,
@@ -309,9 +409,11 @@ def evaluate_binary_classification_bert(pred_results: np.ndarray) -> Tuple[Dict,
         'Nn': Nn
     }
     
-    eval_results_ls = [auc_class1, auc_class2, f1, tn, fp, fn, tp, Np, Nn]
-    
+    eval_results_ls = [auc_class1, auc_class2, f1, tn, fp, fn, tp, Np, Nn]    
     return eval_results, eval_results_ls
+
+
+
 
 def compute_metrics_eval_prediction(eval_preds: EvalPrediction) -> Dict:
     eval_preds_tuple = eval_preds.predictions, eval_preds.label_ids
