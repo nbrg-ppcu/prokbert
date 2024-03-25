@@ -289,11 +289,6 @@ def evaluate_binary_classification_bert_build_pred_results(logits, labels):
     
     return pred_results
 
-import numpy as np
-from sklearn.metrics import (accuracy_score, balanced_accuracy_score, confusion_matrix, 
-                             f1_score, matthews_corrcoef, roc_auc_score)
-from scipy.special import logit, expit  # expit is the inverse of logit, equivalent to the sigmoid function
-from typing import Dict, List, Tuple
 
 def evaluate_binary_classification_bert(pred_results: np.ndarray) -> Tuple[Dict, List]:
     y_true = pred_results[:, 0]

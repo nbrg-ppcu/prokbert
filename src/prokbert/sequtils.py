@@ -335,10 +335,7 @@ def segment_sequences(
     return segment_db
 
 
-def lca_tokenize_segment(
-    segment: str, 
-    params: Dict[str, Dict[str, int] | int | float]
-) -> Tuple[List[List[int]], List[List[str]]]:
+def lca_tokenize_segment(segment: str, params: Dict[str, Dict[str, int] | int | float]) -> Tuple[List[List[int]], List[List[str]]]:
     """
     Tokenizes a single segment using Local Context Aware (LCA) tokenization.
     The segment is first split into k-mers with specified shifts and then tokenized into token vectors.
@@ -460,12 +457,7 @@ def tokenize_kmerized_segment_list(kmerized_segments: List[List[str]],
     
     return tokenized_segments
 
-def process_batch_tokenize_segments_with_ids(
-    segments: List[str],
-    segment_ids: List[Any],
-    tokenization_params: Dict[str, Any],
-    np_token_type: type = np.uint16
-) -> Dict[Any, List[np.ndarray]]:
+def process_batch_tokenize_segments_with_ids(segments: List[str], segment_ids: List[Any], tokenization_params: Dict[str, Any],  np_token_type: type = np.uint16) -> Dict[Any, List[np.ndarray]]:
     """
     Tokenizes a batch of segments and associates them with their provided IDs.
 
@@ -551,12 +543,7 @@ def batch_tokenize_segments_with_ids(segment_data, tokenization_params, num_core
     return tokenized_sets
 
 
-def get_rectangular_array_from_tokenized_dataset(tokenized_segments_data: Dict[int, List[np.ndarray]], 
-                                                 shift: int, 
-                                                 max_token_count: int, 
-                                                 truncate_zeros: bool = True, 
-                                                 randomize: bool = True, 
-                                                 numpy_dtype: Type = np.uint16) -> Tuple[np.ndarray, pd.DataFrame]:
+def get_rectangular_array_from_tokenized_dataset(tokenized_segments_data: Dict[int, List[np.ndarray]], shift: int, max_token_count: int, truncate_zeros: bool = True, randomize: bool = True, numpy_dtype: Type = np.uint16) -> Tuple[np.ndarray, pd.DataFrame]:
     """Create a rectangular numpy array that can be used as input to a Language Model (LM) from tokenized segment data.
 
     :param tokenized_segments_data: A dictionary where keys are segment ids and values are lists of possible LCA tokenized vectors.
@@ -662,10 +649,7 @@ def generate_kmers(abc, k):
     """
     return [''.join(p) for p in product(abc, repeat=k)]
 
-def save_to_hdf(X: np.ndarray, hdf_file_path: str, 
-                   database: pd.DataFrame = None, 
-                   compression: bool = False, 
-                   pd_chunksize: int = 10_000_000) -> None:
+def save_to_hdf(X: np.ndarray, hdf_file_path: str, database: pd.DataFrame = None, compression: bool = False, pd_chunksize: int = 10_000_000) -> None:
     """Save a numpy array and an optional pandas DataFrame to an HDF5 file.
 
     :param X: 2D numpy array to be saved.

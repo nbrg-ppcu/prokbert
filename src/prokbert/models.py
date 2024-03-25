@@ -23,9 +23,9 @@ class BertForBinaryClassificationWithPooling(nn.Module):
         self.dropout = nn.Dropout(self.dropout_rate)
         self.classifier = nn.Linear(self.hidden_size, 2)
 
-    def forward(self, input_ids, attention_mask=None, labels=None):
-        # Get sequence representations from base model
-        outputs = self.base_model(input_ids, attention_mask=attention_mask)
+    def forward(self, input_ids, attention_mask=None, labels=None, output_hidden_states=False):
+        # Modified call to base model to include output_hidden_states
+        outputs = self.base_model(input_ids, attention_mask=attention_mask, output_hidden_states=output_hidden_states)
         sequence_output = outputs[0]
         
         # Compute weights for each position in the sequence
@@ -42,11 +42,16 @@ class BertForBinaryClassificationWithPooling(nn.Module):
         # Prepare the output as a dictionary
         output = {"logits": logits}
         
-        # If labels are provided, compute the loss. This is useful during training.
+        # Include hidden states in output if requested
+        if output_hidden_states:
+            output["hidden_states"] = outputs.hidden_states
+        
+        # If labels are provided, compute the loss
         if labels is not None:
             loss_fct = torch.nn.CrossEntropyLoss()
             loss = loss_fct(logits.view(-1, 2), labels.view(-1))
-            output["loss"] = loss        
+            output["loss"] = loss
+
         return output
 
     def save_pretrained(self, save_directory):
