@@ -25,9 +25,10 @@ import operator
 import pathlib
 #from typing import Dict, List, Type, Tuple
 from itertools import product
-from typing import List, Union, Dict, Any, Optional, Tuple, Type
+from typing import List, Union, Dict, Any, Optional, Tuple, Type, Set
 from .general_utils import *
-
+from Bio.Seq import Seq
+from Bio.SeqRecord import SeqRecord
 
 import h5py
 
@@ -99,6 +100,8 @@ def load_contigs(
                     sequences.append(entry)
                     if is_add_sequence_id:
                         sequence_id += 2
+                else:
+                    sequence_id+=1                    
             else:
                 # Only include the sequence in the output
                 sequences.append(act_seq)
@@ -114,7 +117,7 @@ def load_contigs(
 def segment_sequence_contiguous(
     sequence: str, 
     params: Dict[str, Any], 
-    sequence_id: Optional[Any] = np.NaN
+    sequence_id: Optional[Any] = np.nan
 ) -> List[Dict[str, Any]]:
     """
     Creates end-to-end, disjoint segments of a sequence without overlaps.
@@ -136,7 +139,7 @@ def segment_sequence_contiguous(
     Example:
         >>> params = {'min_length': 0, 'max_length': 100}
         >>> segment_sequence_contiguous('ATCGATCGA', params)
-        [{'segment': 'ATCGATCGA', 'segment_start': 0, 'segment_end': 9, 'sequence_id': np.NaN}]
+        [{'segment': 'ATCGATCGA', 'segment_start': 0, 'segment_end': 9, 'sequence_id': np.nan}]
     """
     
     # Extract segmentation parameters
@@ -335,10 +338,7 @@ def segment_sequences(
     return segment_db
 
 
-def lca_tokenize_segment(
-    segment: str, 
-    params: Dict[str, Dict[str, int] | int | float]
-) -> Tuple[List[List[int]], List[List[str]]]:
+def lca_tokenize_segment(segment: str, params: Dict[str, Dict[str, int] | int | float]) -> Tuple[List[List[int]], List[List[str]]]:
     """
     Tokenizes a single segment using Local Context Aware (LCA) tokenization.
     The segment is first split into k-mers with specified shifts and then tokenized into token vectors.
@@ -469,13 +469,13 @@ def process_batch_tokenize_segments_with_ids(
     """
     Tokenizes a batch of segments and associates them with their provided IDs.
 
-    This function generates a vector representation for a collection of segments, assuming the segments
+    This function generates vector representations for a collection of segments, assuming the segments
     have undergone quality control. The result is a dictionary where the keys are segment IDs, and the values
     are lists of potential vector representations for the segment, with each list element corresponding to
     a specific shift.
 
     The vector representations are converted to numpy arrays. The output is not a 2D rectangular array but
-    a list of arrays.
+    a dictionary mapping each segment ID to its tokenized representations.
 
     :param segments: A list of preprocessed and validated segments.
     :type segments: List[str]
@@ -483,7 +483,7 @@ def process_batch_tokenize_segments_with_ids(
     :type segment_ids: List[Any]
     :param tokenization_params: A dictionary containing tokenization parameters.
     :type tokenization_params: Dict[str, Any]
-    :param np_token_type: Numpy data type for the tokenized segments, defaults to np.uint16.
+    :param np_token_type: Numpy data type for the tokenized segments. Defaults to np.uint16.
     :type np_token_type: type, optional
     :return: A dictionary with segment IDs as keys and lists of numpy arrays representing tokenized segments as values.
     :rtype: Dict[Any, List[np.ndarray]]
@@ -492,39 +492,62 @@ def process_batch_tokenize_segments_with_ids(
         >>> segments = ['ACTG', 'TGCA']
         >>> segment_ids = [1, 2]
         >>> tokenization_params = {'max_segment_length': 50, ...}
-        >>> process_batch_tokenize_segments_with_ids(segments, segment_ids, tokenization_params)
-        {1: [np.array([...], dtype=np.uint16), ...], 2: [np.array([...], dtype=np.uint16), ...]}
+        >>> tokenized_segments = process_batch_tokenize_segments_with_ids(
+                segments, segment_ids, tokenization_params
+            )
     """
-    
-
-
-    #logging.info('Tokenization of a list of segments')
     tokenized_segments_with_ids = {}
     for i, segment in enumerate(segments):
         act_id = segment_ids[i]
         tokenized_segments_with_ids[act_id] = []
         max_segment_length = tokenization_params['max_segment_length']
         if len(segment) > max_segment_length:
-            raise(ValueError(f'The segment is longer {len(segment)} then the maximum allowed segment length ({max_segment_length}). '))
-        
-        tokenized_segment,_ = lca_tokenize_segment(segment, tokenization_params)
+            raise ValueError(f'The segment is longer ({len(segment)}) than the maximum allowed segment length ({max_segment_length}).')
+
+        tokenized_segment, _ = lca_tokenize_segment(segment, tokenization_params)
         tokenized_segment = [np.array(act_segment, dtype=np_token_type) for act_segment in tokenized_segment]
         tokenized_segments_with_ids[act_id] = tokenized_segment
     return tokenized_segments_with_ids
    
-def batch_tokenize_segments_with_ids(segment_data, tokenization_params, num_cores=1, batch_size = 10000, np_token_type=np.uint16):
-    """Parallel tokenization of segments. If the segments are provided as DataFrame then it is splitted into junks specified in the paramaters
-    The default number of cores are the maximum available ones. If the segment data is a tuple, then it is expected the first element is the list segments, while the second elements are the ids.
-    Please note that the segment_ids should be unique. The segments should quality controlloed.
-
-    :param segment_data: param tokenization_params:
-    :param num_cores: Default value = 1)
-    :param batch_size: Default value = 10000)
-    :param np_token_type: Default value = np.uint16)
-    :param tokenization_params: 
-
+def batch_tokenize_segments_with_ids(
+    segment_data: Union[Tuple[List[str], List[Any]], pd.DataFrame],
+    tokenization_params: Dict[str, Any],
+    num_cores: int = 1,
+    batch_size: int = 10000,
+    np_token_type: type = np.uint16
+) -> Dict[Any, List[np.ndarray]]:
     """
+    Parallel tokenization of segments with associated IDs.
 
+    This function splits the input data into batches and uses multiprocessing to tokenize
+    the segments in parallel. It supports both list/tuple inputs and pandas DataFrames.
+
+    :param segment_data: Either a tuple/list containing two elements (segments, segment_ids),
+                         or a pandas DataFrame with 'segment' and 'segment_id' columns.
+    :type segment_data: Union[Tuple[List[str], List[Any]], pd.DataFrame]
+    :param tokenization_params: Dictionary containing tokenization parameters.
+    :type tokenization_params: Dict[str, Any]
+    :param num_cores: Number of CPU cores to use for parallel processing. Defaults to 1.
+    :type num_cores: int, optional
+    :param batch_size: Number of segments to process in each batch. Defaults to 10,000.
+    :type batch_size: int, optional
+    :param np_token_type: Numpy data type for the tokenized segments. Defaults to np.uint16.
+    :type np_token_type: type, optional
+    :return: A dictionary where keys are segment IDs and values are lists of numpy arrays representing tokenized segments.
+    :rtype: Dict[Any, List[np.ndarray]]
+    :raises ValueError: If the input data is neither a tuple/list nor a pandas DataFrame.
+
+    Example:
+        >>> segments = ['ACTG', 'TGCA']
+        >>> segment_ids = [1, 2]
+        >>> tokenization_params = {'max_segment_length': 50, ...}
+        >>> tokenized_data = batch_tokenize_segments_with_ids(
+                (segments, segment_ids),
+                tokenization_params,
+                num_cores=4,
+                batch_size=1000
+            )
+    """
     if isinstance(segment_data, tuple) or isinstance(segment_data, list):
         segments = segment_data[0]
         segment_ids = segment_data[1]
@@ -532,31 +555,28 @@ def batch_tokenize_segments_with_ids(segment_data, tokenization_params, num_core
         segments = list(segment_data['segment'])
         segment_ids = list(segment_data['segment_id'])
     else:
-        raise(ValueError(f'The input should be either pandas DataFrame or a tuple instead of {segment_data.__class__}'))
+        raise ValueError(f'The input should be either pandas DataFrame or a tuple instead of {type(segment_data)}')
 
     Ndata = len(segments)
-    batch_intervals = [(i, min( i+batch_size, Ndata)) for i in range(0, Ndata, batch_size)]
-    params = [(segments[interval[0]:interval[1]], 
-               segment_ids[interval[0]:interval[1]],
-               tokenization_params,
-               np_token_type) for interval in batch_intervals]
+    batch_intervals = [(i, min(i + batch_size, Ndata)) for i in range(0, Ndata, batch_size)]
+    params = [
+        (segments[interval[0]:interval[1]],
+         segment_ids[interval[0]:interval[1]],
+         tokenization_params,
+         np_token_type)
+        for interval in batch_intervals
+    ]
     with Pool(processes=num_cores) as pool:
         result_list = pool.starmap(process_batch_tokenize_segments_with_ids, params)
 
     tokenized_sets = {}
     for d in result_list:
         tokenized_sets.update(d)
-    
 
     return tokenized_sets
 
 
-def get_rectangular_array_from_tokenized_dataset(tokenized_segments_data: Dict[int, List[np.ndarray]], 
-                                                 shift: int, 
-                                                 max_token_count: int, 
-                                                 truncate_zeros: bool = True, 
-                                                 randomize: bool = True, 
-                                                 numpy_dtype: Type = np.uint16) -> Tuple[np.ndarray, pd.DataFrame]:
+def get_rectangular_array_from_tokenized_dataset(tokenized_segments_data: Dict[int, List[np.ndarray]], shift: int, max_token_count: int, truncate_zeros: bool = True, randomize: bool = True, numpy_dtype: Type = np.uint16) -> Tuple[np.ndarray, pd.DataFrame]:
     """Create a rectangular numpy array that can be used as input to a Language Model (LM) from tokenized segment data.
 
     :param tokenized_segments_data: A dictionary where keys are segment ids and values are lists of possible LCA tokenized vectors.
@@ -649,23 +669,20 @@ def pretty_print_overlapping_sequence(segment, segment_kmers, tokenizer_params):
     return lines
 
 
-def generate_kmers(abc, k):
-    """Generates all possible k-mers from a given alphabet.
+def generate_kmers(abc: Set[str], k: int) -> List[str]:
+    """
+    Generates all possible k-mers from a given alphabet.
 
     :param abc: The alphabet.
-    :type abc: set
+    :type abc: Set[str]
     :param k: Length of the k-mers.
     :type k: int
-    :returns: List of all possible k-mers.
+    :return: List of all possible k-mers.
     :rtype: List[str]
-
     """
     return [''.join(p) for p in product(abc, repeat=k)]
 
-def save_to_hdf(X: np.ndarray, hdf_file_path: str, 
-                   database: pd.DataFrame = None, 
-                   compression: bool = False, 
-                   pd_chunksize: int = 10_000_000) -> None:
+def save_to_hdf(X: np.ndarray, hdf_file_path: str, database: pd.DataFrame = None, compression: bool = False, pd_chunksize: int = 10_000_000) -> None:
     """Save a numpy array and an optional pandas DataFrame to an HDF5 file.
 
     :param X: 2D numpy array to be saved.
@@ -733,3 +750,175 @@ def save_to_hdf(X: np.ndarray, hdf_file_path: str,
                 chunk.to_hdf(hdf_file_path, f'database_{i}', format='table', data_columns=True,  mode='a')
 
         logging.info('Database addition finished!')
+
+
+
+def dataframe_to_seqrecords(
+    df: pd.DataFrame,
+    fastaidcol: str = 'test_fastaid',
+    sequencecol: str = 'sequence'
+) -> List[SeqRecord]:
+    """
+    Convert a DataFrame with sequence information into a list of SeqRecord objects.
+
+    :param df: DataFrame containing at least two columns: one for sequence IDs and one for sequences.
+    :type df: pd.DataFrame
+    :param fastaidcol: Name of the column in `df` that contains sequence IDs. Defaults to 'test_fastaid'.
+    :type fastaidcol: str, optional
+    :param sequencecol: Name of the column in `df` that contains nucleotide sequences. Defaults to 'sequence'.
+    :type sequencecol: str, optional
+    :return: A list of SeqRecord objects constructed from the DataFrame.
+    :rtype: List[SeqRecord]
+
+    Example:
+        >>> import pandas as pd
+        >>> data = {'test_fastaid': ['seq1', 'seq2'], 'sequence': ['ATCG', 'GGTA']}
+        >>> df = pd.DataFrame(data)
+        >>> seq_records = dataframe_to_seqrecords(df)
+        >>> seq_records[0].id
+        'seq1'
+    """
+    seq_records = []
+    for _, row in df.iterrows():
+        seq = Seq(row[sequencecol])
+        record = SeqRecord(seq, id=str(row[fastaidcol]), description="")
+        seq_records.append(record)
+    return seq_records
+
+
+def write_seqrecords_to_fasta(
+    seq_records: List[SeqRecord],
+    file_name: str
+) -> None:
+    """
+    Write a list of SeqRecord objects to a FASTA file.
+
+    :param seq_records: List of SeqRecord objects to be written to file.
+    :type seq_records: List[SeqRecord]
+    :param file_name: Name or path of the file to write the FASTA records.
+    :type file_name: str
+    :return: None
+    :rtype: None
+
+    Example:
+        >>> from Bio.Seq import Seq
+        >>> from Bio.SeqRecord import SeqRecord
+        >>> seq_records = [SeqRecord(Seq('ATCG'), id='seq1'), SeqRecord(Seq('GGTA'), id='seq2')]
+        >>> write_seqrecords_to_fasta(seq_records, 'output.fasta')
+    """
+    SeqIO.write(seq_records, file_name, "fasta")
+
+
+def dump_records_to_files(
+    seq_records: List[SeqRecord],
+    folder_path: str
+) -> None:
+    """
+    Write each SeqRecord to a separate FASTA file in the specified folder.
+
+    :param seq_records: List of SeqRecord objects to be written individually.
+    :type seq_records: List[SeqRecord]
+    :param folder_path: Path to the folder where the files should be saved.
+                        The folder will be created if it does not exist.
+    :type folder_path: str
+    :return: None
+    :rtype: None
+
+    Example:
+        >>> from Bio.Seq import Seq
+        >>> from Bio.SeqRecord import SeqRecord
+        >>> seq_records = [SeqRecord(Seq('ATCG'), id='seq1'), SeqRecord(Seq('GGTA'), id='seq2')]
+        >>> dump_records_to_files(seq_records, 'sequences_folder')
+    """
+    # Ensure the folder exists
+    os.makedirs(folder_path, exist_ok=True)
+
+    for record in seq_records:
+        file_path = os.path.join(folder_path, f"{record.id}.fasta")
+        SeqIO.write(record, file_path, "fasta")
+
+
+def split_seqrecords_to_fasta_chunks(
+    seq_records: List[SeqRecord],
+    output_folder: str,
+    chunk_size_mb: int = 10
+) -> None:
+    """
+    Splits a list of SeqRecord objects into multiple FASTA files, each less than a specified size in MB.
+
+    :param seq_records: List of SeqRecord objects to be split into chunks.
+    :type seq_records: List[SeqRecord]
+    :param output_folder: The output folder where the FASTA files will be saved.
+    :type output_folder: str
+    :param chunk_size_mb: Maximum size of each FASTA file in megabytes. Defaults to 10 MB.
+    :type chunk_size_mb: int, optional
+    :return: None
+    :rtype: None
+
+    Example:
+        >>> seq_records = [...]  # A list of SeqRecord objects
+        >>> split_seqrecords_to_fasta_chunks(seq_records, 'output_chunks', chunk_size_mb=5)
+    
+    Notes:
+        - The last chunk may be smaller than the specified `chunk_size_mb`.
+        - The function approximates the size of each record for chunking.
+    """
+    # Ensure output folder exists
+    os.makedirs(output_folder, exist_ok=True)
+
+    current_chunk = []
+    current_chunk_size = 0  # in bytes
+    chunk_id = 1  # Identifier for chunks/files
+    for record in seq_records:
+        # Approximate size of the record in bytes
+        record_size = len(str(record.seq)) + len(record.id) + 2  # Adding buffer for '>' and '\n'
+
+        # Check if adding this record exceeds the chunk size
+        if current_chunk_size + record_size > chunk_size_mb * 1024 * 1024:
+            file_path = os.path.join(output_folder, f"chunk_{chunk_id}.fasta")
+            SeqIO.write(current_chunk, file_path, "fasta")
+            current_chunk = []
+            current_chunk_size = 0
+            chunk_id += 1
+
+        current_chunk.append(record)
+        current_chunk_size += record_size
+
+    # Write any remaining records to the last chunk
+    if current_chunk:
+        file_path = os.path.join(output_folder, f"chunk_{chunk_id}.fasta")
+        SeqIO.write(current_chunk, file_path, "fasta")
+
+
+def filter_short_sequences(
+    seq_records: List[SeqRecord],
+    length_threshold: int
+) -> List[SeqRecord]:
+    """
+    Filters out SeqRecord objects with sequences shorter than a specified threshold.
+
+    :param seq_records: List of SeqRecord objects.
+    :type seq_records: List[SeqRecord]
+    :param length_threshold: The minimum length of sequences to be retained.
+    :type length_threshold: int
+    :return: A list of SeqRecord objects that meet or exceed the length threshold.
+    :rtype: List[SeqRecord]
+
+    Example:
+        >>> from Bio.Seq import Seq
+        >>> from Bio.SeqRecord import SeqRecord
+        >>> records = [
+        ...     SeqRecord(Seq('ATCG'), id='seq1'),
+        ...     SeqRecord(Seq('AT'), id='seq2')
+        ... ]
+        >>> filtered_records = filter_short_sequences(records, 3)
+        >>> len(filtered_records)
+        1
+        >>> filtered_records[0].id
+        'seq1'
+    """
+    filtered_records = [record for record in seq_records if len(record.seq) >= length_threshold]
+    return filtered_records
+
+
+
