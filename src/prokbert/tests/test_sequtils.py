@@ -390,6 +390,164 @@ class TestSaveToHDF(unittest.TestCase):
         if os.path.exists(self.temp_hdf_file):
             os.remove(self.temp_hdf_file)
 
+class TestDataFrameToSeqRecords(unittest.TestCase):
+
+    def test_basic_functionality(self):
+        df = pd.DataFrame({
+            'sequence_id': ['seq1', 'seq2'],
+            'sequence': ['ATCG', 'GGTA']
+        })
+        records = dataframe_to_seqrecords(df, fastaidcol='sequence_id')
+        self.assertEqual(len(records), 2)
+        self.assertEqual(records[0].id, 'seq1')
+        self.assertEqual(str(records[0].seq), 'ATCG')
+
+    def test_missing_columns(self):
+        df = pd.DataFrame({'sequence': ['ATCG']})
+        with self.assertRaises(KeyError):
+            dataframe_to_seqrecords(df, fastaidcol='sequence_id')
+
+    def test_empty_dataframe(self):
+        df = pd.DataFrame(columns=['sequence_id', 'sequence'])
+        records = dataframe_to_seqrecords(df, fastaidcol='sequence_id')
+        self.assertEqual(records, [])
+
+class TestWriteSeqRecordsToFasta(unittest.TestCase):
+
+    def setUp(self):
+        self.seq_records = [
+            SeqRecord(Seq('ATCG'), id='seq1'),
+            SeqRecord(Seq('GGTA'), id='seq2')
+        ]
+        self.temp_fasta_file = tempfile.mktemp(suffix=".fasta")
+
+    def test_basic_functionality(self):
+        write_seqrecords_to_fasta(self.seq_records, self.temp_fasta_file)
+        records = list(SeqIO.parse(self.temp_fasta_file, 'fasta'))
+        self.assertEqual(len(records), 2)
+        self.assertEqual(records[0].id, 'seq1')
+
+    def test_empty_list(self):
+        write_seqrecords_to_fasta([], self.temp_fasta_file)
+        records = list(SeqIO.parse(self.temp_fasta_file, 'fasta'))
+        self.assertEqual(len(records), 0)
+
+    def tearDown(self):
+        if os.path.exists(self.temp_fasta_file):
+            os.remove(self.temp_fasta_file)
+
+
+class TestDumpRecordsToFiles(unittest.TestCase):
+
+    def setUp(self):
+        self.seq_records = [
+            SeqRecord(Seq('ATCG'), id='seq1'),
+            SeqRecord(Seq('GGTA'), id='seq2')
+        ]
+        self.temp_dir = tempfile.mkdtemp()
+
+    def test_basic_functionality(self):
+        dump_records_to_files(self.seq_records, self.temp_dir)
+        files = os.listdir(self.temp_dir)
+        self.assertIn('seq1.fasta', files)
+        self.assertIn('seq2.fasta', files)
+
+    def test_folder_creation(self):
+        shutil.rmtree(self.temp_dir)
+        dump_records_to_files(self.seq_records, self.temp_dir)
+        self.assertTrue(os.path.exists(self.temp_dir))
+
+    def tearDown(self):
+        shutil.rmtree(self.temp_dir)           
+
+class TestSplitSeqRecordsToFastaChunks(unittest.TestCase):
+
+    def setUp(self):
+        self.seq_records = [SeqRecord(Seq('A' * 100000), id=f'seq{i}') for i in range(5)]
+        self.output_folder = tempfile.mkdtemp()
+
+    def test_basic_functionality(self):
+        split_seqrecords_to_fasta_chunks(
+            self.seq_records,
+            self.output_folder,
+            chunk_size_mb=0.1  # 0.1 MB
+        )
+        files = os.listdir(self.output_folder)
+        self.assertTrue(len(files) > 1)
+
+    def test_empty_list(self):
+        split_seqrecords_to_fasta_chunks(
+            [],
+            self.output_folder,
+            chunk_size_mb=0.1
+        )
+        files = os.listdir(self.output_folder)
+        self.assertEqual(len(files), 0)
+
+    def tearDown(self):
+        shutil.rmtree(self.output_folder)
+
+class TestFilterShortSequences(unittest.TestCase):
+
+    def test_all_sequences_below_threshold(self):
+        records = [
+            SeqRecord(Seq('AT'), id='seq1'),
+            SeqRecord(Seq('CG'), id='seq2')
+        ]
+        filtered = filter_short_sequences(records, 3)
+        self.assertEqual(filtered, [])
+
+    def test_sequences_at_threshold(self):
+        records = [
+            SeqRecord(Seq('ATC'), id='seq1'),
+            SeqRecord(Seq('GTA'), id='seq2')
+        ]
+        filtered = filter_short_sequences(records, 3)
+        self.assertEqual(len(filtered), 2)       
+
+class TestGetRectangularArrayFromTokenizedDataset(unittest.TestCase):
+
+    def setUp(self):
+        self.tokenized_segments_data = {
+            1: [np.array([2, 100, 101, 3])],
+            2: [np.array([2, 200, 201, 202, 3])],
+            3: [np.array([2, 300, 3])]
+        }
+        self.shift = 1
+        self.max_token_count = 10
+
+    def test_basic_functionality(self):
+        X, df = get_rectangular_array_from_tokenized_dataset(
+            self.tokenized_segments_data,
+            self.shift,
+            self.max_token_count,
+            truncate_zeros=False,
+            randomize=False
+        )
+        self.assertIsInstance(X, np.ndarray)
+        self.assertEqual(X.shape[0], 3)
+        self.assertIsInstance(df, pd.DataFrame)
+        self.assertEqual(len(df), 3)
+
+    def test_truncate_zeros(self):
+        X, _ = get_rectangular_array_from_tokenized_dataset(
+            self.tokenized_segments_data,
+            self.shift,
+            self.max_token_count,
+            truncate_zeros=True
+        )
+        self.assertLessEqual(X.shape[1], self.max_token_count)
+
+    def test_inconsistent_lengths(self):
+        # Adjust data to have inconsistent lengths
+        self.tokenized_segments_data[4] = [np.array([2, 400, 401, 402, 403, 3])]
+        X, df = get_rectangular_array_from_tokenized_dataset(
+            self.tokenized_segments_data,
+            self.shift,
+            self.max_token_count,
+            truncate_zeros=False
+        )
+        self.assertEqual(X.shape[0], 4)
 
 if __name__ == '__main__':
     unittest.main()

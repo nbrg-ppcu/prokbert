@@ -466,7 +466,7 @@ class ProkBERTTrainer(Trainer):
         self.lr_scheduler = scheduler
 
 
-def get_torch_data_from_segmentdb_classification(tokenizer, segmentdb, L=None):
+def get_torch_data_from_segmentdb_classification(tokenizer, segmentdb, L=None, randomize=True):
 
     if L is None:
         L = tokenizer.tokenization_params['token_limit']-2
@@ -479,7 +479,7 @@ def get_torch_data_from_segmentdb_classification(tokenizer, segmentdb, L=None):
     X, torchdb = get_rectangular_array_from_tokenized_dataset(tokenized_sets, 
                                                 shift=tokenizer.tokenization_params['shift'],
                                                 max_token_count=L+2,
-                                                randomize=True,
+                                                randomize=randomize,
                                                 truncate_zeros = True,
                                                 numpy_dtype = np.int32)
     
@@ -599,3 +599,58 @@ def check_amd_gpu():
     print("Checking for AMD GPU is not directly supported in PyTorch as of now.")
     print("For AMD GPU support, ensure PyTorch is installed with ROCm and consult the ROCm documentation.")
 
+
+def weighted_voting(df):
+    """
+    Performs weighted voting based on probabilities for each segment within the same sequence.
+    
+    Parameters:
+    - df: DataFrame with columns ['sequence_id', 'y', 'p_class_0', 'p_class1']
+    
+    Returns:
+    - DataFrame with columns ['sequence_id', 'y_true', 'y_pred', 'score_class_0', 'score_class_1']
+    """
+    # Step 1: Calculate mean probabilities for each class by sequence_id
+    mean_probs = df.groupby('sequence_id')[['p_class_0', 'p_class1']].mean()
+    
+    # Step 2: Determine predicted class based on higher mean probability
+    mean_probs['y_pred'] = mean_probs.idxmax(axis=1).map({'p_class_0': 0, 'p_class1': 1})
+    
+    # Step 3: Join with original labels to get y_true for each sequence_id
+    # Assuming 'y' is the same for all segments within the same sequence
+    y_true = df[['sequence_id', 'y']].drop_duplicates().set_index('sequence_id')
+    result_df = mean_probs.join(y_true)
+    
+    # Step 4: Rename and reorder columns to match required output
+    result_df.rename(columns={'y': 'y_true', 'p_class_0': 'score_class_0', 'p_class1': 'score_class_1'}, inplace=True)
+    result_df = result_df.reset_index()[['sequence_id', 'y_true', 'y_pred', 'score_class_0', 'score_class_1']]
+    
+    return result_df
+
+
+
+def logits_to_sequence_predictions(df):
+    # Calculate the mean logits for each class by sequence_id
+    mean_logits = df.groupby('sequence_id')[['logit_y0', 'logit_y1']].mean().reset_index()
+    
+    # Convert the mean logits to a numpy array for softmax computation
+    logits_array = mean_logits[['logit_y0', 'logit_y1']].to_numpy()
+    # Apply softmax to the mean logits to get probabilities
+    probabilities = softmax(logits_array, axis=1)
+    
+    # Get the sequence-level label (y_true) by taking the first occurrence since it should be the same for all segments of a sequence
+    y_true = df.groupby('sequence_id')['y'].first().reset_index()['y']
+    
+    # Determine sequence-level prediction (y_pred) based on the highest probability
+    y_pred = np.argmax(probabilities, axis=1)
+    
+    # Create a results DataFrame
+    results_df = pd.DataFrame({
+        'sequence_id': mean_logits['sequence_id'],
+        'y_true': y_true,
+        'y_pred': y_pred,
+        'score_class_0': probabilities[:, 0],
+        'score_class_1': probabilities[:, 1]
+    })
+    
+    return results_df

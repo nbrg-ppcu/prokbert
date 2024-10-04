@@ -12,6 +12,20 @@ from copy import deepcopy
 import re
 import sys
 
+def add_hf_args_to_parser(parser):
+    # Create a temporary TrainingArguments to access default values and descriptions
+    hf_args = TrainingArguments(output_dir="/tmp")  # Dummy output_dir
+    # Iterate over all public attributes
+    for attr in dir(hf_args):
+        if not attr.startswith("_"):
+            default = getattr(hf_args, attr)
+            # You can add more sophisticated handling based on attribute types here
+            if isinstance(default, (int, float, str, bool)):
+                help_str = f"Auto-generated help for {attr}"
+                parser.add_argument(f"--{attr}", type=type(default), default=default, help=help_str)
+
+    return parser
+
 class BaseConfig:
     """Base class for managing and validating configurations."""
 
@@ -312,6 +326,8 @@ class BaseConfig:
                 """
                 # Add argument to the group
                 group.add_argument(f'--{param_name}', **kwargs)
+        #parser = add_hf_args_to_parser(parser)
+
         return parser
 
 
@@ -637,7 +653,52 @@ class ProkBERTConfig(BaseConfig):
         self.finetuning_params = self.get_set_parameters('finetuning', parameters)
 
         return self.finetuning_params
-    
+
+
+    def get_inference_parameters(self):
+        # Instantiate TrainingArguments to access default values
+        hf_defaults = TrainingArguments(output_dir="/tmp")  # Dummy output_dir for initialization
+
+        return {
+            'inference': {
+                'fastain': {
+                    'default': None,
+                    'type': 'str',
+                    'description': 'Path to the input data for inference.'
+                },
+                'out': {
+                    'default': None,
+                    'type': 'str',
+                    'description': 'Output path for the inference results.'
+                },
+                'per_device_eval_batch_size': {
+                    'default': hf_defaults.per_device_eval_batch_size,
+                    'type': 'int',
+                    'description': 'Batch size per device during evaluation.'
+                },
+                'ddp_backend': {
+                    'default': hf_defaults.ddp_backend,
+                    'type': 'str',
+                    'description': 'The backend to use for distributed training.'
+                },
+                'dataloader_drop_last': {
+                    'default': hf_defaults.dataloader_drop_last,
+                    'type': 'bool',
+                    'description': 'Drop the last incomplete batch if it is not divisible by the batch size.'
+                },
+                'torch_compile': {
+                    'default': getattr(hf_defaults, 'torch_compile', False),  # Fallback for compatibility
+                    'type': 'bool',
+                    'description': 'Whether to use TorchScript’s JIT compilation to accelerate training.'
+                },
+                'torch_compile_mode': {
+                    'default': getattr(hf_defaults, 'torch_compile_mode', 'eager'),  # Fallback for compatibility
+                    'type': 'str',
+                    'description': 'The JIT mode to use for compiling PyTorch operations.'
+                }
+            }
+        }
+
 
     def get_cmd_arg_parser(self, keyset=[]) -> tuple[argparse.ArgumentParser, dict, dict]:
         """
@@ -663,6 +724,7 @@ class ProkBERTConfig(BaseConfig):
         else:
             trainin_conf_keysets = keyset
 
+        inference_params = self.get_inference_parameters()
         seq_config = deepcopy(self.def_seq_config.parameters)
         default_other_config = deepcopy(self.parameters)
         combined_params = {}
@@ -670,7 +732,7 @@ class ProkBERTConfig(BaseConfig):
             combined_params[k] = v
         for k in trainin_conf_keysets:
             combined_params[k] = default_other_config[k]
-
+        combined_params.update(inference_params)
         combined_params, cmd_argument2group_param, group2param2cmdarg = BaseConfig.rename_non_unique_parameters(combined_params)
         parser = BaseConfig.create_parser(combined_params)
 
