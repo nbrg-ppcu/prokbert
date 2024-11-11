@@ -278,16 +278,17 @@ def evaluate_binary_classification_bert_build_pred_results(logits, labels):
     # Calculate predictions
     predictions = torch.argmax(logits, dim=-1)
     
-    # Convert to numpy for concatenation
-    predictions_np = predictions.numpy() if predictions.is_cuda else predictions.detach().cpu().numpy()
-    labels_np = labels.numpy() if labels.is_cuda else labels.detach().cpu().numpy()
-    logits_np = logits.numpy() if logits.is_cuda else logits.detach().cpu().numpy()
+    # Move tensors to CPU and convert to numpy for concatenation
+    predictions_np = predictions.cpu().numpy()
+    labels_np = labels.cpu().numpy()
+    logits_np = logits.cpu().numpy()
     
     # Prepare the results
     pred = np.stack((labels_np, predictions_np), axis=1)
     pred_results = np.concatenate((pred, logits_np), axis=1)
     
     return pred_results
+
 
 
 def evaluate_binary_classification_bert(pred_results: np.ndarray) -> Tuple[Dict, List]:
