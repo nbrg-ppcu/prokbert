@@ -240,7 +240,30 @@ class LCATokenizer(PreTrainedTokenizer):
         """
         if token_ids_1 is None:
             return [self.cls_token_id] + token_ids_0 + [self.sep_token_id]
-        return [self.cls_token_id] + token_ids_0 + [self.sep_token_id] + token_ids_1 + [self.sep_token_id]
+        
+        input_ids = [self.cls_token_id] + token_ids_0 + [self.sep_token_id] + token_ids_1 + [self.sep_token_id]
+        #token_type_ids = [0 for i in range(len(input_ids))]
+        return input_ids
+    
+    def create_token_type_ids_from_sequences(
+        self, token_ids_0: List[int], token_ids_1: Optional[List[int]] = None
+    ) -> List[int]:
+        """
+        Create the token type IDs corresponding to the sequences passed. [What are token type
+        IDs?](../glossary#token-type-ids)
+
+        Should be overridden in a subclass if the model has a special way of building those.
+
+        Args:
+            token_ids_0 (`List[int]`): The first tokenized sequence.
+            token_ids_1 (`List[int]`, *optional*): The second tokenized sequence.
+
+        Returns:
+            `List[int]`: The token type ids.
+        """
+        if token_ids_1 is None:
+            return (len(token_ids_0)+2) * [0]
+        return [0] * len(token_ids_0) + [1] * len(token_ids_1)
     
     def batch_encode_plus(self, *args, **kwargs):
         """
