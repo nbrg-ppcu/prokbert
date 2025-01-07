@@ -2,12 +2,16 @@ import collections
 import os
 import json
 from copy import deepcopy
-from typing import List, Optional, Tuple, Dict
+from typing import List, Optional, Tuple, Dict, Set
 from transformers import PreTrainedTokenizer
-from transformers.utils.hub import cached_file, hf_hub_url
+from transformers.utils import logging
+from itertools import product
+logger = logging.get_logger(__name__)
 
-from .config_utils import SeqConfig
-from .sequtils import generate_kmers, lca_kmer_tokenize_segment
+
+
+#from .config_utils import SeqConfig
+#from .sequtils import generate_kmers, lca_kmer_tokenize_segment
 
 # Define the names of the vocabulary files
 VOCAB_FILES_NAMES = {"vocab_file": "vocab.txt"}
@@ -35,6 +39,20 @@ PRETRAINED_INIT_CONFIGURATION = {
     "lca-mini-k6s2": {"do_upper_case": True},
 }
 
+def generate_kmers(abc: Set[str], k: int) -> List[str]:
+    """
+    Generates all possible k-mers from a given alphabet.
+
+    :param abc: The alphabet.
+    :type abc: Set[str]
+    :param k: Length of the k-mers.
+    :type k: int
+    :return: List of all possible k-mers.
+    :rtype: List[str]
+    """
+    return [''.join(p) for p in product(abc, repeat=k)]
+
+
 # Utility function to load vocabulary from a file
 def load_vocab(vocab_file):
     """Loads a vocabulary file into a dictionary."""
@@ -44,6 +62,59 @@ def load_vocab(vocab_file):
     for index, token in enumerate(tokens):
         vocab[token.rstrip("\n")] = index
     return vocab
+
+
+def resolve_vocab_file(vocab_file: Optional[str], kmer) -> str:
+    """
+    Resolves the path to the vocabulary file. If not provided, tries to load it
+    from the installed prokbert package or download it from the GitHub repository.
+
+    Args:
+        vocab_file (str, optional): Path to the vocabulary file.
+
+    Returns:
+        str: Path to the resolved vocabulary file.
+
+    Raises:
+        FileNotFoundError: If the vocabulary file cannot be resolved.
+    """
+    if vocab_file and os.path.exists(vocab_file):
+        return vocab_file
+
+    # Attempt 1: Check if prokbert is installed
+    try:
+        import prokbert
+        package_dir = os.path.dirname(prokbert.__file__)
+        vocab_path = os.path.join(package_dir, 'data/prokbert_vocabs/', f'prokbert-base-dna{kmer}', 'vocab.txt')
+
+        print(vocab_path)
+        #vocabfile_path = join(self.current_path, 'data/prokbert_vocabs/', f'prokbert-base-dna{act_kmer}', 'vocab.txt')
+
+
+        if os.path.exists(vocab_path):
+            logger.info(f"Loaded vocab file from installed prokbert package: {vocab_path}")
+            return vocab_path
+    except ImportError:
+        logger.info("Prokbert package not installed, proceeding to download vocab.txt.")
+
+    # Attempt 2: Download from GitHub repository
+    github_url = "https://raw.githubusercontent.com/username/prokbert/main/vocab.txt"
+    temp_vocab_path = os.path.join(os.getcwd(), "vocab.txt")
+    try:
+        import requests
+
+        response = requests.get(github_url, timeout=10)
+        response.raise_for_status()  # Raise an error for HTTP failures
+        with open(temp_vocab_path, "w", encoding="utf-8") as f:
+            f.write(response.text)
+        logger.info(f"Downloaded vocab.txt from GitHub to: {temp_vocab_path}")
+        return temp_vocab_path
+    except requests.RequestException as e:
+        raise FileNotFoundError(
+            "Could not find or download vocab.txt. Ensure prokbert is installed or "
+            "provide a valid vocab file path. Error: {e}"
+        ) from e
+    
 
 class LCATokenizer(PreTrainedTokenizer):
     """
@@ -72,41 +143,50 @@ class LCATokenizer(PreTrainedTokenizer):
     default_cls_token = "[CLS]"
     default_mask_token = "[MASK]"
 
+    vocab_files_names = {"vocab_file": "vocab.txt"}
+
+
+    
     def __init__(
         self,
-        config: Dict = {},
+        vocab_file: Optional[str] = None,
+        kmer: int = 6,
+        shift: int = 1,
         operation_space: str = "kmer",
         **kwargs,
     ):
         """
-        Initializes the LCATokenizer with configuration and operation space.
+        Initializes the LCATokenizer.
 
         Args:
-            config (dict): Tokenization parameters like k-mer size and shift.
+            vocab_file (str): Path to the vocabulary file.
+            kmer (int): K-mer size for tokenization.
+            shift (int): Shift size for tokenization.
             operation_space (str): Defines operation mode ('kmer' or 'sequence').
             kwargs: Additional arguments for PreTrainedTokenizer.
         """
-        self.defconfig = SeqConfig()
-        config = self.defconfig.get_and_set_tokenization_parameters(config)
-        self.config = config
+        # Load vocabulary directly from the vocab file
+        self.config = {}
+        resolved_vocab_file = resolve_vocab_file(vocab_file, kmer)
+        self.vocab = load_vocab(resolved_vocab_file)
+        #self.vocab = load_vocab(vocab_file)
+        self.id2token = {v: k for k, v in self.vocab.items()}
+        self.kmer = kmer
+        self.shift = shift
         self.operation_space = operation_space
 
-        # Set default tokens
-        kwargs.setdefault("cls_token", self.default_cls_token)
-        kwargs.setdefault("unk_token", self.default_unk_token)
-        kwargs.setdefault("sep_token", self.default_sep_token)
-        kwargs.setdefault("pad_token", self.default_pad_token)
-        kwargs.setdefault("mask_token", self.default_mask_token)
+        self.config["kmer"] = kmer
+        self.config["shift"] = shift
+        self.config["operation_space"] = operation_space
 
-        # Load vocabulary
-        vocab_file = self.config["vocabfile"]
-        self.vocab = self.config["vocabmap"]
-        self.id2token = {v: k for k, v in self.vocab.items()}
-        self.max_len = self.config["max_segment_length"]
-
+        # Special tokens
+        kwargs.setdefault("cls_token", "[CLS]")
+        kwargs.setdefault("sep_token", "[SEP]")
+        kwargs.setdefault("pad_token", "[PAD]")
+        kwargs.setdefault("unk_token", "[UNK]")
+        kwargs.setdefault("mask_token", "[MASK]")
+        self.special_tokens = [kwargs["cls_token"], kwargs["sep_token"], kwargs["pad_token"], kwargs["unk_token"], kwargs["mask_token"]]
         super().__init__(**kwargs)
-
-        # Handle extended vocabulary for sequence mode
         if self.operation_space == 'sequence':
             token_extension = sorted(list(set(generate_kmers(LCATokenizer.extended_nucleotide_abc, self.config['kmer'])) - \
                  set(generate_kmers(LCATokenizer.nucleotide_abc, self.config['kmer'])) ))
@@ -132,10 +212,13 @@ class LCATokenizer(PreTrainedTokenizer):
         self.cls_token = '[CLS]'
         self.pad_token = '[PAD]'
         self.mask_token = '[MASK]'
-        self.special_tokens = list(self.special_tokens_map.values())     
+        self.special_tokens = list(self.special_tokens_map.values()) 
 
 
+    def get_vocab(self) -> Dict[str, int]:
+        return self.vocab
 
+    
     def _tokenize(self, text, **kwargs):
         """
         Tokenizes the input text using LCA tokenization with an optional offset.
@@ -152,7 +235,7 @@ class LCATokenizer(PreTrainedTokenizer):
         #if offset < 0 or offset >= self.config.get("shift", 1):
         #    raise ValueError(f"Invalid offset: {offset}. Must be between 0 and {self.config['shift'] - 1}.")
 
-        return lca_kmer_tokenize_segment(text, offset, self.config)
+        return self.lca_kmer_tokenize_segment(text, offset)
 
     def _convert_token_to_id(self, token: str) -> int:
         """
@@ -192,7 +275,22 @@ class LCATokenizer(PreTrainedTokenizer):
         """
         return len(self.vocab)
 
+    def lca_kmer_tokenize_segment(self, segment: str, offset: int):
+        # calculate the tokenization for one offset value
+        shift = self.shift
+        kmer = self.kmer
+        #max_segment_length = params['max_segment_length']
+        #max_unknown_token_proportion = params['max_unknown_token_proportion']
+        #kmer = params['kmer']
+        #token_limit = params['token_limit']
+        #vocabmap = params['vocabmap']
+        #add_special_token = params['add_special_token']
+        #if len(segment) > max_segment_length:
+        #    raise(ValueError(f'The segment is longer {len(segment)} then the maximum allowed segment length ({max_segment_length}). '))
+                
+        kmers = [segment[i:i + kmer] for i in range(offset, len(segment) - kmer + 1, shift)]
 
+        return kmers
 
     def tokenize(self, text: str, **kwargs) -> List[str]:
         """
@@ -301,63 +399,52 @@ class LCATokenizer(PreTrainedTokenizer):
                 f.write(token + "\n")
         return (vocab_file_path,)
 
+
+    @property
+    def vocab_size(self) -> int:
+        """
+        Returns the size of the vocabulary (number of tokens in `vocab.txt`).
+
+        Returns:
+            int: The size of the vocabulary.
+        """
+        return len(self.vocab)
+
     def save_pretrained(self, save_directory: str, **kwargs):
         """
-        Saves the tokenizer configuration and vocabulary to a directory.
+        Save the tokenizer configuration and vocabulary to a directory.
 
         Args:
             save_directory (str): Directory to save the tokenizer files.
+            kwargs: Additional arguments for saving.
         """
         if not os.path.exists(save_directory):
             os.makedirs(save_directory)
+
+        # Save the base tokenizer configuration
         super().save_pretrained(save_directory, **kwargs)
 
+        # Path to the tokenizer configuration file
         tokenizer_config_path = os.path.join(save_directory, "tokenizer_config.json")
+
+        # Load the existing configuration or create a new one
         if os.path.exists(tokenizer_config_path):
-            with open(tokenizer_config_path, "r") as f:
+            with open(tokenizer_config_path, "r", encoding="utf-8") as f:
                 tokenizer_config = json.load(f)
         else:
             tokenizer_config = {}
 
-        tokenizer_config.update({
-            "kmer": self.config.get("kmer", 6),
-            "shift": self.config.get("shift", 1),
-        })
 
-        with open(tokenizer_config_path, "w") as f:
+        # Add custom fields for AutoTokenizer and remote code
+        tokenizer_config["auto_map"] = {
+         "AutoTokenizer": "src.prokbert.tokenizer.LCATokenizer"
+         }
+        tokenizer_config["repository"] = "https://github.com/nbrg-ppcu/prokbert"
+        tokenizer_config["trust_remote_code"] = True
+        tokenizer_config["kmer"] = self.kmer
+        tokenizer_config["shift"] = self.shift
+        tokenizer_config["operation_space"] = self.operation_space
+        # Save the updated configuration
+        with open(tokenizer_config_path, "w", encoding="utf-8") as f:
             json.dump(tokenizer_config, f, indent=2)
-
-    @classmethod
-    def from_pretrained(cls, pretrained_model_name_or_path, **kwargs):
-        """
-        Loads a tokenizer from the pretrained model directory or Hugging Face Hub.
-
-        Args:
-            pretrained_model_name_or_path (str): Path or model name on Hugging Face Hub.
-            kwargs: Additional arguments for initialization.
-
-        Returns:
-            LCATokenizer: The loaded tokenizer instance.
-        """
-        tokenizer_config_file = hf_hub_url(
-            pretrained_model_name_or_path, filename="tokenizer_config.json"
-        )
-        resolved_tokenizer_config_file = cached_file(
-            pretrained_model_name_or_path, filename="tokenizer_config.json"
-        )
-
-        with open(resolved_tokenizer_config_file, "r") as f:
-            tokenizer_config = json.load(f)
-
-        kmer = tokenizer_config.pop("kmer", 6)
-        shift = tokenizer_config.pop("shift", 1)
-        base_tokenization_config = {'kmer': kmer, 'shift': shift}
-        defconfig = SeqConfig()
-        config = defconfig.get_and_set_tokenization_parameters(base_tokenization_config)
-
-        tokenizer = super().from_pretrained(pretrained_model_name_or_path, **kwargs)
-        tokenizer.config = config
-
-        return tokenizer
-
 
