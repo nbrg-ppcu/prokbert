@@ -436,11 +436,11 @@ class LCATokenizer(PreTrainedTokenizer):
 
 
         # Add custom fields for AutoTokenizer and remote code
-        tokenizer_config["auto_map"] = {
-         "AutoTokenizer": "src.prokbert.tokenizer.LCATokenizer"
-         }
-        tokenizer_config["repository"] = "https://github.com/nbrg-ppcu/prokbert"
-        tokenizer_config["trust_remote_code"] = True
+        #tokenizer_config["auto_map"] = {
+        # "AutoTokenizer": "src.prokbert.tokenizer.LCATokenizer"
+        #}
+        #tokenizer_config["repository"] = "https://github.com/nbrg-ppcu/prokbert"
+        #tokenizer_config["trust_remote_code"] = True
         tokenizer_config["kmer"] = self.kmer
         tokenizer_config["shift"] = self.shift
         tokenizer_config["operation_space"] = self.operation_space
