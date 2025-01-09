@@ -130,18 +130,6 @@ class BertForBinaryClassificationWithPooling(nn.Module):
 
 
 
-class OldProkBertConfig(MegatronBertConfig):
-
-    model_type = "prokbert"
-    def __init__(
-        self,
-        kmer: int = 6, 
-        shift: int = 1,
-        **kwargs,
-    ):
-        super().__init__(**kwargs)
-        self.kmer=kmer
-        self.shift=shift
 
 class ProkBertConfig(MegatronBertConfig):
     model_type = "prokbert"
