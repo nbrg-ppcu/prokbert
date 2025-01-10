@@ -9,7 +9,7 @@ import torch.nn.functional as F
 from transformers import MegatronBertConfig, MegatronBertModel, MegatronBertForMaskedLM, MegatronBertPreTrainedModel, PreTrainedModel
 from transformers.modeling_outputs import SequenceClassifierOutput
 from transformers.utils.hub import cached_file
-from training_utils import compute_metrics_eval_prediction
+#from prokbert.training_utils import compute_metrics_eval_prediction
 
 class BertForBinaryClassificationWithPooling(nn.Module):
     """
@@ -271,7 +271,9 @@ class ProkBertForSequenceClassification(ProkBertPreTrainedModel):
             # Classification head
             pooled_output = self.dropout(pooled_output)
             logits = self.classifier(pooled_output)
-            loss = self.loss_fct(logits.view(-1, 2), labels.view(-1))
+            loss = None
+            if labels is not None:
+                loss = self.loss_fct(logits.view(-1, self.config.num_labels), labels.view(-1))
 
             classification_output = SequenceClassifierOutput(
                 loss=loss,
