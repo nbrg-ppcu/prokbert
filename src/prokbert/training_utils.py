@@ -655,3 +655,67 @@ def logits_to_sequence_predictions(df):
     })
     
     return results_df
+
+
+def guess_initial_batch_size_komondor_prokbert(basemodel, actL):
+    
+    standard_params = {
+        256: {'batch_size': 512, 'gradient_accumulation_steps': 1},
+        512: {'batch_size': 196, 'gradient_accumulation_steps': 1},
+        1022: {'batch_size': 64, 'gradient_accumulation_steps': 2},
+    }
+
+    long_params = {
+        256: {'batch_size': 512, 'gradient_accumulation_steps': 1},
+        512: {'batch_size': 384, 'gradient_accumulation_steps': 1},
+        1022: {'batch_size': 160, 'gradient_accumulation_steps': 1},
+        1536: {'batch_size': 32, 'gradient_accumulation_steps': 2},
+    }
+    standard_params = {
+        256: {'batch_size': 256, 'gradient_accumulation_steps': 1},
+        512: {'batch_size': 128, 'gradient_accumulation_steps': 1},
+        1024: {'batch_size': 32, 'gradient_accumulation_steps': 2},
+
+
+
+
+    }
+
+    long_params = {
+        256: {'batch_size': 384, 'gradient_accumulation_steps': 1},
+        512: {'batch_size': 256, 'gradient_accumulation_steps': 1},
+        1024: {'batch_size': 128, 'gradient_accumulation_steps': 1},
+        1536: {'batch_size': 64, 'gradient_accumulation_steps': 2},
+    }
+
+
+    # Use long_params if model is a long variant, otherwise use standard_params
+    if 'prokbert-mini-long' in basemodel:
+        param_mapping = long_params
+    else:
+        param_mapping = standard_params
+
+    # Ensure actL 1536 only for long model variants
+    if actL == 1536 and 'prokbert-mini-long' not in basemodel:
+        raise ValueError("Segment length 1536 is only valid for prokbert-mini-long.")
+
+    # Sorted thresholds for parameter selection
+    keys = sorted(param_mapping.keys())
+
+    # Select the largest threshold that does not exceed actL
+    if actL <= keys[0]:
+        chosen_key = keys[0]
+    else:
+        chosen_key = None
+        for k in keys:
+            if k <= actL:
+                chosen_key = k
+            else:
+                break
+
+    if chosen_key is None:
+        raise ValueError(f"Invalid segment length {actL} for the model {basemodel}.")
+
+    batch_size = param_mapping[chosen_key]['batch_size']
+    gradient_accumulation_steps = param_mapping[chosen_key]['gradient_accumulation_steps']
+    return chosen_key, batch_size, gradient_accumulation_steps
