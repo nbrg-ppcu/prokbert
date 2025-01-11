@@ -660,6 +660,20 @@ def logits_to_sequence_predictions(df):
 def guess_initial_batch_size_komondor_prokbert(basemodel, actL):
     
     standard_params = {
+        256: {'batch_size': 256, 'gradient_accumulation_steps': 1},
+        512: {'batch_size': 128, 'gradient_accumulation_steps': 1},
+        1024: {'batch_size': 32, 'gradient_accumulation_steps': 2},
+    }
+
+    long_params = {
+        256: {'batch_size': 384, 'gradient_accumulation_steps': 1},
+        512: {'batch_size': 256, 'gradient_accumulation_steps': 1},
+        1024: {'batch_size': 128, 'gradient_accumulation_steps': 1},
+        1536: {'batch_size': 64, 'gradient_accumulation_steps': 2},
+    }
+
+
+    standard_params = {
         256: {'batch_size': 512, 'gradient_accumulation_steps': 1},
         512: {'batch_size': 196, 'gradient_accumulation_steps': 1},
         1022: {'batch_size': 64, 'gradient_accumulation_steps': 2},
@@ -670,22 +684,6 @@ def guess_initial_batch_size_komondor_prokbert(basemodel, actL):
         512: {'batch_size': 384, 'gradient_accumulation_steps': 1},
         1022: {'batch_size': 160, 'gradient_accumulation_steps': 1},
         1536: {'batch_size': 32, 'gradient_accumulation_steps': 2},
-    }
-    standard_params = {
-        256: {'batch_size': 256, 'gradient_accumulation_steps': 1},
-        512: {'batch_size': 128, 'gradient_accumulation_steps': 1},
-        1024: {'batch_size': 32, 'gradient_accumulation_steps': 2},
-
-
-
-
-    }
-
-    long_params = {
-        256: {'batch_size': 384, 'gradient_accumulation_steps': 1},
-        512: {'batch_size': 256, 'gradient_accumulation_steps': 1},
-        1024: {'batch_size': 128, 'gradient_accumulation_steps': 1},
-        1536: {'batch_size': 64, 'gradient_accumulation_steps': 2},
     }
 
 
