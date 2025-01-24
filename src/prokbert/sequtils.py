@@ -113,6 +113,47 @@ def load_contigs(
         sequences = pd.DataFrame(sequences, columns=df_cols)
     return sequences
 
+def find_nucleotide_fasta_files(
+    directory: Union[str, pathlib.Path]
+) -> List[str]:
+    """
+    Recursively finds nucleotide FASTA files in a given directory.
+
+    :param directory: Path to the directory to search for FASTA files.
+    :type directory: Union[str, pathlib.Path]
+    :return: List of full file paths to FASTA files containing nucleotide sequences.
+    :rtype: List[str]
+
+    Searches recursively through subdirectories, filtering for files with common FASTA extensions
+    and verifying nucleotide content by checking sequence characters.
+
+    Example:
+        >>> nucleotide_files = find_nucleotide_fasta_files('/path/to/sequences')
+        >>> print(nucleotide_files)
+        ['/path/to/sequences/file1.fasta', '/path/to/sequences/subdirectory/file2.fa']
+    """
+    nucleotide_fasta_files = []
+    
+    for root, _, files in os.walk(directory):
+        for file in files:
+            # Check file extension (common FASTA extensions)
+            if file.lower().endswith(('.fasta', '.fa', '.fna', '.ffn', '.fas')):
+                full_path = os.path.join(root, file)
+                
+                # Verify if file contains nucleotide sequences
+                try:
+                    with open(full_path, 'r') as handle:
+                        first_record = next(SeqIO.parse(handle, 'fasta'))
+                        
+                        # Basic nucleotide sequence check
+                        if set(first_record.seq).issubset(set('ACGTNacgtn')):
+                            nucleotide_fasta_files.append(full_path)
+                except (StopIteration, Exception):
+                    # Skip files that can't be parsed
+                    continue
+    
+    return nucleotide_fasta_files
+
 
 def segment_sequence_contiguous(
     sequence: str, 
