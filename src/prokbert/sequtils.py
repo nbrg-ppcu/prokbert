@@ -29,7 +29,7 @@ from typing import List, Union, Dict, Any, Optional, Tuple, Type, Set
 from .general_utils import *
 from Bio.Seq import Seq
 from Bio.SeqRecord import SeqRecord
-
+from scipy.ndimage import convolve1d
 import h5py
 
 def load_contigs(
@@ -112,6 +112,47 @@ def load_contigs(
         # Convert the sequences to a DataFrame
         sequences = pd.DataFrame(sequences, columns=df_cols)
     return sequences
+
+def find_nucleotide_fasta_files(
+    directory: Union[str, pathlib.Path]
+) -> List[str]:
+    """
+    Recursively finds nucleotide FASTA files in a given directory.
+
+    :param directory: Path to the directory to search for FASTA files.
+    :type directory: Union[str, pathlib.Path]
+    :return: List of full file paths to FASTA files containing nucleotide sequences.
+    :rtype: List[str]
+
+    Searches recursively through subdirectories, filtering for files with common FASTA extensions
+    and verifying nucleotide content by checking sequence characters.
+
+    Example:
+        >>> nucleotide_files = find_nucleotide_fasta_files('/path/to/sequences')
+        >>> print(nucleotide_files)
+        ['/path/to/sequences/file1.fasta', '/path/to/sequences/subdirectory/file2.fa']
+    """
+    nucleotide_fasta_files = []
+    
+    for root, _, files in os.walk(directory):
+        for file in files:
+            # Check file extension (common FASTA extensions)
+            if file.lower().endswith(('.fasta', '.fa', '.fna', '.ffn', '.fas')):
+                full_path = os.path.join(root, file)
+                
+                # Verify if file contains nucleotide sequences
+                try:
+                    with open(full_path, 'r') as handle:
+                        first_record = next(SeqIO.parse(handle, 'fasta'))
+                        
+                        # Basic nucleotide sequence check
+                        if set(first_record.seq).issubset(set('ACGTNacgtn')):
+                            nucleotide_fasta_files.append(full_path)
+                except (StopIteration, Exception):
+                    # Skip files that can't be parsed
+                    continue
+    
+    return nucleotide_fasta_files
 
 
 def segment_sequence_contiguous(
@@ -336,6 +377,25 @@ def segment_sequences(
     else:
         segment_db = [seg['segment'] for seg in segments]
     return segment_db
+
+def lca_kmer_tokenize_segment(segment: str, offset: int, params: Dict[str, Dict[str, int] | int | float]):
+    # calculate the tokenization for one offset value
+    shift = params['shift']
+    max_segment_length = params['max_segment_length']
+    max_unknown_token_proportion = params['max_unknown_token_proportion']
+    kmer = params['kmer']
+    token_limit = params['token_limit']
+    vocabmap = params['vocabmap']
+    add_special_token = params['add_special_token']
+    if len(segment) > max_segment_length:
+        raise(ValueError(f'The segment is longer {len(segment)} then the maximum allowed segment length ({max_segment_length}). '))
+    
+    kmers = [segment[i:i + kmer] for i in range(offset, len(segment) - kmer + 1, shift)]
+
+    return kmers
+    
+
+
 
 
 def lca_tokenize_segment(segment: str, params: Dict[str, Dict[str, int] | int | float]) -> Tuple[List[List[int]], List[List[str]]]:
@@ -922,3 +982,40 @@ def filter_short_sequences(
 
 
 
+def get_token_counts_for_segment(Lseg, kmer, shift, offset):
+    nr_tokens = int((Lseg -kmer)/shift + 1)
+    return nr_tokens
+    
+def get_seq_coordinates(token_pos, kmer, shift, offset):
+    seq_start = int(token_pos*shift + offset)
+    seq_end = int(token_pos*shift+kmer + offset)
+    return seq_start, seq_end
+
+def get_token_coordinates(seq_pos, kmer, shift, offset, Lseg):
+
+    nrtokens = get_token_counts_for_segment(Lseg, kmer, shift, offset)
+    
+    token_pos_end = int((seq_pos+offset - kmer) / shift)
+    token_pos_start = int((seq_pos + offset) / shift)
+
+    if token_pos_end<0:
+        token_pos_end=0
+    if token_pos_start >= nrtokens:
+        token_pos_start = nrtokens-1
+
+    return token_pos_start, token_pos_end 
+    
+def sliding_window_average(arr, window_size=6):
+    # Create a window for averaging
+    window = np.ones(window_size) / window_size
+    # Use 'valid' mode to slide the window over the array without padding
+    result = np.convolve(arr, window, mode='valid')
+    return result
+
+def convolve_expression_array(expression_array, window_size=6, step=2):
+    # Define the averaging window
+    window = np.ones(window_size) / window_size
+    # Apply convolution along each column (axis=0)
+    convolved_array = convolve1d(expression_array, window, axis=1, mode='reflect')
+    # Downsample by step size
+    return convolved_array[:, ::step]

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "prokbert"
-version = "0.0.44"
+version = "0.0.46"
 description = "ProkBERT"
 readme = "README.md"
 requires-python = ">=3.10"

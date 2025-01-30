@@ -655,3 +655,114 @@ def logits_to_sequence_predictions(df):
     })
     
     return results_df
+
+
+def guess_initial_batch_size_komondor_prokbert(basemodel, actL):
+    
+    standard_params = {
+        256: {'batch_size': 256, 'gradient_accumulation_steps': 1},
+        512: {'batch_size': 128, 'gradient_accumulation_steps': 1},
+        1024: {'batch_size': 32, 'gradient_accumulation_steps': 2},
+    }
+
+    long_params = {
+        256: {'batch_size': 384, 'gradient_accumulation_steps': 1},
+        512: {'batch_size': 256, 'gradient_accumulation_steps': 1},
+        1024: {'batch_size': 128, 'gradient_accumulation_steps': 1},
+        1536: {'batch_size': 64, 'gradient_accumulation_steps': 2},
+    }
+
+
+    standard_params = {
+        256: {'batch_size': 512, 'gradient_accumulation_steps': 1},
+        512: {'batch_size': 196, 'gradient_accumulation_steps': 1},
+        1022: {'batch_size': 64, 'gradient_accumulation_steps': 2},
+    }
+
+    long_params = {
+        256: {'batch_size': 512, 'gradient_accumulation_steps': 1},
+        512: {'batch_size': 384, 'gradient_accumulation_steps': 1},
+        1022: {'batch_size': 160, 'gradient_accumulation_steps': 1},
+        1536: {'batch_size': 32, 'gradient_accumulation_steps': 2},
+    }
+
+
+    # Use long_params if model is a long variant, otherwise use standard_params
+    if 'prokbert-mini-long' in basemodel:
+        param_mapping = long_params
+    else:
+        param_mapping = standard_params
+
+    # Ensure actL 1536 only for long model variants
+    if actL == 1536 and 'prokbert-mini-long' not in basemodel:
+        raise ValueError("Segment length 1536 is only valid for prokbert-mini-long.")
+
+    # Sorted thresholds for parameter selection
+    keys = sorted(param_mapping.keys())
+
+    # Select the largest threshold that does not exceed actL
+    if actL <= keys[0]:
+        chosen_key = keys[0]
+    else:
+        chosen_key = None
+        for k in keys:
+            if k <= actL:
+                chosen_key = k
+            else:
+                break
+
+    if chosen_key is None:
+        raise ValueError(f"Invalid segment length {actL} for the model {basemodel}.")
+
+    batch_size = param_mapping[chosen_key]['batch_size']
+    gradient_accumulation_steps = param_mapping[chosen_key]['gradient_accumulation_steps']
+    return chosen_key, batch_size, gradient_accumulation_steps
+
+
+def evaluate_binary_sequence_predictions(predictions, segment_dataset):
+    
+    
+    final_cols = ['sequence_id', 'predicted_label', 'p_class_0', 'p_class_1']
+
+    logits = predictions.predictions
+    labels = predictions.label_ids
+
+    # Convert logits and labels to tensors
+    logits_tensor = torch.tensor(logits)
+    labels_tensor = torch.tensor(labels)
+
+    print('Building predictions...')
+    pred_results = evaluate_binary_classification_bert_build_pred_results(logits_tensor, labels_tensor)
+    logits = pred_results[:, 2:]
+    probabilities = np.exp(logits) / np.sum(np.exp(logits), axis=1, keepdims=True)
+    combined_results = np.concatenate([pred_results, probabilities], axis=1)
+    combined_results = pd.DataFrame(combined_results,
+                                    columns=['y_true', 'y_pred', 'logit_y0', 'logit_y1', 'p_class_0', 'p_class_1'])
+
+    segment_dataset_df = segment_dataset.select_columns(['sequence_id', 'y']).to_pandas()
+
+    merged_results = segment_dataset_df.merge(combined_results, left_index=True, right_index=True)
+    merged_results.rename({'p_class_1' : 'p_class1', 
+                        'p_class_0' : 'p_class_0'}, axis=1, inplace=True)
+    print('Applying weighted voting...')
+    sequence_predictions = weighted_voting(merged_results)
+    sequence_predictions.rename({'score_class_0': 'p_class_0', 'score_class_1' : 'p_class_1'}, axis=1, inplace=True)
+    sequence_predictions['predicted_label'] = np.where(sequence_predictions['y_pred'] == 1, 'class_1', 'class_0')
+
+    seq_pred_results =sequence_predictions[['y_true', 'y_pred', 'p_class_0', 'p_class_1']].to_numpy()
+    probabilities = seq_pred_results[:, 2:]
+    logits = np.log(probabilities)
+    seq_pred_results[:,2:]=logits
+    seq_eval_results, seq_eval_results_ls = evaluate_binary_classification_bert(seq_pred_results)
+    #print('Sequence level performance: ')
+    #print(seq_eval_results)
+    #print('_________________')
+
+    final_table = sequence_predictions[final_cols]
+
+    #print('Evaluating the other results')
+    #eval_results, eval_results_ls = evaluate_binary_classification_bert(pred_results)
+
+    return final_table, seq_eval_results
+
+
