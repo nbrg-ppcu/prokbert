@@ -46,7 +46,7 @@ pip install git+https://github.com/nbrg-ppcu/prokbert.git
 ```
 
 ### Installing with conda
-(This is an udated version, please use the github codes)
+(The best is using the github codes)
 ProkBERT is also available as a conda package from the Bioconda channel. To install it using conda, run:
 
 ```bash
@@ -54,7 +54,6 @@ conda install prokbert -c bioconda
 ```
 
 ### Using Docker
-(This is an udated version, please use the github codes)
 Before using the ProkBERT container with GPU support, make sure you have the following installed on your system:
 - Python (3.10 or later)
 - [Docker](https://docs.docker.com/get-docker/) (required if you plan to use the Docker image)
@@ -134,13 +133,6 @@ outputs = model(**inputs)
 
 ## Tutorials and examples:
 
-### Tokenization and segmentation
-For examples of how to preprocess the raw sequence data, which are frequently stored in fasta format:
-Examples:
-- Segmentation (sequence preprocessing): [colab link](https://colab.research.google.com/github/nbrg-ppcu/prokbert/blob/main/examples/Segmentation.ipynb)
-- Tokenization [colab link](https://colab.research.google.com/github/nbrg-ppcu/prokbert/blob/main/examples/Tokenization.ipynb)
-- Preprocessing for pretraining
-  
 
 ### Visualizing sequence representations
 An example of how to visualize the genomic features of ESKAPE pathogens. More description about the dataset is available on Hugging Face
@@ -152,6 +144,14 @@ Here we provide an example of a practical transfer learning task. It is formulat
 Examples:
 - Finetuning for promoter identification task: [colab link](https://colab.research.google.com/github/nbrg-ppcu/prokbert/blob/main/examples/Finetuning.ipynb)
 - Python script for the finetuning: [link](https://github.com/nbrg-ppcu/prokbert/blob/main/examples/finetuning.py)
+
+### Tokenization and segmentation
+For examples of how to preprocess the raw sequence data, which are frequently stored in fasta format:
+Examples:
+- Segmentation (sequence preprocessing): [colab link](https://colab.research.google.com/github/nbrg-ppcu/prokbert/blob/main/examples/Segmentation.ipynb)
+- Tokenization [colab link](https://colab.research.google.com/github/nbrg-ppcu/prokbert/blob/main/examples/Tokenization.ipynb)
+- Preprocessing for pretraining
+  
   
 Usage example:
 ```bash
