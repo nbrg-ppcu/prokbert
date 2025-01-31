@@ -255,13 +255,15 @@ def segment_sequences_random(
     segmentdb = []
     
     for sid, act_sampling_coord in enumerate(start_coords):
+        
+        cum_sum = sequences['lenght_cum_sum']
+        i = np.searchsorted(cum_sum, act_sampling_coord, side='right')
 
-        diff = act_sampling_coord - sequences['lenght_cum_sum']
-
+        #diff = act_sampling_coord - sequences['lenght_cum_sum']
         # Find the sequence in which the current segment starts
-        for i in range(len(sequences['lenght_cum_sum'])):
-            if diff[i] < 0:
-                break
+#        for i in range(len(sequences['lenght_cum_sum'])):
+#            if diff[i] < 0:
+#                break
 
         act_sequence_id = sequences['sequence_id'].iloc[i]
         rel_coord = act_sampling_coord - sequences['lenght_cum_sum'].iloc[i] + sequences['seq_lengths'].iloc[i]
