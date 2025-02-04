@@ -600,8 +600,68 @@ def check_amd_gpu():
     print("Checking for AMD GPU is not directly supported in PyTorch as of now.")
     print("For AMD GPU support, ensure PyTorch is installed with ROCm and consult the ROCm documentation.")
 
-
 def weighted_voting(df):
+    """
+    Performs weighted voting based on probabilities for each segment within the same sequence.
+    
+    Parameters:
+    - df: DataFrame expected to contain at least the following columns:
+          'sequence_id' and probability columns.
+          The probability columns can be named either as 'p_class_0' and 'p_class_1'
+          or as 'p_class0' and 'p_class1'. They will be normalized to 'p_class_0' and 'p_class_1'.
+          Optionally, the DataFrame may contain a 'y' column representing the true label.
+    
+    Returns:
+    - DataFrame with columns ['sequence_id', 'y_true', 'y_pred', 'score_class_0', 'score_class_1'].
+      If the input DataFrame does not contain a 'y' column, the 'y_true' column in the output will be NaN.
+    """
+    # Normalize probability column names if needed.
+    rename_dict = {}
+    if 'p_class0' in df.columns and 'p_class_0' not in df.columns:
+        rename_dict['p_class0'] = 'p_class_0'
+    if 'p_class1' in df.columns and 'p_class_1' not in df.columns:
+        rename_dict['p_class1'] = 'p_class_1'
+    if rename_dict:
+        df = df.rename(columns=rename_dict)
+    
+    # Determine required columns based on whether 'y' is available.
+    required_cols = ['sequence_id', 'p_class_0', 'p_class_1']
+    missing_cols = [col for col in required_cols if col not in df.columns]
+    if missing_cols:
+        raise ValueError(f"Missing required columns: {missing_cols}")
+    
+    # Step 1: Calculate mean probabilities for each class by sequence_id.
+    mean_probs = df.groupby('sequence_id')[['p_class_0', 'p_class_1']].mean()
+    
+    # Step 2: Determine predicted class based on higher mean probability.
+    mean_probs['y_pred'] = mean_probs.idxmax(axis=1).map({'p_class_0': 0, 'p_class_1': 1})
+    
+    # Step 3: Check if 'y' column is provided. If yes, join with the true labels.
+    if 'y' in df.columns:
+        # Assuming 'y' is consistent for all segments within the same sequence.
+        y_true = df[['sequence_id', 'y']].drop_duplicates().set_index('sequence_id')
+        result_df = mean_probs.join(y_true)
+        # Rename 'y' column to 'y_true'.
+        result_df.rename(columns={'y': 'y_true'}, inplace=True)
+    else:
+        # If no 'y' column, add a column of NaNs.
+        result_df = mean_probs.copy()
+        result_df['y_true'] = np.nan
+    
+    # Step 4: Rename probability columns to score columns and reorder.
+    result_df.rename(columns={
+        'p_class_0': 'score_class_0', 
+        'p_class_1': 'score_class_1'
+    }, inplace=True)
+    
+    result_df = result_df.reset_index()[['sequence_id', 'y_true', 'y_pred', 'score_class_0', 'score_class_1']]
+    
+    return result_df
+
+
+
+
+def prevweighted_voting(df):
     """
     Performs weighted voting based on probabilities for each segment within the same sequence.
     
@@ -766,3 +826,69 @@ def evaluate_binary_sequence_predictions(predictions, segment_dataset):
     return final_table, seq_eval_results
 
 
+
+def inference_binary_sequence_predictions(predictions, segment_dataset):
+    """
+    Inference-only version that aggregates binary classification predictions for sequences.
+    
+    Args:
+        predictions: An object with an attribute 'predictions' containing the model logits.
+                     (No true labels are expected.)
+        segment_dataset: A dataset with a 'sequence_id' column (and no ground truth label column).
+    
+    Returns:
+        final_table: A DataFrame with columns ['sequence_id', 'predicted_label', 'p_class_0', 'p_class_1']
+                     that holds the aggregated, sequence-level predictions.
+    """
+    # Final output columns
+    final_cols = ['sequence_id', 'predicted_label', 'p_class_0', 'p_class_1']
+
+    # Extract logits (shape: [n_samples, 2]) from predictions.
+    logits = predictions.predictions
+
+    # Convert logits to tensor (if needed for any further tensor-based operations).
+    logits_tensor = torch.tensor(logits)
+
+    print('Building predictions...')
+    # For inference, we simply compute the predicted label as the argmax over logits.
+    pred_labels = np.argmax(logits, axis=1)
+    
+    # Calculate probabilities via softmax.
+    probabilities = np.exp(logits) / np.sum(np.exp(logits), axis=1, keepdims=True)
+    
+    # Create a DataFrame for segment-level predictions.
+    # Here, we include the predicted label, logits, and computed probabilities.
+    combined_results = pd.DataFrame({
+        'y_pred': pred_labels,
+        'logit_y0': logits[:, 0],
+        'logit_y1': logits[:, 1],
+        'p_class_0': probabilities[:, 0],
+        'p_class_1': probabilities[:, 1]
+    })    
+
+    # Get the segment dataset with sequence_id (no ground truth column).
+    # Adjust the select_columns call if your dataset API is different.
+    segment_dataset_df = segment_dataset.select_columns(['sequence_id']).to_pandas()
+    #segment_dataset_df['y'] = np.random.randint(0, 2, size=L)
+
+    # Merge the predictions with the segment identifiers.
+    # Assumes that the indices of segment_dataset_df and combined_results correspond to each other.
+    merged_results = pd.concat([segment_dataset_df.reset_index(drop=True),
+                                combined_results.reset_index(drop=True)], axis=1)
+
+    print('Applying weighted voting...')
+    # Aggregate segment-level predictions into sequence-level predictions using weighted voting.
+    # Make sure that weighted_voting only depends on the columns available in merged_results.
+    sequence_predictions = weighted_voting(merged_results)
+
+    # Rename the aggregated probability columns if necessary.
+    # (Assumes weighted_voting returns columns named 'score_class_0' and 'score_class_1'.)
+    sequence_predictions.rename({'score_class_0': 'p_class_0', 'score_class_1': 'p_class_1'}, axis=1, inplace=True)
+
+    # Map the aggregated numeric predictions to string labels.
+    sequence_predictions['predicted_label'] = np.where(sequence_predictions['y_pred'] == 1, 'class_1', 'class_0')
+
+    # Build the final table with just the desired columns.
+    final_table = sequence_predictions[final_cols]
+
+    return final_table
