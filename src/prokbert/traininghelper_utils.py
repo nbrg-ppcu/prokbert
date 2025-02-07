@@ -184,7 +184,7 @@ def get_tokenize_function(model_name: str) -> Callable:
 
 def tokenize_function_prokbert(examples, tokenizer):
     # Tokenize the input sequences
-    encoded = tokenizer.batch_encode_plus(
+    encoded = tokenizer(
         examples["segment"],
         padding=True,
         add_special_tokens=True,
@@ -211,7 +211,7 @@ def tokenize_function_prokbert(examples, tokenizer):
 
 def tokenize_function_NT(examples, tokenizer, max_seq_len):
     # Tokenize the input sequences
-    encoded = tokenizer.batch_encode_plus(
+    encoded = tokenizer(
         examples['segment'],
         padding='longest',
         add_special_tokens=True,
@@ -236,7 +236,7 @@ def tokenize_function_NT(examples, tokenizer, max_seq_len):
 
 def tokenize_function_DNABERT(examples, tokenizer, max_seq_len):
     # Tokenize the input sequences
-    encoded = tokenizer.batch_encode_plus(
+    encoded = tokenizer(
         examples['segment'],
         padding='longest',
         add_special_tokens=True,
@@ -296,14 +296,14 @@ class BaseHyperparameterConfig:
 class TrainingHelperM(BaseHyperparameterConfig):
     _huggingface_model_name: str
     _batch_size: int
-    _epochs: Union[int, float]
+    _epochs: float
     _gradient_accumulation_steps: int
     _learning_rate: float
     _seq_len: int
 
     def __init__(self,
                  huggingface_model_name: str,
-                 epochs: Union[int, float],
+                 epochs: float,
                  learning_rate: float,
                  seq_len: int,
                  batch_size: int = None,
@@ -317,10 +317,15 @@ class TrainingHelperM(BaseHyperparameterConfig):
         self._learning_rate = learning_rate
         self._seq_len = seq_len
 
-        _, bs, gac = get_batch_size_komondor(basename=huggingface_model_name, seq_len=seq_len)
-
-        self._batch_size = batch_size if batch_size is not None else bs
-        self._gradient_accumulation_steps = gradient_accumulation_steps if gradient_accumulation_steps is not None else gac
+        # Try to auto infer batch size grad acc steps if they are not provided
+        if batch_size is None :
+            _, self._batch_size, gac = get_batch_size_komondor(basename=huggingface_model_name, seq_len=seq_len)
+        else:
+            self._batch_size = batch_size
+        if gradient_accumulation_steps is None :
+            _, _, self._gradient_accumulation_steps = get_batch_size_komondor(basename=huggingface_model_name, seq_len=seq_len)
+        else:
+            self._gradient_accumulation_steps = gradient_accumulation_steps
 
         super().__init__(self)
 
@@ -343,13 +348,13 @@ class TrainingHelperM(BaseHyperparameterConfig):
         self._huggingface_model_name = ''.join(namelist)
 
     @property
-    def epochs(self) -> int:
+    def epochs(self) -> float:
         return self._epochs
 
     @epochs.setter
     def epochs(self, epochs: Union[int, float]) -> None:
         assert 0 < epochs, "Epochs must be positive, got {}".format(epochs)
-        self._epochs = epochs
+        self._epochs = float(epochs)
 
     @property
     def learning_rate(self) -> float:
@@ -404,39 +409,66 @@ class TrainingHelperM(BaseHyperparameterConfig):
 
     @classmethod
     def initialize_from_environment(cls) -> 'TrainingHelperM':
-        model_name_path = os.getenv('MODEL_NAME', 'neuralbioinfo/prokbert-mini-long')
-        lr_rate = float(os.getenv('LEARNING_RATE', '0.0004'))
-        actL = int(os.getenv('LS', '512'))
-        num_train_epochs = float(os.getenv('NUM_TRAIN_EPOCHS', '1'))
+        model_name_path = os.getenv('MODEL_NAME')
+        if model_name_path is None:
+            raise ValueError("MODEL_NAME environment variable is required")
+
+        lr_str = os.getenv('LEARNING_RATE')
+        if lr_str is None:
+            raise ValueError("LEARNING_RATE environment variable is required")
+        lr_rate = float(lr_str)
+
+        ls_str = os.getenv('LS')
+        if ls_str is None:
+            raise ValueError("LS environment variable is required")
+        actL = int(ls_str)
+
+        epochs_str = os.getenv('NUM_TRAIN_EPOCHS')
+        if epochs_str is None:
+            raise ValueError("NUM_TRAIN_EPOCHS environment variable is required")
+        num_train_epochs = float(epochs_str)
+
+        batch_size = os.getenv('BATCH_SIZE')
+        gradient_accumulation_steps = os.getenv('GRADIENT_ACCUMULATION_STEPS')
+
+        if batch_size is None or gradient_accumulation_steps is None:
+            _, batch_size, gradient_accumulation_steps = get_batch_size_komondor(basename=model_name_path,
+                                                                                 seq_len=actL)
+        else: # If they exist convert them to integers
+            batch_size = int(batch_size)
+            gradient_accumulation_steps = int(gradient_accumulation_steps)
+
 
         return cls(huggingface_model_name=model_name_path,
                    epochs=num_train_epochs,
                    learning_rate=lr_rate,
-                   seq_len=actL)
+                   seq_len=actL,
+                   batch_size=batch_size,
+                   gradient_accumulation_steps=gradient_accumulation_steps)
 
 
-huggingface_prefixes = {
-    'prokbert': 'neuralbioinfo',
-    'nucleotide': 'InstaDeepAI',
-    'DNABERT': 'zhihan1996'
-}
+    @classmethod
+    def initialize_from_finetuned_name(cls, name: str) -> 'TrainingHelperM':
+        huggingface_prefixes = {
+            'prokbert': 'neuralbioinfo',
+            'nucleotide': 'InstaDeepAI',
+            'DNABERT': 'zhihan1996'
+        }
 
+        namelist = name.split('___')
+        model_name = namelist[1]
 
-def parse_model_helper_from_finetuned_name(name: str) -> TrainingHelperM:
-    namelist = name.split('___')
-    model_name = namelist[1]
+        # Get distributor name for full HF name
+        hf_prefix = None
+        for key in huggingface_prefixes:
+            if key in model_name:
+                hf_prefix = huggingface_prefixes[key]
+        assert hf_prefix is not None, "Please provide a known model: Prokbert, Nuclelotide Transformer or DNABERT-2"
 
-    # Get distributor name for full HF name
-    hf_prefix = None
-    for key in huggingface_prefixes:
-        if key in model_name:
-            hf_prefix = huggingface_prefixes[key]
-    assert hf_prefix is not None, "Please provide a known model: Prokbert, Nuclelotide transformer or DNABERT-2"
-
-    return TrainingHelperM(huggingface_model_name=''.join([hf_prefix, '/', model_name]),
-                           seq_len=int(namelist[3]),
-                           epochs=int(namelist[4]),
-                           learning_rate=float(namelist[5]),)
+        return TrainingHelperM(huggingface_model_name=''.join([hf_prefix, '/', model_name]),
+                               seq_len=int(namelist[3]),
+                               epochs=float(namelist[4]),
+                               learning_rate=float(namelist[5]))
 
 
 
@@ -447,14 +479,14 @@ def parse_model_helper_from_finetuned_name(name: str) -> TrainingHelperM:
 @dataclass(init=False, order=True, eq=True)
 class TrainingHelperD(BaseHyperparameterConfig):
     _dataset_path: PathLike           # Path to the top level of the whole dataset
-    _dataset_split: str               # Split to use TEST or LSOUT
+    _dataset_name: str               # Split to use TEST or LSOUT
     _seq_len: int                     # Sequence length
     _task: str ='phage'               # Training task, only phage for now
     _separator: str = '___'           # Unique character combination to separate information in the finetuned name
 
     def __init__(self,
                   dataset_path: Union[str, PathLike],
-                  dataset_split: str,
+                  dataset_name: str,
                   seq_len: int,
                   task: str = 'phage',
                   separator: str = '___',
@@ -465,7 +497,7 @@ class TrainingHelperD(BaseHyperparameterConfig):
         if isinstance(dataset_path, str):
             dataset_path = Path(dataset_path)
         self._dataset_path = dataset_path
-        self._dataset_split = dataset_split
+        self._dataset_name = dataset_name
         self._seq_len = seq_len
         self._task = task
         self._separator = separator
@@ -488,13 +520,13 @@ class TrainingHelperD(BaseHyperparameterConfig):
         self._dataset_path = new_path
 
     @property
-    def dataset_split(self) -> str:
-        return self._dataset_split
+    def dataset_name(self) -> str:
+        return self._dataset_name
 
-    @dataset_split.setter
-    def dataset_split(self, new_name: str) -> None:
-        assert new_name == 'train' or new_name == 'val' or new_name == 'test', 'Dataset split must be "train" or "val" or "test"'
-        self._dataset_split = new_name
+    @dataset_name.setter
+    def dataset_name(self, new_name: str) -> None:
+        assert new_name is not None, 'Dataset name cannot be None!'
+        self._dataset_name = new_name
 
     @property
     def seq_len(self) -> int:
@@ -531,14 +563,30 @@ class TrainingHelperD(BaseHyperparameterConfig):
 
         self._separator = new_separator
 
-    def get_train_dataset_path(self) -> PathLike:
-        return Path(self._dataset_path) / str(self.seq_len) / 'train'
+    @property
+    def train_dataset_path(self) -> PathLike:
+        return  Path(self._dataset_path) / (str(self.seq_len) + 'bp__train')
 
-    def get_test_dataset_path(self) -> PathLike:
-        return Path(self._dataset_path) / str(self.seq_len) / 'test'
+    @property
+    def val_dataset_path(self) -> PathLike:
+        return Path(self._dataset_path) / (str(self.seq_len) + 'bp__val')
 
-    def get_eval_dataset_path(self) -> PathLike:
-        return Path(self._dataset_path) / str(self.seq_len) / 'eval'
+    @property
+    def test_dataset_path(self) -> PathLike:
+        return Path(self._dataset_path) / (str(self.seq_len) + 'bp__test')
+
+    @property
+    def train_split_name(self) -> str:
+        return str(self.seq_len) + 'bp__train'
+
+    @property
+    def eval_split_name(self) -> str:
+        return str(self.seq_len) + 'bp__val'
+
+    @property
+    def test_split_name(self) -> str:
+        return str(self.seq_len) + 'bp__test'
+
 
     @classmethod
     def from_json(cls, path: Union[str, PathLike], check_dataset_exist: bool = False) -> 'TrainingHelperD':
@@ -550,12 +598,29 @@ class TrainingHelperD(BaseHyperparameterConfig):
         return cls(**data, check_dataset_exist=check_dataset_exist)
 
     @classmethod
-    def initialize_from_environment(cls) -> 'TrainingHelperD':
-        pass
+    def initialize_from_environment(cls, check_dataset_exist: bool = True) -> 'TrainingHelperD':
+        dataset_name = os.getenv('DATASET_NAME')
+        if dataset_name is None:
+            raise ValueError("DATASET_NAME environment variable is required")
+        dataset_path = os.getenv('DATASET_PATH')
+        if dataset_path is None:
+            raise ValueError("DATASET_PATH environment variable is required")
+        seq_len = int(os.getenv('LS'))
+        if seq_len is None:
+            raise ValueError("LS (sequence length) environment variable is required")
+        task = os.getenv('TASK')
+        if task is None:
+            raise ValueError("TASK environment variable is required")
+
+        return cls(dataset_path=dataset_path,
+                   dataset_name=dataset_name,
+                   seq_len=seq_len,
+                   task=task,
+                   check_dataset_exist=check_dataset_exist)
 
 
 def get_finetuned_model_name(testconfig: TrainingHelperD, modelconfig: TrainingHelperM) -> str:
-    return (testconfig.dataset_split
+    return (testconfig.dataset_name
             + testconfig.separator
             + modelconfig.base_model_name
             + testconfig.separator
