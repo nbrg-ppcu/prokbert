@@ -294,7 +294,8 @@ class BaseHyperparameterConfig:
 
 @dataclass(init=False, order=True, eq=True)
 class TrainingHelperM(BaseHyperparameterConfig):
-    _huggingface_model_name: str
+    _huggingface_prefix: str
+    _basemodel: str
     _batch_size: int
     _epochs: float
     _gradient_accumulation_steps: int
@@ -303,16 +304,16 @@ class TrainingHelperM(BaseHyperparameterConfig):
 
     def __init__(self,
                  huggingface_model_name: str,
-                 epochs: float,
-                 learning_rate: float,
-                 seq_len: int,
+                 epochs: float = 1.0,
+                 learning_rate: float = 0.001,
+                 seq_len: int = 512,
                  batch_size: int = None,
                  gradient_accumulation_steps: int = None) -> None:
 
         assert 0 < epochs, "Please provide a valid epoch number. Got{}".format(epochs)
         assert 0 < learning_rate < 1, "Please provide a valid learning rate in [0 1] Got{}".format(learning_rate)
 
-        self._huggingface_model_name = huggingface_model_name
+        self._huggingface_prefix, self._basemodel = huggingface_model_name.split('/')
         self._epochs = epochs
         self._learning_rate = learning_rate
         self._seq_len = seq_len
@@ -331,21 +332,21 @@ class TrainingHelperM(BaseHyperparameterConfig):
 
     @property
     def HF_model_name(self) -> str:
-        return self._huggingface_model_name
+        return self._huggingface_prefix + '/' + self._basemodel
 
     @HF_model_name.setter
-    def HF_model_name(self, value: str):
-        self._huggingface_model_name = value
+    def HF_model_name(self, new_name: str):
+        assert '/' in new_name, "Please provide a full Hugging Face model name in the format: <developer>/<model_name>, got{}".format(new_name)
+        self._huggingface_prefix, self._basemodel = new_name.split('/')
 
     @property
     def base_model_name(self) -> str:
-        return self._huggingface_model_name.split('/')[-1]
+        return self._basemodel
 
     @base_model_name.setter
-    def base_model_name(self, new_model_name: str) -> None:
-        namelist = new_model_name.split('/')
-        namelist[-1] = new_model_name
-        self._huggingface_model_name = ''.join(namelist)
+    def base_model_name(self, new_base_model_name: str) -> None:
+        assert '/' not in new_base_model_name, "/ is a special character, it cannot be part of a base model name!"
+        self._basemodel = new_base_model_name
 
     @property
     def epochs(self) -> float:
@@ -355,6 +356,15 @@ class TrainingHelperM(BaseHyperparameterConfig):
     def epochs(self, epochs: Union[int, float]) -> None:
         assert 0 < epochs, "Epochs must be positive, got {}".format(epochs)
         self._epochs = float(epochs)
+
+    @property
+    def huggingface_prefix(self):
+        return self._huggingface_prefix
+
+    @huggingface_prefix.setter
+    def huggingface_prefix(self, new_prefix: str):
+        assert '/' not in new_prefix, "/ is a special character, it cannot be part of the prefix!"
+        self._huggingface_prefix = new_prefix
 
     @property
     def learning_rate(self) -> float:
@@ -399,13 +409,14 @@ class TrainingHelperM(BaseHyperparameterConfig):
         return cls(**data)
 
     def get_default_model(self):
-        return AutoModelForSequenceClassification.from_pretrained(self._huggingface_model_name, trust_remote_code=True)
+        return AutoModelForSequenceClassification.from_pretrained(self._huggingface_prefix + '/' + self._basemodel,
+                                                                  trust_remote_code=True)
 
     def get_tokenizer(self):
-        return AutoTokenizer.from_pretrained(self._huggingface_model_name, trust_remote_code=True)
+        return AutoTokenizer.from_pretrained(self._huggingface_prefix + '/' + self._basemodel, trust_remote_code=True)
 
     def get_tokenizer_function(self) -> Callable:
-        return get_tokenize_function(self._huggingface_model_name)
+        return get_tokenize_function(self._huggingface_prefix + '/' + self._basemodel)
 
     @classmethod
     def initialize_from_environment(cls) -> 'TrainingHelperM':
@@ -619,17 +630,20 @@ class TrainingHelperD(BaseHyperparameterConfig):
                    check_dataset_exist=check_dataset_exist)
 
 
-def get_finetuned_model_name(testconfig: TrainingHelperD, modelconfig: TrainingHelperM) -> str:
-    return (testconfig.dataset_name
-            + testconfig.separator
-            + modelconfig.base_model_name
-            + testconfig.separator
-            + testconfig.task
-            + testconfig.separator
-            + str(modelconfig.seq_len)
-            + testconfig.separator
-            + str(modelconfig.epochs)
-            + testconfig.separator
-            + str(modelconfig.learning_rate))
+def get_finetuned_model_name(dataset_helper: TrainingHelperD, model_helper: TrainingHelperM) -> str:
+    return (dataset_helper.dataset_name
+            + dataset_helper.separator
+            + model_helper.base_model_name
+            + dataset_helper.separator
+            + dataset_helper.task
+            + dataset_helper.separator
+            + 'sl_' # Prefix for seq_len
+            + str(model_helper.seq_len)
+            + dataset_helper.separator
+            + 'ep_' # Prefix for epchs
+            + str(model_helper.epochs)
+            + dataset_helper.separator
+            + 'lr_' # Prefix for learning rate
+            + str(model_helper.learning_rate))
 
 
