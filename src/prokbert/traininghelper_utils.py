@@ -294,29 +294,38 @@ class BaseHyperparameterConfig:
 
 @dataclass(init=False, order=True, eq=True)
 class TrainingHelperM(BaseHyperparameterConfig):
+    _dataset_name: str
     _huggingface_prefix: str
     _basemodel: str
     _batch_size: int
     _epochs: float
     _gradient_accumulation_steps: int
     _learning_rate: float
+    _separator: str            # Unique character combination to separate information in the finetuned name
     _seq_len: int
+    _task: str ='phage'
 
     def __init__(self,
                  huggingface_model_name: str,
-                 epochs: float = 1.0,
-                 learning_rate: float = 0.001,
-                 seq_len: int = 512,
                  batch_size: int = None,
-                 gradient_accumulation_steps: int = None) -> None:
+                 dataset_name: str = 'TEST',
+                 epochs: float = 1.0,
+                 gradient_accumulation_steps: int = None,
+                 learning_rate: float = 0.001,
+                 separator: str = '___',
+                 seq_len: int = 512,
+                 task: str = 'phage') -> None:
 
         assert 0 < epochs, "Please provide a valid epoch number. Got{}".format(epochs)
         assert 0 < learning_rate < 1, "Please provide a valid learning rate in [0 1] Got{}".format(learning_rate)
 
         self._huggingface_prefix, self._basemodel = huggingface_model_name.split('/')
+        self._dataset_name = dataset_name
         self._epochs = epochs
         self._learning_rate = learning_rate
+        self.separator = separator
         self._seq_len = seq_len
+        self._task = task
 
         # Try to auto infer batch size grad acc steps if they are not provided
         if batch_size is None :
@@ -331,11 +340,11 @@ class TrainingHelperM(BaseHyperparameterConfig):
         super().__init__(self)
 
     @property
-    def HF_model_name(self) -> str:
+    def huggingface_model_name(self) -> str:
         return self._huggingface_prefix + '/' + self._basemodel
 
-    @HF_model_name.setter
-    def HF_model_name(self, new_name: str):
+    @huggingface_model_name.setter
+    def huggingface_model_name(self, new_name: str):
         assert '/' in new_name, "Please provide a full Hugging Face model name in the format: <developer>/<model_name>, got{}".format(new_name)
         self._huggingface_prefix, self._basemodel = new_name.split('/')
 
@@ -394,6 +403,22 @@ class TrainingHelperM(BaseHyperparameterConfig):
         self._gradient_accumulation_steps = gradient_accumulation_steps
 
     @property
+    def separator(self) -> str:
+        return self._separator
+
+    @separator.setter
+    def separator(self, new_separator: str) -> None:
+        assert new_separator, "Please provide a valid separator!"  # Ensures it's not empty
+
+        # Define allowed special characters (excluding letters, numbers, '/', '\')
+        forbidden_chars = ascii_letters + digits + "/\\"
+
+        if any(char in forbidden_chars for char in new_separator):
+            raise ValueError(f"Invalid separator: '{new_separator}'. Only special characters allowed, except for '/' and '\\'!")
+
+        self._separator = new_separator
+
+    @property
     def seq_len(self) -> int:
         return self._seq_len
 
@@ -402,10 +427,35 @@ class TrainingHelperM(BaseHyperparameterConfig):
         assert 0 < seq_len, "Sequence length must be positive, got {}".format(seq_len)
         self._seq_len = seq_len
 
+    @property
+    def task(self) -> str:
+        return self._task
+
+    @task.setter
+    def task(self, new_task: str) -> None:
+        assert len(new_task) > 0, 'Please provide a valid task name!'
+        self._task = new_task
+
+    @property
+    def train_split_name(self) -> str:
+        return str(self._seq_len) + 'bp__train'
+
+    @property
+    def eval_split_name(self) -> str:
+        return str(self._seq_len) + 'bp__val'
+
+    @property
+    def test_split_name(self) -> str:
+        return str(self._seq_len) + 'bp__test'
+
     @classmethod
     def from_json(cls, path: Union[str, PathLike]) -> 'TrainingHelperM':
         with open(path, 'r') as f:
             data = json.load(f)
+
+        prefix = data.pop('huggingface_prefix')
+        basename = data.pop('basemodel')
+        data['huggingface_model_name'] = prefix + '/' + basename
         return cls(**data)
 
     def get_default_model(self):
@@ -424,6 +474,10 @@ class TrainingHelperM(BaseHyperparameterConfig):
         if model_name_path is None:
             raise ValueError("MODEL_NAME environment variable is required")
 
+        dataset_name = os.getenv('DATASET_NAME')
+        if dataset_name is None:
+            raise ValueError("DATASET_NAME environment variable is required")
+
         lr_str = os.getenv('LEARNING_RATE')
         if lr_str is None:
             raise ValueError("LEARNING_RATE environment variable is required")
@@ -439,6 +493,14 @@ class TrainingHelperM(BaseHyperparameterConfig):
             raise ValueError("NUM_TRAIN_EPOCHS environment variable is required")
         num_train_epochs = float(epochs_str)
 
+        task = os.getenv('TASK')
+        if task is None:
+            raise ValueError("TASK environment variable is required")
+
+        separator = os.getenv('SEPARATOR')
+        if separator is None:
+            separator = '___'
+
         batch_size = os.getenv('BATCH_SIZE')
         gradient_accumulation_steps = os.getenv('GRADIENT_ACCUMULATION_STEPS')
 
@@ -451,22 +513,26 @@ class TrainingHelperM(BaseHyperparameterConfig):
 
 
         return cls(huggingface_model_name=model_name_path,
+                   dataset_name=dataset_name,
                    epochs=num_train_epochs,
                    learning_rate=lr_rate,
                    seq_len=actL,
                    batch_size=batch_size,
-                   gradient_accumulation_steps=gradient_accumulation_steps)
+                   gradient_accumulation_steps=gradient_accumulation_steps,
+                   task=task,
+                   separator=separator
+                   )
 
 
     @classmethod
-    def initialize_from_finetuned_name(cls, name: str) -> 'TrainingHelperM':
+    def initialize_from_finetuned_name(cls, name: str, separator: str = '___') -> 'TrainingHelperM':
         huggingface_prefixes = {
             'prokbert': 'neuralbioinfo',
             'nucleotide': 'InstaDeepAI',
             'DNABERT': 'zhihan1996'
         }
 
-        namelist = name.split('___')
+        namelist = name.split(separator)
         model_name = namelist[1]
 
         # Get distributor name for full HF name
@@ -477,16 +543,33 @@ class TrainingHelperM(BaseHyperparameterConfig):
         assert hf_prefix is not None, "Please provide a known model: Prokbert, Nuclelotide Transformer or DNABERT-2"
 
         return TrainingHelperM(huggingface_model_name=''.join([hf_prefix, '/', model_name]),
+                               dataset_name=namelist[0],
+                               task=namelist[2],
                                seq_len=int(namelist[3]),
                                epochs=float(namelist[4]),
                                learning_rate=float(namelist[5]))
 
+    def get_finetuned_model_name(self) -> str:
+        return (self._dataset_name
+                + self._separator
+                + self._basemodel
+                + self._separator
+                + self._task
+                + self._separator
+                + 'sl_'  # Prefix for seq_len
+                + str(self._seq_len)
+                + self._separator
+                + 'ep_'  # Prefix for epochs
+                + str(self._epochs)
+                + self._separator
+                + 'lr_'  # Prefix for learning rate
+                + str(self._learning_rate))
 
 
 ########################################################################################################################
 # DATASET HELPER #
 ########################################################################################################################
-
+# This si deprecated/is subject to heavy change
 @dataclass(init=False, order=True, eq=True)
 class TrainingHelperD(BaseHyperparameterConfig):
     _dataset_path: PathLike           # Path to the top level of the whole dataset
@@ -504,7 +587,7 @@ class TrainingHelperD(BaseHyperparameterConfig):
                   check_dataset_exist: bool = True) -> None:
 
         super().__init__(self)
-
+        raise NotImplementedError("This class is not yet implemented!")
         if isinstance(dataset_path, str):
             dataset_path = Path(dataset_path)
         self._dataset_path = dataset_path
@@ -630,20 +713,5 @@ class TrainingHelperD(BaseHyperparameterConfig):
                    check_dataset_exist=check_dataset_exist)
 
 
-def get_finetuned_model_name(dataset_helper: TrainingHelperD, model_helper: TrainingHelperM) -> str:
-    return (dataset_helper.dataset_name
-            + dataset_helper.separator
-            + model_helper.base_model_name
-            + dataset_helper.separator
-            + dataset_helper.task
-            + dataset_helper.separator
-            + 'sl_' # Prefix for seq_len
-            + str(model_helper.seq_len)
-            + dataset_helper.separator
-            + 'ep_' # Prefix for epchs
-            + str(model_helper.epochs)
-            + dataset_helper.separator
-            + 'lr_' # Prefix for learning rate
-            + str(model_helper.learning_rate))
 
 
