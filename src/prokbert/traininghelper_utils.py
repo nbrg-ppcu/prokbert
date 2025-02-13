@@ -9,7 +9,7 @@ from os import PathLike
 from dataclasses import dataclass, asdict
 from pathlib import Path
 from string import ascii_letters, digits
-from typing import Any, Union, Callable, Tuple
+from typing import Any, Callable, Dict, Union, Tuple
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
 
@@ -298,6 +298,7 @@ class TrainingHelperM(BaseHyperparameterConfig):
     _huggingface_prefix: str
     _basemodel: str
     _batch_size: int
+    _checkpoint: int
     _epochs: float
     _gradient_accumulation_steps: int
     _learning_rate: float
@@ -309,6 +310,7 @@ class TrainingHelperM(BaseHyperparameterConfig):
                  huggingface_model_name: str,
                  batch_size: int = None,
                  dataset_name: str = 'TEST',
+                 checkpoint: int = 0,
                  epochs: float = 1.0,
                  gradient_accumulation_steps: int = None,
                  learning_rate: float = 0.001,
@@ -319,8 +321,10 @@ class TrainingHelperM(BaseHyperparameterConfig):
         assert 0 < epochs, "Please provide a valid epoch number. Got{}".format(epochs)
         assert 0 < learning_rate < 1, "Please provide a valid learning rate in [0 1] Got{}".format(learning_rate)
 
+
         self._huggingface_prefix, self._basemodel = huggingface_model_name.split('/')
         self._dataset_name = dataset_name
+        self._checkpoint = checkpoint
         self._epochs = epochs
         self._learning_rate = learning_rate
         self.separator = separator
@@ -365,6 +369,15 @@ class TrainingHelperM(BaseHyperparameterConfig):
     def epochs(self, epochs: Union[int, float]) -> None:
         assert 0 < epochs, "Epochs must be positive, got {}".format(epochs)
         self._epochs = float(epochs)
+
+    @property
+    def checkpoint(self):
+        return self._checkpoint
+
+    @checkpoint.setter
+    def checkpoint(self, checkpoint: int) -> None:
+        assert 0 < checkpoint, "Checkpoint must be positive, got {}".format(checkpoint)
+        self._checkpoint = int(checkpoint)
 
     @property
     def huggingface_prefix(self):
@@ -533,7 +546,15 @@ class TrainingHelperM(BaseHyperparameterConfig):
         }
 
         namelist = name.split(separator)
+        assert len(namelist) > 4, 'Please provide a valid finetuned name! Got {}'.format(name)
+
+
         model_name = namelist[1]
+
+        # Split the last part of the name
+        lr, checkpoint = namelist[-1].split('/')
+        lr = float(lr[2:])
+        checkpoint = int(checkpoint.split('-')[-1])
 
         # Get distributor name for full HF name
         hf_prefix = None
@@ -544,10 +565,20 @@ class TrainingHelperM(BaseHyperparameterConfig):
 
         return TrainingHelperM(huggingface_model_name=''.join([hf_prefix, '/', model_name]),
                                dataset_name=namelist[0],
+                               checkpoint=checkpoint,
                                task=namelist[2],
-                               seq_len=int(namelist[3]),
-                               epochs=float(namelist[4]),
-                               learning_rate=float(namelist[5]))
+                               seq_len=int(namelist[3][2:]), # To exclude sl prefix
+                               epochs=float(namelist[4][2:]), # To exclude ep prefix
+                               learning_rate=lr)
+
+    def get_training_params(self) -> Dict[str, Any]:
+        return {'batch_size': self._batch_size,
+                'gradient_accumulation_steps': self._gradient_accumulation_steps,
+                'learning_rate': self._learning_rate,
+                'epochs': self._epochs,
+                'seq_len': self._seq_len}
+
+
 
     def get_finetuned_model_name(self) -> str:
         return (self._dataset_name
@@ -556,14 +587,18 @@ class TrainingHelperM(BaseHyperparameterConfig):
                 + self._separator
                 + self._task
                 + self._separator
-                + 'sl_'  # Prefix for seq_len
+                + 'sl'  # Prefix for seq_len
                 + str(self._seq_len)
                 + self._separator
-                + 'ep_'  # Prefix for epochs
+                + 'ep'  # Prefix for epochs
                 + str(self._epochs)
                 + self._separator
-                + 'lr_'  # Prefix for learning rate
-                + str(self._learning_rate))
+                + 'lr'  # Prefix for learning rate
+                + str(self._learning_rate)
+                + '/checkpoint-'
+                + str(self._checkpoint))
+
+
 
 
 ########################################################################################################################
