@@ -287,11 +287,6 @@ class BaseHyperparameterConfig:
 
 
 
-
-
-
-
-
 @dataclass(init=False, order=True, eq=True)
 class TrainingHelperM(BaseHyperparameterConfig):
     _dataset_name: str
@@ -523,6 +518,8 @@ class TrainingHelperM(BaseHyperparameterConfig):
                    separator=separator
                    )
 
+    def get_some_default_training_arguments():
+        pass
 
     @classmethod
     def initialize_from_finetuned_name(cls, name: str, separator: str = '___') -> 'TrainingHelperM':
@@ -530,6 +527,7 @@ class TrainingHelperM(BaseHyperparameterConfig):
             'prokbert': 'neuralbioinfo',
             'nucleotide': 'InstaDeepAI',
             'DNABERT': 'zhihan1996'
+
         }
 
         namelist = name.split(separator)
@@ -550,19 +548,22 @@ class TrainingHelperM(BaseHyperparameterConfig):
                                learning_rate=float(namelist[5]))
 
     def get_finetuned_model_name(self) -> str:
+
+
+
         return (self._dataset_name
                 + self._separator
                 + self._basemodel
                 + self._separator
                 + self._task
                 + self._separator
-                + 'sl_'  # Prefix for seq_len
+                + 'sl'  # Prefix for seq_len
                 + str(self._seq_len)
                 + self._separator
-                + 'ep_'  # Prefix for epochs
+                + 'ep'  # Prefix for epochs
                 + str(self._epochs)
                 + self._separator
-                + 'lr_'  # Prefix for learning rate
+                + 'lr'  # Prefix for learning rate
                 + str(self._learning_rate))
 
 
