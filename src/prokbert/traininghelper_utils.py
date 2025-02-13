@@ -12,6 +12,11 @@ from string import ascii_letters, digits
 from typing import Any, Union, Callable, Tuple
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
+import pandas as pd
+
+
+
+
 
 
 
@@ -284,6 +289,8 @@ class BaseHyperparameterConfig:
     @classmethod
     def from_json(cls, path: PathLike) -> 'BaseHyperparameterConfig':
         raise NotImplementedError('The base class should not be instantiated')
+
+
 
 
 
@@ -716,3 +723,68 @@ class TrainingHelperD(BaseHyperparameterConfig):
 
 
 
+class TrainingHelper():
+    
+    training_paramters = ['learning_rate', 
+                          'batch_size', 
+                          'gradient_accumulation_steps',
+                          'max_token_length']
+
+    def __init__(self):
+
+        print('Init a training helper :) ')
+        print('Reading the model database')
+
+        self.load_model_database_from_google_spreadsheet()
+        self.load_finetuning_helper_database()
+
+        self.basemodels = set(self.model_db['hf_name'])
+
+
+
+    
+    def load_model_database_from_google_spreadsheet(self):
+
+        print('Loading a google spreadsheet')
+
+        sheet_id = '0'
+        gid = '0'
+        csv_url = f'https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv&gid={gid}'
+
+        sheet_id = '1uFNC-IS9MPfdsJSB9psOW5WM1_jhzwBljjJf51uZX8o'
+        gid = '0' 
+        csv_url = f'https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv&gid={gid}'
+        model_db = pd.read_csv(csv_url)        
+        self.model_db = model_db
+        
+
+    def load_finetuning_helper_database(self):
+        print('Loading the training helper utils with the default parameters')
+
+        sheet_id = '1uFNC-IS9MPfdsJSB9psOW5WM1_jhzwBljjJf51uZX8o'
+        gid = '752340417'
+
+        # Construct the CSV export URL
+        csv_url = f'https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv&gid={gid}'
+
+        # Read the CSV data into a pandas DataFrame
+        finetuning_default_params = pd.read_csv(csv_url)
+
+        self.finetuning_default_params = finetuning_default_params
+
+
+    def get_my_training_parameters(self, model, actLs=512, task_type = 'sequence_classification'):        
+        "Query finetuning paramters"
+
+        print(f'Getting finetuning parameters for the training for the model: {model}')
+        print(f'Query Ls: {actLs}')
+
+        if model not in self.basemodels:
+            print(f'The model {model} is not in the database!')
+            print(f'Supported models are: {self.basemodels}')
+        
+        data_answer =  
+
+
+        pass 
+        
