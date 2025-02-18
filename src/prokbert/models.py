@@ -138,14 +138,14 @@ class ProkBertConfig(MegatronBertConfig):
         self,
         kmer: int = 6,
         shift: int = 1,
-        num_labels: int = 2,
+        num_class_labels: int = 2,
         classification_dropout_rate: float = 0.1,
         **kwargs,
     ):
         super().__init__(**kwargs)
         self.kmer = kmer
         self.shift = shift
-        self.num_labels = num_labels
+        self.num_class_labels = num_class_labels
         self.classification_dropout_rate = classification_dropout_rate
 
 
@@ -224,7 +224,7 @@ class ProkBertForSequenceClassification(ProkBertPreTrainedModel):
         self.bert = ProkBertModel(config)                
         self.weighting_layer = nn.Linear(self.config.hidden_size, 1)
         self.dropout = nn.Dropout(self.config.classification_dropout_rate)
-        self.classifier = nn.Linear(self.config.hidden_size, self.config.num_labels)
+        self.classifier = nn.Linear(self.config.hidden_size, self.config.num_class_labels)
         self.loss_fct = torch.nn.CrossEntropyLoss()
         
         self.post_init()
@@ -245,8 +245,8 @@ class ProkBertForSequenceClassification(ProkBertPreTrainedModel):
             r"""
             labels (`torch.LongTensor` of shape `(batch_size,)`, *optional*):
                 Labels for computing the sequence classification/regression loss. Indices should be in `[0, ...,
-                config.num_labels - 1]`. If `config.num_labels == 1` a regression loss is computed (Mean-Square loss), If
-                `config.num_labels > 1` a classification loss is computed (Cross-Entropy).
+                config.num_labels - 1]`. If `config.num_class_labels == 1` a regression loss is computed (Mean-Square loss), If
+                `config.num_class_labels > 1` a classification loss is computed (Cross-Entropy).
             """
             return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
@@ -273,7 +273,7 @@ class ProkBertForSequenceClassification(ProkBertPreTrainedModel):
             logits = self.classifier(pooled_output)
             loss = None
             if labels is not None:
-                loss = self.loss_fct(logits.view(-1, self.config.num_labels), labels.view(-1))
+                loss = self.loss_fct(logits.view(-1, self.config.num_class_labels), labels.view(-1))
 
             classification_output = SequenceClassifierOutput(
                 loss=loss,
