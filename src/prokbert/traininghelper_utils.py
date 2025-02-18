@@ -723,7 +723,7 @@ class TrainingHelperD(BaseHyperparameterConfig):
 
 
 
-class TrainingHelper():
+class preTrainingHelper():
     
     training_paramters = ['learning_rate', 
                           'batch_size', 
@@ -736,7 +736,7 @@ class TrainingHelper():
                                 'bs': 'batch_size',
                                 'gac': 'gradient_accumulation_steps',
                                 'mtl': 'max_token_length'}
-    group_mappings_to_params = {TrainingHelper.parameter_group_mappings[k] : k for k in parameter_group_mappings.keys()}
+    #group_mappings_to_params = {TrainingHelper.parameter_group_mappings[k] : k for k in parameter_group_mappings.keys()}
     paramter_group_sep='___'
 
 
@@ -784,7 +784,7 @@ class TrainingHelper():
         self.finetuning_default_params = finetuning_default_params
 
 
-    def get_my_finetunig_model_name(self, prefix, dataset, learning_rate=None, epochs=None, gradie Ls=None, batch_size=None):
+    def get_my_finetunig_model_name(self, prefix, dataset, learning_rate=None, epochs=None, gradient_accumulation_steps=None, Ls=None, batch_size=None):
         pass
         """ TEST___nucleotide-transformer-v2-50m-multi-species___phage___sl_256___ep_0.1___lr_5e-05
             prefix + short name + dataset + Ls + ep + learningrate + batchsize + gradient_accumulation_steps
@@ -815,3 +815,191 @@ class TrainingHelper():
 
         pass 
         
+
+class TrainingHelper:
+    """
+    Helper class to provide model training information.
+    
+    It loads two databases:
+      - A model database (basemodels) 
+      - A training defaults database (finetuning_default_params)
+    
+    It also provides methods to query training parameters and to construct
+    a standardized finetuning model name.
+    """
+    
+    # List of training parameters (keys in the defaults CSV)
+    training_parameters = [
+        'learning_rate', 
+        'batch_size', 
+        'gradient_accumulation_steps',
+        'max_token_length'
+    ]
+    
+    # Mapping from abbreviated group to full parameter names
+    parameter_group_mappings = {
+        'ls': 'Ls',
+        'ep': 'epochs',
+        'lr': 'learning_rate',
+        'bs': 'batch_size',
+        'gac': 'gradient_accumulation_steps',
+        'mtl': 'max_token_length'
+    }
+    
+    # Reverse mapping: from full parameter name to its abbreviation.
+    group_mappings_to_params = {v: k for k, v in parameter_group_mappings.items()}
+    
+    # Separator used for constructing model name strings.
+    parameter_group_sep = '___'
+    
+    def __init__(self, excel_path: str = None):
+        """
+        Initialize the helper by loading model and training defaults databases.
+        
+        If `excel_path` is provided, the helper will try to load the sheets
+        'basemodels' and 'defaultrtainingParameters' from that XLSX file.
+        Otherwise, it defaults to loading from Google Sheets via CSV URLs.
+        """
+        print('Initializing TrainingHelper...')
+        if excel_path is not None:
+            self.load_from_excel(excel_path)
+        else:
+            self.load_model_database_from_google_spreadsheet()
+            self.load_finetuning_helper_database()
+            
+        # Create a set of available base model names.
+        self.basemodels = set(self.model_db['hf_name'])
+    
+    def load_from_excel(self, excel_path: str):
+        """
+        Load databases from an Excel file with sheets 'basemodels'
+        and 'defaultrtainingParameters'.
+        """
+        print(f'Loading databases from Excel file: {excel_path}')
+        try:
+            self.model_db = pd.read_excel(excel_path, sheet_name='basemodels')
+            self.finetuning_default_params = pd.read_excel(excel_path, sheet_name='defaultrtainingParameters')
+            print('Successfully loaded Excel sheets.')
+        except Exception as e:
+            print(f'Error loading Excel file: {e}')
+            raise
+    
+    def load_model_database_from_google_spreadsheet(self):
+        """
+        Load the model database from a Google Spreadsheet exported as CSV.
+        """
+        print('Loading model database from Google Spreadsheet...')
+        # Replace these with the appropriate sheet id and gid.
+        sheet_id = '1uFNC-IS9MPfdsJSB9psOW5WM1_jhzwBljjJf51uZX8o'
+        gid = '0'
+        csv_url = f'https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv&gid={gid}'
+        try:
+            self.model_db = pd.read_csv(csv_url)
+            print('Model database loaded.')
+        except Exception as e:
+            print(f'Error loading model database from Google Spreadsheet: {e}')
+            raise
+    
+    def load_finetuning_helper_database(self):
+        """
+        Load the finetuning default parameters from a Google Spreadsheet exported as CSV.
+        """
+        print('Loading finetuning default parameters from Google Spreadsheet...')
+        sheet_id = '1uFNC-IS9MPfdsJSB9psOW5WM1_jhzwBljjJf51uZX8o'
+        gid = '752340417'
+        csv_url = f'https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv&gid={gid}'
+        try:
+            self.finetuning_default_params = pd.read_csv(csv_url)
+            print('Finetuning defaults loaded.')
+        except Exception as e:
+            print(f'Error loading finetuning parameters: {e}')
+            raise
+
+    def get_my_finetunig_model_name(self, prefix: str, short_name: str, dataset: str,
+                                    learning_rate=None, epochs=None,
+                                    gradient_accumulation_steps=None, Ls=None,
+                                    batch_size=None) -> str:
+        """
+        Construct a standardized finetuning model name.
+        
+        The name is composed as:
+            prefix + short_name + dataset + each provided training parameter
+        Each parameter is appended in the format: <abbr>_<value>,
+        where the abbreviation is defined in parameter_group_mappings.
+        
+        Example:
+            get_my_finetunig_model_name("TEST", "nucleotide-transformer-v2-50m-multi-species", "phage",
+                                        learning_rate="5e-05", epochs="0.1", Ls=256)
+            returns:
+            "TEST___nucleotide-transformer-v2-50m-multi-species___phage___sl_256___ep_0.1___lr_5e-05"
+        """
+        parts = [prefix, short_name, dataset]
+        
+        # Build a dictionary of parameter values provided.
+        params = {
+            'Ls': Ls,
+            'epochs': epochs,
+            'learning_rate': learning_rate,
+            'batch_size': batch_size,
+            'gradient_accumulation_steps': gradient_accumulation_steps
+        }
+        
+        # Append only those parameters that are not None.
+        for param_name, value in params.items():
+            if value is not None:
+                # Look up the abbreviation; if not found, use the parameter name.
+                abbr = self.group_mappings_to_params.get(param_name, param_name)
+                parts.append(f"{abbr}{value}")
+        
+        # Join all parts with the designated separator.
+        model_name = self.parameter_group_sep.join(parts)
+        return model_name
+    
+    def get_my_training_parameters(self, model: str, actLs=512, task_type: str = 'sequence_classification'):
+        """
+        Query the finetuning default parameters for a given base model and token length.
+        
+        It checks that the model exists in the model database and then filters
+        the defaults based on the token length (actLs).
+        
+        Returns:
+            A dictionary of training parameters if found, with the following keys:
+            - learning_rate (as-is, typically a float or string)
+            - batch_size (int)
+            - gradient_accumulation_steps (int)
+            - max_token_length (int)
+            
+        Raises:
+            ValueError: if the model is not in the database or no matching parameters are found.
+        """
+        print(f'Getting finetuning parameters for model: {model} with actLs: {actLs}')
+        if model not in self.basemodels:
+            error_msg = (f"The model {model} is not in the database! "
+                        f"Supported models are: {self.basemodels}")
+            print(error_msg)
+            raise ValueError(error_msg)
+        
+        # Filter rows where the base model matches and actLs falls within the provided range.
+        data_answer = self.finetuning_default_params[
+            (self.finetuning_default_params['basemodel'] == model) &
+            (self.finetuning_default_params['seq_length_min'] < actLs) &
+            (self.finetuning_default_params['seq_length_max'] >= actLs)
+        ]
+        
+        if data_answer.empty:
+            error_msg = f"No training parameters found for model {model} with actLs {actLs}"
+            print(error_msg)
+            raise ValueError(error_msg)
+        
+        # Convert only the relevant parameters to a dictionary.
+        params_dict = data_answer[self.training_parameters].iloc[0].to_dict()
+
+        # Convert batch_size, gradient_accumulation_steps, and max_token_length to int.
+        for key in ['batch_size', 'gradient_accumulation_steps', 'max_token_length']:
+            if key in params_dict and params_dict[key] is not None:
+                try:
+                    params_dict[key] = int(params_dict[key])
+                except ValueError:
+                    raise ValueError(f"Value for {key} cannot be converted to an integer: {params_dict[key]}")
+        
+        return params_dict
