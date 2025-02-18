@@ -729,6 +729,17 @@ class TrainingHelper():
                           'batch_size', 
                           'gradient_accumulation_steps',
                           'max_token_length']
+    
+    parameter_group_mappings = {'sl': 'Ls',
+                                'ep': 'epochs',
+                                'lr': 'learning_rate',
+                                'bs': 'batch_size',
+                                'gac': 'gradient_accumulation_steps',
+                                'mtl': 'max_token_length'}
+    group_mappings_to_params = {TrainingHelper.parameter_group_mappings[k] : k for k in parameter_group_mappings.keys()}
+    paramter_group_sep='___'
+
+
 
     def __init__(self):
 
@@ -773,6 +784,15 @@ class TrainingHelper():
         self.finetuning_default_params = finetuning_default_params
 
 
+    def get_my_finetunig_model_name(self, prefix, dataset, learning_rate=None, epochs=None, gradie Ls=None, batch_size=None):
+        pass
+        """ TEST___nucleotide-transformer-v2-50m-multi-species___phage___sl_256___ep_0.1___lr_5e-05
+            prefix + short name + dataset + Ls + ep + learningrate + batchsize + gradient_accumulation_steps
+        """
+        
+        
+
+
     def get_my_training_parameters(self, model, actLs=512, task_type = 'sequence_classification'):        
         "Query finetuning paramters"
 
@@ -783,7 +803,14 @@ class TrainingHelper():
             print(f'The model {model} is not in the database!')
             print(f'Supported models are: {self.basemodels}')
         
-        data_answer =  
+        data_answer = self.finetuning_default_params[ (self.finetuning_default_params['basemodel'] == model) &
+                                                     (self.finetuning_default_params['seq_length_min'] < actLs) &
+                                                     (self.finetuning_default_params['seq_length_max'] >= actLs)]
+        
+        print(data_answer)
+
+        params = data_answer[self.training_paramters].to_dict()
+        return params['basemodel']
 
 
         pass 
