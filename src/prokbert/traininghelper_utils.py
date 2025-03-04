@@ -723,98 +723,8 @@ class TrainingHelperD(BaseHyperparameterConfig):
 
 
 
-class preTrainingHelper():
-    
-    training_paramters = ['learning_rate', 
-                          'batch_size', 
-                          'gradient_accumulation_steps',
-                          'max_token_length']
-    
-    parameter_group_mappings = {'sl': 'Ls',
-                                'ep': 'epochs',
-                                'lr': 'learning_rate',
-                                'bs': 'batch_size',
-                                'gac': 'gradient_accumulation_steps',
-                                'mtl': 'max_token_length'}
-    #group_mappings_to_params = {TrainingHelper.parameter_group_mappings[k] : k for k in parameter_group_mappings.keys()}
-    paramter_group_sep='___'
 
 
-
-    def __init__(self):
-
-        print('Init a training helper :) ')
-        print('Reading the model database')
-
-        self.load_model_database_from_google_spreadsheet()
-        self.load_finetuning_helper_database()
-
-        self.basemodels = set(self.model_db['hf_name'])
-
-
-
-    
-    def load_model_database_from_google_spreadsheet(self):
-
-        print('Loading a google spreadsheet')
-
-        sheet_id = '0'
-        gid = '0'
-        csv_url = f'https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv&gid={gid}'
-
-        sheet_id = '1uFNC-IS9MPfdsJSB9psOW5WM1_jhzwBljjJf51uZX8o'
-        gid = '0' 
-        csv_url = f'https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv&gid={gid}'
-        model_db = pd.read_csv(csv_url)        
-        self.model_db = model_db
-        
-
-    def load_finetuning_helper_database(self):
-        print('Loading the training helper utils with the default parameters')
-
-        sheet_id = '1uFNC-IS9MPfdsJSB9psOW5WM1_jhzwBljjJf51uZX8o'
-        gid = '752340417'
-
-        # Construct the CSV export URL
-        csv_url = f'https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv&gid={gid}'
-
-        # Read the CSV data into a pandas DataFrame
-        finetuning_default_params = pd.read_csv(csv_url)
-
-        self.finetuning_default_params = finetuning_default_params
-
-
-    def get_my_finetunig_model_name(self, prefix, dataset, learning_rate=None, epochs=None, gradient_accumulation_steps=None, Ls=None, batch_size=None):
-        pass
-        """ TEST___nucleotide-transformer-v2-50m-multi-species___phage___sl_256___ep_0.1___lr_5e-05
-            prefix + short name + dataset + Ls + ep + learningrate + batchsize + gradient_accumulation_steps
-        """
-        
-        
-
-
-    def get_my_training_parameters(self, model, actLs=512, task_type = 'sequence_classification'):        
-        "Query finetuning paramters"
-
-        print(f'Getting finetuning parameters for the training for the model: {model}')
-        print(f'Query Ls: {actLs}')
-
-        if model not in self.basemodels:
-            print(f'The model {model} is not in the database!')
-            print(f'Supported models are: {self.basemodels}')
-        
-        data_answer = self.finetuning_default_params[ (self.finetuning_default_params['basemodel'] == model) &
-                                                     (self.finetuning_default_params['seq_length_min'] < actLs) &
-                                                     (self.finetuning_default_params['seq_length_max'] >= actLs)]
-        
-        print(data_answer)
-
-        params = data_answer[self.training_paramters].to_dict()
-        return params['basemodel']
-
-
-        pass 
-        
 
 class TrainingHelper:
     """
@@ -877,8 +787,8 @@ class TrainingHelper:
         """
         print(f'Loading databases from Excel file: {excel_path}')
         try:
-            self.model_db = pd.read_excel(excel_path, sheet_name='basemodels')
-            self.finetuning_default_params = pd.read_excel(excel_path, sheet_name='defaultrtainingParameters')
+            self.model_db = pd.read_excel(excel_path, sheet_name='Basemodels')
+            self.finetuning_default_params = pd.read_excel(excel_path, sheet_name='DefaultTrainingParameters')
             print('Successfully loaded Excel sheets.')
         except Exception as e:
             print(f'Error loading Excel file: {e}')
@@ -1003,3 +913,23 @@ class TrainingHelper:
                     raise ValueError(f"Value for {key} cannot be converted to an integer: {params_dict[key]}")
         
         return params_dict
+    
+
+def preprocess_function(sample, tokenizer, max_length=200):
+    """
+    Tokenizes the sample's 'segment' field. Adjust max_length and padding strategy as needed.
+    """
+    tokenized = tokenizer(
+        sample["segment"],
+        padding="longest",
+        truncation=True,
+        max_length=max_length,
+    )
+    results = {}
+    results['input_ids'] = tokenized['input_ids']
+    results['attention_mask'] = tokenized['attention_mask']
+    results["labels"] = sample["y"]
+
+    # Add the label (if any) to the tokenized output.
+    
+    return results
