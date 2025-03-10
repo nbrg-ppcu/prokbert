@@ -75,7 +75,7 @@ def metaphinder_microbiome_result_parser(input_df):
 # GENOMAD
 
 def genomad_microbiome_result_parser(input_df, genomad_virus_results_df):
-    input_df = pd.read_csv(genomad_tsv, sep="\t")
+    
     input_df["not_virus_score"] = (input_df["chromosome_score"] + input_df["plasmid_score"]).round(3)
     input_df = input_df.drop(columns=["chromosome_score", "plasmid_score"])
     input_df['found_in_df2'] = input_df['seq_name'].isin(genomad_virus_results_df['seq_name']).astype(int)
@@ -86,7 +86,7 @@ def genomad_microbiome_result_parser(input_df, genomad_virus_results_df):
     return input_df
 
 def genomad_fragment_result_parser(input_df, genomad_virus_results_df):
-    input_df = pd.read_csv(fragments_tsv, sep="\t")
+    
     input_df["not_virus_score"] = (input_df["chromosome_score"] + input_df["plasmid_score"]).round(3)
     input_df = input_df.drop(columns=["chromosome_score", "plasmid_score"])
     input_df['found_in_df2'] = input_df['seq_name'].isin(genomad_virus_results_df['seq_name']).astype(int)
