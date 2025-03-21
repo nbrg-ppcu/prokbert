@@ -3,9 +3,9 @@ from sklearn.metrics import roc_auc_score, accuracy_score, f1_score, matthews_co
 from sklearn.metrics import balanced_accuracy_score
 from scipy.special import logit, expit  
 from torch.optim.lr_scheduler import CosineAnnealingLR
-from transformers import Trainer, AdamW, TrainingArguments, get_linear_schedule_with_warmup, EvalPrediction
+from transformers import Trainer,  get_linear_schedule_with_warmup, EvalPrediction
 from importlib import import_module
-
+from torch.optim import AdamW
 from typing import List, Tuple, Dict, Union
 
 from .config_utils import *
