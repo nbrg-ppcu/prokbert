@@ -10,6 +10,9 @@ from transformers import DataCollatorForLanguageModeling
 
 logger = logging.getLogger(__name__)
 
+
+
+
 @dataclass
 class ProkBERTDataCollator(DataCollatorForLanguageModeling):
     """
@@ -25,7 +28,129 @@ class ProkBERTDataCollator(DataCollatorForLanguageModeling):
     mask_to_right: int = 0
     replace_prob: float = 0.8
     random_prob: float = 0.1
-    torch_token_dtype = torch.int16
+    torch_token_dtype = torch.int64
+
+    def __str__(self) -> str:
+        """
+        Returns:
+            str: A formatted string representation of the collator parameters.
+        """
+        collator_params = '''\
+Collator Parameters:
+  Number of tokens masked to left:  {0}
+  Number of tokens masked to right: {1}
+  Probability of restoring a masked token: {2}
+  Probability of changing to a random token: {3}
+  MLM Probability: {4}
+  Default token type: {5}
+'''.format(self.mask_to_left, self.mask_to_right, self.replace_prob, self.random_prob, self.mlm_probability, self.torch_token_dtype)
+        return collator_params
+
+    def set_mask_neighborhood_params(self, mask_to_left: int = 0, mask_to_right: int = 0):
+        """
+        Set the number of tokens that should be masked to the left and right of a given masked token.
+
+        Args:
+            mask_to_left (int): Number of tokens to be masked to the left. Default is 0.
+            mask_to_right (int): Number of tokens to be masked to the right. Default is 0.
+
+        Raises:
+            AssertionError: If mask_to_left or mask_to_right are not non-negative integers.
+        """
+        assert isinstance(mask_to_left, int) and mask_to_left >= 0, "mask_to_left should be a non-negative integer."
+        assert isinstance(mask_to_right, int) and mask_to_right >= 0, "mask_to_right should be a non-negative integer."
+        
+        self.mask_to_left = mask_to_left
+        self.mask_to_right = mask_to_right   
+        logger.info(f"Mask neighborhood parameters set to: mask_to_left={mask_to_left}, mask_to_right={mask_to_right}")
+
+    def set_torch_token_dtype(self, torch_token_dtype=torch.int64):
+        self.torch_token_dtype = torch_token_dtype
+
+    def torch_mask_tokens(
+        self,
+        inputs: torch.Tensor,
+        special_tokens_mask: Optional[torch.Tensor] = None
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Prepare masked tokens inputs/labels for masked language modeling:
+        80% MASK, random_prob random, else original.
+        """
+        device = inputs.device
+        # 1. Clone inputs to labels
+        labels = inputs.clone().to(device)
+
+        # 2. Create probability matrix
+        probability_matrix = torch.full(labels.shape, self.mlm_probability, device=device)
+
+        # 3. Mask out special tokens
+        if special_tokens_mask is None:
+            # build mask from tokenizer
+            mask_list = [
+                self.tokenizer.get_special_tokens_mask(val, already_has_special_tokens=True)
+                for val in labels.tolist()
+            ]
+            special_tokens_mask = torch.tensor(mask_list, dtype=torch.bool, device=device)
+        else:
+            special_tokens_mask = special_tokens_mask.bool().to(device)
+        probability_matrix.masked_fill_(special_tokens_mask, value=0.0)
+
+        # 4. Sample which tokens to mask
+        masked_indices = torch.bernoulli(probability_matrix).bool()
+
+        # 5. Expand mask neighborhood
+        bsz, seq_len = masked_indices.shape
+        indices = torch.arange(seq_len, device=device)
+        for i in range(bsz):
+            active = indices[masked_indices[i]].tolist()
+            neigh = []
+            for idx in active:
+                start = max(1, idx - self.mask_to_left)
+                end = min(idx + self.mask_to_right + 1, seq_len - 1)
+                neigh += list(range(start, end))
+            masked_indices[i, list(set(neigh))] = True
+
+        # 6. Set labels for non-masked tokens to -100
+        labels[~masked_indices] = -100
+
+        # 7. Replace 80% masked tokens with [MASK]
+        replace_matrix = torch.full(labels.shape, self.replace_prob, device=device)
+        indices_replaced = torch.bernoulli(replace_matrix).bool() & masked_indices
+        inputs[indices_replaced] = self.tokenizer.convert_tokens_to_ids(self.tokenizer.mask_token)
+
+        # 8. Replace random_prob masked tokens with random tokens
+        if self.random_prob > 0:
+            random_matrix = torch.full(labels.shape, self.random_prob, device=device)
+            indices_random = torch.bernoulli(random_matrix).bool() & masked_indices & ~indices_replaced
+            random_words = torch.randint(
+                low=0,
+                high=len(self.tokenizer),
+                size=labels.shape,
+                dtype=self.torch_token_dtype,
+                device=device,
+            )
+            inputs[indices_random] = random_words[indices_random]
+
+        # 9. Return inputs, labels
+        return inputs, labels.to(dtype=torch.int64)
+
+
+@dataclass
+class DeprProkBERTDataCollator(DataCollatorForLanguageModeling):
+    """
+    Data collator for overlapping k-mers.
+
+    Args:
+        mask_to_left (int): Number of tokens masked to the left of a given token. Default is 0.
+        mask_to_right (int): Number of tokens masked to the right of a given token. Default is 0.
+        replace_prob (float): Probability of replacing a token. Default is 0.8.
+        random_prob (float): Probability of changing a token to a random token. Default is 0.1.
+    """
+    mask_to_left: int = 0
+    mask_to_right: int = 0
+    replace_prob: float = 0.8
+    random_prob: float = 0.1
+    torch_token_dtype = torch.int64
 
     def __str__(self) -> str:
         """
