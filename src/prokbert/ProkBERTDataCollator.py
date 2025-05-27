@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass
-class ProkBERTDataCollator(DataCollatorForLanguageModeling):
+class ExpProkBERTDataCollator(DataCollatorForLanguageModeling):
     """
     Data collator for overlapping k-mers.
 
@@ -136,7 +136,7 @@ Collator Parameters:
 
 
 @dataclass
-class DeprProkBERTDataCollator(DataCollatorForLanguageModeling):
+class ProkBERTDataCollator(DataCollatorForLanguageModeling):
     """
     Data collator for overlapping k-mers.
 
