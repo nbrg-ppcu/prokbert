@@ -53,6 +53,35 @@ ProkBERT is also available as a conda package from the Bioconda channel. To inst
 conda install prokbert -c bioconda
 ```
 
+### Using Docker
+Before using the ProkBERT container with GPU support, make sure you have the following installed on your system:
+- [Docker](https://docs.docker.com/get-docker/) (required if you plan to use the Docker image)
+- [NVIDIA Docker](https://github.com/NVIDIA/nvidia-docker) (required if you intend to use Docker with GPU support)
+
+To pull and run the ProkBERT Docker image, use:
+
+```bash
+docker pull obalasz/prokbert
+```
+
+To run the container with GPU support, use:
+
+```bash
+docker run --gpus all -it --rm -v $(pwd):/app obalasz/prokbert bash
+```
+
+### Using Singularity (Apptainer)
+To pull directly from Docker Hub and convert to a Singularity image file:
+```bash
+singularity pull prokbert.sif docker://obalasz/prokbert
+```
+
+Once you have your `.sif` file, you can run ProkBERT with the following command:
+```bash
+singularity run --nv prokbert.sif bash
+```
+
+
 
 ## Applications
 ProkBERT has been validated in several key genomic tasks, including:
