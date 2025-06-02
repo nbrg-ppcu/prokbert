@@ -47,7 +47,14 @@ pip install git+https://github.com/nbrg-ppcu/prokbert.git
 
 ### Installing with conda
 (The best is using the github codes)
-ProkBERT is also available as a conda package from the Bioconda channel. To install it using conda, run:
+ProkBERT is also available as a conda package from the Bioconda channel. As first step it is reccomended to install the CUDA enabled pytorch:
+
+```bash
+pip3 install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
+```
+
+
+To install it using conda, run:
 
 ```bash
 conda install prokbert -c bioconda
