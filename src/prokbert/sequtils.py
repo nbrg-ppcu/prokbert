@@ -369,6 +369,8 @@ def segment_sequences(
 
         else:
             segments = segment_sequences_random(sequences, params)
+    else:
+        raise ValueError(f"Segmentation type '{segmentation_type}' is not supported.")
     if AsDataFrame:
         #logging.info('Creating a DataFrame from the segments. ')
         segment_db = pd.DataFrame(segments)
