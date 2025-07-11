@@ -472,7 +472,8 @@ class TrainingHelper:
             hf_path = model_row['hf_path']
             
             # Load the tokenizer using the hf_path and allow remote code.
-            tokenizer = AutoTokenizer.from_pretrained(hf_path, trust_remote_code=True)
+            tokenizer = AutoTokenizer.from_pretrained(hf_path, trust_remote_code=True,
+                                                      local_files_only=True)
             return tokenizer
         except Exception as e:
             print(f"Error loading tokenizer for basemodel '{basemodel}': {e}")
