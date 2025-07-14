@@ -1,45 +1,73 @@
-FROM nvidia/cuda:12.1.1-base-ubuntu22.04
+# Use CUDA 12.8 with cuDNN on Ubuntu 24.04
+FROM nvidia/cuda:12.8.0-cudnn-devel-ubuntu24.04
+
 LABEL maintainer="Balázs Ligeti <obbalasz@gmail.com>"
 
-# Avoid prompts from apt
+# Avoid interactive prompts during apt operations
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Install necessary packages
+# 1. Install system packages
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    wget \
-    unzip \
-    lbzip2 \
-    mc \
-    libgtextutils-dev \
-    sudo \
-    curl \
-    gpg \
-    git \
+        wget \
+        lbzip2 \
+        mc \
+        screen \
+        curl \
+        git \
+        sudo \
+        ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# Create and switch to the 'prokbert' user before installing Miniconda
+# 2. Create a non-root user "prokbert" and switch into its home directory
 RUN useradd -m -s /bin/bash prokbert
 USER prokbert
 WORKDIR /home/prokbert
 
-# Install Miniconda as 'prokbert'
-RUN mkdir -p /home/prokbert/bin && \
-    cd /home/prokbert/bin && \
-    wget https://repo.anaconda.com/miniconda/Miniconda3-py311_23.10.0-1-Linux-x86_64.sh && \
-    chmod +x Miniconda3-py311_23.10.0-1-Linux-x86_64.sh && \
-    ./Miniconda3-py311_23.10.0-1-Linux-x86_64.sh -b -p /home/prokbert/miniconda3 && \
-    /home/prokbert/miniconda3/bin/conda init bash && \
-    echo "source /home/prokbert/miniconda3/etc/profile.d/conda.sh" >> /home/prokbert/.bashrc
+# 3. Set a USERDIR environment variable for clarity
+ENV USERDIR=/home/prokbert
 
-# Set PATH to include the user's conda and potentially other user-specific binaries
-ENV PATH /home/prokbert/miniconda3/bin:$PATH
+# 4. Download and install Miniforge3 under /home/prokbert/miniforge3
+RUN wget https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-Linux-x86_64.sh \
+    && chmod +x Miniforge3-Linux-x86_64.sh \
+    && ./Miniforge3-Linux-x86_64.sh -b -p $USERDIR/miniforge3 \
+    && rm Miniforge3-Linux-x86_64.sh
 
+# 5. Ensure conda commands are on PATH
+ENV PATH=$USERDIR/miniforge3/bin:$PATH
 
-# Use pip to install prokbert and other dependencies
-RUN pip install prokbert seaborn umap-learn jupyterlab
+# 6. (Optional) Initialize conda for bash (useful if you later open an interactive shell)
+RUN conda init bash
 
-# Set up a work directory for prokbert stuff
-RUN git clone https://github.com/nbrg-ppcu/prokbert.git
-USER prokbert
+# 7. Install mamba (faster conda frontend) in the base environment
+RUN conda install -y mamba -n base -c conda-forge
 
+# 8. Use mamba to install additional utilities (lbzip2, mc, screen, git-lfs)
+#    Note: git-lfs will be initialized below
+RUN mamba install -y \
+        lbzip2 \
+        mc \
+        screen \
+        git-lfs \
+    && mamba clean -afy
+
+# 9. Initialize Git LFS so that repositories using large files will work correctly
+RUN git lfs install --skip-repo
+
+# 10. Install PyTorch (CUDA 12.8) and other Python packages via pip
+RUN pip install --no-cache-dir \
+        torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128 \
+    && pip install --no-cache-dir protobuf \
+    && pip install --no-cache-dir git+https://github.com/huggingface/datasets \
+    && pip install --no-cache-dir git+https://github.com/huggingface/accelerate \
+    && pip install --no-cache-dir git+https://github.com/huggingface/transformers.git \
+    && pip install --no-cache-dir peft einops \
+    && pip install --no-cache-dir packaging ninja \
+    && pip install --no-cache-dir tensorboard \
+    && pip install --no-cache-dir triton \
+    && pip install --no-cache-dir scikit-learn pandas matplotlib h5py jupyterlab seaborn jupyter scipy biopython openpyxl xlsxwriter statsmodels intervaltree
+
+# 11. Install the latest ProkBERT package directly from GitHub
+RUN pip install --no-cache-dir git+https://github.com/nbrg-ppcu/prokbert.git
+
+# 12. Default to bash
 CMD ["/bin/bash"]
