@@ -2,6 +2,11 @@ from transformers import PreTrainedTokenizerFast
 from transformers.tokenization_utils_base import BatchEncoding
 from transformers.tokenization_utils import PaddingStrategy
 
+from tokenizers import Tokenizer
+from tokenizers.models import WordLevel
+from tokenizers.pre_tokenizers import Split
+from tokenizers.processors import TemplateProcessing
+
 
 import torch
 from typing import List, Dict, Any, Optional, Union
@@ -102,3 +107,48 @@ class DNATokenizerFast(PreTrainedTokenizerFast):
             return BatchEncoding(output)
         else:
             return BatchEncoding(output)
+
+
+def create_prokbert_tokenizer(vocab: Optional[Dict[str, int]],
+                              kmer_size: Optional[int] = 6,
+                              kmer_shift: Optional[int] = 6,
+                              max_seq_len: Optional[int] = 512):
+
+    vocab = vocab if vocab is not None else {
+        "[PAD]": 0,
+        "[CLS]": 1,
+        "[SEP]": 2,
+        "[MASK]": 3,
+        "[BOS]": 4,
+        "[EOS]": 5,
+        "[UNK]": 6,
+        "A": 7,
+        "C": 8,
+        "T": 9,
+        "G": 10
+    }
+
+    base_tokenizer = Tokenizer(WordLevel(vocab, unk_token="[UNK]"))
+    base_tokenizer.pre_tokenizer = Split(pattern="", behavior="isolated")
+
+    base_tokenizer.post_processor = TemplateProcessing(
+        single="[CLS] $A",
+        special_tokens=[
+            ("[CLS]", vocab["[CLS]"]),
+        ],
+    )
+
+    # Wrap it to e a PreTrainedTokenizerFast
+    base_tokenizer = PreTrainedTokenizerFast(tokenizer_object=base_tokenizer)
+
+    tokenizer = DNATokenizerFast(tokenizer_object=base_tokenizer, kmer_size=kmer_size,
+                                 kmer_shift=kmer_shift,
+                                 max_seq_len=max_seq_len)
+
+    tokenizer.pad_token = "[PAD]"
+    tokenizer.cls_token = "[CLS]"
+    tokenizer.sep_token = "[SEP]"
+    tokenizer.mask_token = "[MASK]"
+    tokenizer.unk_token = "[UNK]"
+
+    return tokenizer
