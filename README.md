@@ -47,7 +47,14 @@ pip install git+https://github.com/nbrg-ppcu/prokbert.git
 
 ### Installing with conda
 (The best is using the github codes)
-ProkBERT is also available as a conda package from the Bioconda channel. To install it using conda, run:
+ProkBERT is also available as a conda package from the Bioconda channel. As first step it is reccomended to install the CUDA enabled pytorch:
+
+```bash
+pip3 install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
+```
+
+
+To install it using conda, run:
 
 ```bash
 conda install prokbert -c bioconda
@@ -55,7 +62,6 @@ conda install prokbert -c bioconda
 
 ### Using Docker
 Before using the ProkBERT container with GPU support, make sure you have the following installed on your system:
-- Python (3.10 or later)
 - [Docker](https://docs.docker.com/get-docker/) (required if you plan to use the Docker image)
 - [NVIDIA Docker](https://github.com/NVIDIA/nvidia-docker) (required if you intend to use Docker with GPU support)
 
@@ -68,20 +74,10 @@ docker pull obalasz/prokbert
 To run the container with GPU support, use:
 
 ```bash
-docker run --gpus all -it --rm -v $(pwd):/app obalasz/prokbert python /app/finetuning.py --help
+docker run --gpus all -it --rm -v $(pwd):/app obalasz/prokbert bash
 ```
-
-This command runs the ProkBERT Docker container with GPU support, mounts the current directory to the container (allowing access to your local files), and displays the help message for the `finetuning.py` script.
 
 ### Using Singularity (Apptainer)
-
-For users who prefer Singularity (now also known as Apptainer), a Singularity (Apptainer) container definition is provided. Please refer to the official documentation for instructions on building and running Singularity containers. A prebuilt container is available on Zenodo: [https://zenodo.org/records/10659030](https://zenodo.org/records/10659030).
-
-Building the Singularity container:
-
-```bash
-apptainer build prokbert.sif prokbert.def
-```
 To pull directly from Docker Hub and convert to a Singularity image file:
 ```bash
 singularity pull prokbert.sif docker://obalasz/prokbert
@@ -89,17 +85,10 @@ singularity pull prokbert.sif docker://obalasz/prokbert
 
 Once you have your `.sif` file, you can run ProkBERT with the following command:
 ```bash
-singularity run --nv prokbert.sif python /opt/prokbert/examples/finetuning.py --help
+singularity run --nv prokbert.sif bash
 ```
 
-The `--nv` flag enables NVIDIA GPU support, assuming your system has NVIDIA drivers and CUDA installed. Remove this flag if you're running on a CPU-only system.
 
-You can also shell into the container or execute specific commands as follows:
-Shell into the container:
-```bash
-singularity shell --nv prokbert.sif
-```
-**Note**: If you encounter any problems, please do not hesitate to contact us or open an issue. My email address is obalasz@gmail.com.
 
 ## Applications
 ProkBERT has been validated in several key genomic tasks, including:
