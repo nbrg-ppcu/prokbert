@@ -1190,6 +1190,7 @@ class ProkBertPredictionHead(nn.Module):
     "The ProkBert Model with a decoder head on top that is used for masked language modeling.",
     PROK_BERT_START_DOCSTRING,
 )
+
 class ProkBertForMaskedLM(ProkBertPreTrainedModel):
     _tied_weights_keys = ["decoder.weight"]
 
@@ -1458,4 +1459,332 @@ class ProkBertForCurricularClassification(ProkBertPreTrainedModel):
             hidden_states=outputs.hidden_states,
             attentions=outputs.attentions,
         )
+    
 
+
+class ddssProkBertForSequenceClassification(ProkBertPreTrainedModel):
+    """
+    ProkBERT model for sequence classification tasks.
+    """
+    def __init__(self, config: ProkBertConfig):
+        super().__init__(config)
+        self.num_labels = config.num_labels
+        self.config = config
+        print("fsgfgdfgfd")
+        print(self.num_labels)
+        print(self.config)
+        print(self.config.problem_type)
+
+        # Base ProkBERT model
+        self.model = ProkBertModel(config)
+        # Intermediate head for classification pooling
+        self.head = ProkBertPredictionHead(config)
+        # Dropout and final classifier
+        self.dropout = nn.Dropout(config.classifier_dropout)
+        self.classifier = nn.Linear(config.hidden_size, config.num_labels, bias=config.classifier_bias)
+
+        # Initialize weights and apply final processing
+        self.post_init()
+
+    def _init_weights(self, module: nn.Module):
+        # first let the base class init everything else
+        super()._init_weights(module)
+
+        # then catch our pooling head and zero it
+        if module is getattr(self, "weighting_layer", None):
+            nn.init.zeros_(module.weight)
+            nn.init.zeros_(module.bias)
+
+
+    def forward(
+        self,
+        input_ids: torch.LongTensor = None,
+        attention_mask: torch.Tensor = None,
+        sliding_window_mask: torch.Tensor = None,
+        position_ids: torch.LongTensor = None,
+        inputs_embeds: torch.Tensor = None,
+        labels: torch.Tensor = None,
+        indices: torch.Tensor = None,
+        cu_seqlens: torch.Tensor = None,
+        max_seqlen: int = None,
+        batch_size: int = None,
+        seq_len: int = None,
+        output_attentions: bool = None,
+        output_hidden_states: bool = None,
+        return_dict: bool = None,
+        **kwargs,
+    ) -> SequenceClassifierOutput:
+        # Determine return type
+        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+        self._maybe_set_compile()
+
+        # Forward through base model
+        outputs = self.model(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            sliding_window_mask=sliding_window_mask,
+            position_ids=position_ids,
+            inputs_embeds=inputs_embeds,
+            indices=indices,
+            cu_seqlens=cu_seqlens,
+            max_seqlen=max_seqlen,
+            batch_size=batch_size,
+            seq_len=seq_len,
+            output_attentions=output_attentions,
+            output_hidden_states=output_hidden_states,
+            return_dict=return_dict,
+        )
+        # Get hidden states
+        last_hidden_state = outputs[0]
+
+        # Pooling
+        if self.config.classifier_pooling == "cls":
+            pooled = last_hidden_state[:, 0]
+        else:
+            # mean pooling over valid tokens
+            pooled = (last_hidden_state * attention_mask.unsqueeze(-1)).sum(dim=1) / attention_mask.sum(dim=1, keepdim=True)
+        print(pooled)
+        # Classification head
+        pooled = self.head(pooled)
+        pooled = self.dropout(pooled)
+        logits = self.classifier(pooled)
+
+        loss = None
+        if labels is not None:
+            # Determine problem type
+            if self.config.problem_type is None:
+                if self.num_labels == 1:
+                    self.config.problem_type = "regression"
+                elif self.num_labels > 1 and labels.dtype in (torch.long, torch.int):
+                    self.config.problem_type = "single_label_classification"
+                else:
+                    self.config.problem_type = "multi_label_classification"
+            print('Guessed problem type:' + self.config.problem_type)
+            # Compute loss
+            if self.config.problem_type == "regression":
+                loss_fct = MSELoss()
+                loss = loss_fct(logits.view(-1), labels.view(-1))
+            elif self.config.problem_type == "single_label_classification":
+                loss_fct = CrossEntropyLoss()
+                loss = loss_fct(logits.view(-1, self.num_labels), labels.view(-1))
+            elif self.config.problem_type == "multi_label_classification":
+                loss_fct = BCEWithLogitsLoss()
+                loss = loss_fct(logits, labels)
+            else:
+                loss_fct = CrossEntropyLoss()
+                loss = loss_fct(logits.view(-1, self.num_labels), labels.view(-1))
+        print('Loss')
+        print(loss)
+
+        if not return_dict:
+            output = (logits,)
+            return ((loss,) + output) if loss is not None else output
+
+        return SequenceClassifierOutput(
+            loss=loss,
+            logits=logits,
+            hidden_states=outputs.hidden_states,
+            attentions=outputs.attentions,
+        )
+    
+
+
+
+
+
+
+
+class ProkBertForMaskedLM2(ProkBertPreTrainedModel):
+    _tied_weights_keys = ["decoder.weight"]
+
+    def __init__(self, config):
+        super().__init__(config)
+        self.config = config
+        self.model   = ProkBertModel(config)
+        self.head    = ProkBertPredictionHead(config)
+        self.decoder = nn.Linear(config.hidden_size, config.vocab_size,
+                                 bias=config.decoder_bias)
+
+        # for sparse‐integer masking (legacy)
+        self.sparse_prediction       = config.sparse_prediction
+        self.sparse_pred_ignore_index = config.sparse_pred_ignore_index
+
+        # finish init
+        self.post_init()
+
+    def get_output_embeddings(self):
+        return self.decoder
+
+    def set_output_embeddings(self, new_embeddings: nn.Linear):
+        self.decoder = new_embeddings
+
+    @torch.compile(dynamic=True)
+    def compiled_head(self, hidden: torch.Tensor) -> torch.Tensor:
+        return self.decoder(self.head(hidden))
+
+    @add_code_sample_docstrings(
+        checkpoint=_CHECKPOINT_FOR_DOC,
+        output_type=MaskedLMOutput,
+        config_class=_CONFIG_FOR_DOC,
+    )
+    def forward(
+        self,
+        input_ids: Optional[torch.LongTensor]    = None,
+        attention_mask: Optional[torch.Tensor]    = None,
+        sliding_window_mask: Optional[torch.Tensor]= None,
+        position_ids: Optional[torch.Tensor]      = None,
+        inputs_embeds: Optional[torch.Tensor]     = None,
+        labels: Optional[torch.LongTensor]        = None,
+        labels_dist: Optional[torch.FloatTensor]  = None,
+        loss_mask: Optional[torch.BoolTensor]     = None,
+        indices: Optional[torch.Tensor]           = None,
+        cu_seqlens: Optional[torch.Tensor]        = None,
+        max_seqlen: Optional[int]                 = None,
+        batch_size: Optional[int]                 = None,
+        seq_len: Optional[int]                    = None,
+        output_attentions: Optional[bool]         = None,
+        output_hidden_states: Optional[bool]      = None,
+        return_dict: Optional[bool]               = None,
+        **kwargs,
+    ) -> Union[Tuple[torch.Tensor], MaskedLMOutput]:
+        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+
+        # debug inputs
+        '''
+        print("Input IDs:", input_ids.shape); print(input_ids); print("——")
+        if labels_dist is not None:
+            print("Labels dist:", labels_dist.shape); print(labels_dist); print("——")
+        if loss_mask is not None:
+            print("Loss mask:", loss_mask.shape); print(loss_mask); print("——")
+        '''
+        #print('___________')
+        #print('Labels:')
+        #print(labels)
+        #print('___________')
+
+        # 1) Optional unpad for flash_attention_2
+        if self.config._attn_implementation == "flash_attention_2" \
+        and indices is None and cu_seqlens is None and max_seqlen is None:
+            # infer batch_size, seq_len
+            if batch_size is None or seq_len is None:
+                if inputs_embeds is not None:
+                    batch_size, seq_len = inputs_embeds.shape[:2]
+                else:
+                    batch_size, seq_len = input_ids.shape[:2]
+            # EXPLICIT device pick
+            device = input_ids.device if input_ids is not None else inputs_embeds.device
+            attention_mask = attention_mask if attention_mask is not None else \
+                            torch.ones((batch_size, seq_len), device=device, dtype=torch.bool)
+            if inputs_embeds is None:
+                with torch.no_grad():
+                    input_ids, indices, cu_seqlens, max_seqlen, position_ids, labels = \
+                        _unpad_prokbert_input(
+                            inputs=input_ids,
+                            attention_mask=attention_mask,
+                            position_ids=position_ids,
+                            labels=labels
+                        )
+            else:
+                inputs_embeds, indices, cu_seqlens, max_seqlen, position_ids, labels = \
+                    _unpad_prokbert_input(
+                        inputs=inputs_embeds,
+                        attention_mask=attention_mask,
+                        position_ids=position_ids,
+                        labels=labels
+                    )
+
+        # 2) Core encoder
+        outputs = self.model(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            sliding_window_mask=sliding_window_mask,
+            position_ids=position_ids,
+            inputs_embeds=inputs_embeds,
+            indices=indices,
+            cu_seqlens=cu_seqlens,
+            max_seqlen=max_seqlen,
+            batch_size=batch_size,
+            seq_len=seq_len,
+            output_attentions=output_attentions,
+            output_hidden_states=output_hidden_states,
+            return_dict=return_dict,
+        )
+        sequence_output = outputs[0]  # (B,L,H) or packed (N,H)
+        #print('outputs:')
+        #print(outputs)
+
+        # 3) Legacy sparse integer mask
+        if self.sparse_prediction and labels is not None:
+            #print('Sparse predictions..')
+            flat_labels = labels.view(-1)
+            flat_hidden = sequence_output.view(flat_labels.shape[0], -1)
+            mask_tokens = flat_labels != self.sparse_pred_ignore_index
+            sequence_output = flat_hidden[mask_tokens]
+            labels = flat_labels[mask_tokens]
+
+        # 4) Project to vocab
+        if self.config.reference_compile:
+            logits = self.compiled_head(sequence_output)
+        else:
+            hidden = self.head(sequence_output)
+            logits = self.decoder(hidden)
+        #print("Raw logits shape:", logits.shape); print("——")
+
+        loss = None
+        V    = self.config.vocab_size
+
+        # 5a) Integer‐label MLM
+        if labels is not None:
+            #print('Using the original stuff!')
+            loss_fct = nn.CrossEntropyLoss()
+            loss = loss_fct(logits.view(-1, V), labels.view(-1))
+            #print(f'Loss: {loss}')
+
+        # 5b) Soft‐distribution MLM (no re‐pad)
+        elif labels_dist is not None and loss_mask is not None:
+            B, L = loss_mask.shape
+            flat_mask = loss_mask.view(-1)        # (B*L,)
+            flat_dist = labels_dist.view(-1, V)   # (B*L, V)
+
+            # packed by attention_mask
+            if logits.dim() == 2 and logits.shape[0] != flat_mask.sum().item():
+                full_attn    = attention_mask.view(-1)     # (B*L,)
+                assert logits.shape[0] == full_attn.sum().item()
+                dist_attn    = flat_dist[full_attn]        # (Natt, V)
+                mask_in_attn = flat_mask[full_attn]        # (Natt,)
+                pred = logits[mask_in_attn]                # (N_mask, V)
+                targ = dist_attn[mask_in_attn]             # (N_mask, V)
+
+            # packed exactly by loss_mask
+            elif logits.dim() == 2 and logits.shape[0] == flat_mask.sum().item():
+                pred = logits
+                targ = flat_dist[flat_mask]
+
+            # full (B,L,V)
+            else:
+                flat_logits = logits.view(-1, V)           # (B*L, V)
+                pred        = flat_logits[flat_mask]       # (N_mask, V)
+                targ        = flat_dist[flat_mask]         # (N_mask, V)
+
+            #print("Packed pred.shape:", pred.shape)
+            #print("Packed targ.shape:", targ.shape)
+            #print("Sum targ rows:", targ.sum(dim=-1))
+
+            logp = F.log_softmax(pred, dim=-1)
+            loss = -(targ * logp).sum(dim=-1).mean()
+
+        if self.config._attn_implementation == "flash_attention_2":
+            with nullcontext() if self.config.repad_logits_with_grad or labels is None else torch.no_grad():
+                logits = _pad_prokbert_output(inputs=logits, indices=indices, batch=batch_size, seqlen=seq_len)
+
+        # 6) Return
+        if not return_dict:
+            out = (logits,) + outputs[1:]
+            return ((loss,) + out) if loss is not None else out
+
+        return MaskedLMOutput(
+            loss=loss,
+            logits=logits if logits.dim() == 3 else None,
+            hidden_states=outputs.hidden_states,
+            attentions=outputs.attentions,
+        )

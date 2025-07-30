@@ -320,6 +320,9 @@ def evaluate_binary_classification_bert(pred_results: np.ndarray) -> Tuple[Dict,
     tn, fp, fn, tp = confusion_matrix(y_true, y_pred).ravel()
     recall = tp / (tp + fn)
     specificity = tn / (tn + fp)
+    precision = tp / (tp + fp) 
+    negative_predicted_value = tn / (tn + fn)
+
     Np = tp + fn
     Nn = tn + fp
     
@@ -333,6 +336,8 @@ def evaluate_binary_classification_bert(pred_results: np.ndarray) -> Tuple[Dict,
         'mcc': mcc,
         'recall': recall,
         'sensitivity': recall,
+        'precision' : precision,
+        'neg_pred_val' : negative_predicted_value,
         'specificity': specificity,
         'tn': tn,
         'fp': fp,
@@ -725,9 +730,16 @@ def evaluate_binary_sequence_predictions(predictions, segment_dataset):
     logits = predictions.predictions
     labels = predictions.label_ids
 
+    if labels is None:
+        labels = [0] * len(logits)
+
+
     # Convert logits and labels to tensors
     logits_tensor = torch.tensor(logits)
     labels_tensor = torch.tensor(labels)
+
+    
+
 
     print('Building predictions...')
     pred_results = evaluate_binary_classification_bert_build_pred_results(logits_tensor, labels_tensor)
