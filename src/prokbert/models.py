@@ -143,20 +143,7 @@ class BertForBinaryClassificationWithPooling(nn.Module):
 
         return model
 
-class ProkBertConfigCurr(ProkBertConfig):
-    model_type = "prokbert"
 
-    def __init__(
-        self,
-        curricular_face_m = 0.5,
-        curricular_face_s=64.,
-        curricular_num_labels = 2,
-        **kwargs,
-    ):
-        super().__init__( **kwargs)
-        self.curricular_num_labels = curricular_num_labels
-        self.curricular_face_m = curricular_face_m
-        self.curricular_face_s = curricular_face_s
 
 class ProkBertConfig(MegatronBertConfig):
     model_type = "prokbert"
@@ -174,6 +161,25 @@ class ProkBertConfig(MegatronBertConfig):
         self.shift = shift
         self.num_class_labels = num_class_labels
         self.classification_dropout_rate = classification_dropout_rate
+
+class ProkBertConfigCurr(ProkBertConfig):
+    model_type = "prokbert"
+
+    def __init__(
+        self,
+        bert_base_model = "neuralbioinfo/prokbert-mini",
+        curricular_face_m = 0.5,
+        curricular_face_s=64.,
+        curricular_num_labels = 2,
+        classification_dropout_rate = 0.0, 
+        **kwargs,
+    ):
+        super().__init__( **kwargs)
+        self.curricular_num_labels = curricular_num_labels
+        self.curricular_face_m = curricular_face_m
+        self.curricular_face_s = curricular_face_s
+        self.classification_dropout_rate = classification_dropout_rate
+        self.bert_base_model = bert_base_model
 
 class ProkBertClassificationConfig(ProkBertConfig):
     model_type = "prokbert"
