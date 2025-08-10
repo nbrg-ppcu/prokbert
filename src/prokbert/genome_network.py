@@ -1,4 +1,4 @@
-from typing import Optional, Tuple, Union, Literal
+from typing import Optional, Tuple, Literal
 
 import math
 from contextlib import nullcontext
@@ -17,11 +17,10 @@ from transformers.utils.import_utils import is_triton_available
 if is_flash_attn_2_available():
     from flash_attn.flash_attn_interface import flash_attn_varlen_qkvpacked_func
 
+from .models import ProkBertConfig, ProkBertPreTrainedModel
+
 
 logger = logging.get_logger(__name__)
-
-# TODO remove rope from flash attn
-# TODO add prokbert model instead Genome Network embeddings, and use its output
 
 
 class GenomeNetworkConfig(PretrainedConfig):
@@ -621,10 +620,11 @@ class GenomeNetworkPreTrainedModel(PreTrainedModel):
 
 
 class GenomeNetworkModel(GenomeNetworkPreTrainedModel):
-    def __init__(self, config: GenomeNetworkConfig):
+    def __init__(self, config: GenomeNetworkConfig, embedding_model_config: ProkBertConfig):
         super().__init__(config)
         self.config = config
-        self.embeddings = GenomeNetworkEmbeddings(config)
+        # TODO add prokbert model instead Genome Network embeddings, and use its output
+        self.embeddings = ProkBertPreTrainedModel(embedding_model_config)
         self.layers = nn.ModuleList(
             [GenomeNetworkEncoderLayer(config, layer_id) for layer_id in range(config.num_hidden_layers)]
         )
