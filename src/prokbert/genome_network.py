@@ -1,4 +1,4 @@
-from typing import Optional, Tuple, Literal
+from typing import Optional, Tuple, Literal, List, Union
 
 import math
 from contextlib import nullcontext
@@ -10,7 +10,7 @@ from transformers import PreTrainedModel
 from transformers.activations import ACT2FN
 from transformers.configuration_utils import PretrainedConfig
 from transformers.modeling_attn_mask_utils import _prepare_4d_attention_mask
-from transformers.modeling_outputs import BaseModelOutput, MaskedLMOutput
+from transformers.modeling_outputs import BaseModelOutput, MaskedLMOutput, BaseModelOutputWithPooling
 from transformers.utils import is_flash_attn_2_available, logging
 from transformers.utils.import_utils import is_triton_available
 
@@ -298,7 +298,7 @@ PROK_BERT_ATTENTION_FUNCTION = {
 
 
 def _unpad_prokbert_input(
-    inputs: torch.Tensor,
+    inputs: torch.LongTensor,
     attention_mask: torch.Tensor,
     position_ids: Optional[torch.Tensor] = None,
     labels: Optional[torch.Tensor] = None,
@@ -565,9 +565,7 @@ class GenomeNetworkPreTrainedModel(PreTrainedModel):
             "final_out": self.config.hidden_size ** -0.5,
         }
 
-        if isinstance(module, GenomeNetworkEmbeddings):
-            init_weight(module.tok_embeddings, stds["embedding"])
-        elif isinstance(module, GenomeNetworkMLP):
+        if isinstance(module, GenomeNetworkMLP):
             init_weight(module.Wi, stds["in"])
             init_weight(module.Wo, stds["out"])
         elif isinstance(module, GenomeNetworkAttention):
@@ -620,11 +618,13 @@ class GenomeNetworkPreTrainedModel(PreTrainedModel):
 
 
 class GenomeNetworkModel(GenomeNetworkPreTrainedModel):
-    def __init__(self, config: GenomeNetworkConfig, embedding_model_config: ProkBertConfig):
+    def __init__(self, config: GenomeNetworkConfig, embeddings_model: torch.nn.Module):
         super().__init__(config)
+
         self.config = config
-        # TODO add prokbert model instead Genome Network embeddings, and use its output
-        self.embeddings = ProkBertPreTrainedModel(embedding_model_config)
+
+        self.embeddings_model = embeddings_model
+
         self.layers = nn.ModuleList(
             [GenomeNetworkEncoderLayer(config, layer_id) for layer_id in range(config.num_hidden_layers)]
         )
@@ -632,28 +632,31 @@ class GenomeNetworkModel(GenomeNetworkPreTrainedModel):
         self.gradient_checkpointing = False
         self.post_init()
 
-    def get_input_embeddings(self):
-        return self.embeddings.tok_embeddings
+    def get_input_embeddings_model(self):
+        return self.embeddings_model
 
-    def set_input_embeddings(self, value):
-        self.embeddings.tok_embeddings = value
+    def set_input_embeddings_model(self, model):
+        self.embeddings_model = model
 
     def forward(
         self,
-        input_ids: Optional[torch.LongTensor] = None,
-        attention_mask: Optional[torch.Tensor] = None,
+        input_ids: torch.LongTensor,
+        attention_mask_genom: Optional[torch.Tensor] = None,
+        attention_mask_gene: Optional[torch.Tensor] = None,
+        token_type_ids: Optional[torch.LongTensor] = None,
         sliding_window_mask: Optional[torch.Tensor] = None,
-        position_ids: Optional[torch.LongTensor] = None,
-        inputs_embeds: Optional[torch.Tensor] = None,
+        position_ids: Optional[torch.Tensor] = None,
         indices: Optional[torch.Tensor] = None,
         cu_seqlens: Optional[torch.Tensor] = None,
         max_seqlen: Optional[int] = None,
         batch_size: Optional[int] = None,
+        gene_len: Optional[int] = None,
         seq_len: Optional[int] = None,
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
     ) -> Tuple[torch.Tensor, ...] | BaseModelOutput:
+
         # Set defaults for outputs
         output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
         output_hidden_states = (
@@ -661,9 +664,8 @@ class GenomeNetworkModel(GenomeNetworkPreTrainedModel):
         )
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
-        # Ensure exactly one of input_ids or inputs_embeds is provided.
-        if (input_ids is None) ^ (inputs_embeds is not None):
-            raise ValueError("You must specify exactly one of input_ids or inputs_embeds")
+        if input_ids is None:
+            raise ValueError("You must specify input_ids!")
 
         all_hidden_states = () if output_hidden_states else None
         all_self_attentions = () if output_attentions else None
@@ -671,39 +673,41 @@ class GenomeNetworkModel(GenomeNetworkPreTrainedModel):
         self._maybe_set_compile()
 
         if input_ids is not None:
-            self.warn_if_padding_and_no_attention_mask(input_ids, attention_mask)
+            self.warn_if_padding_and_no_attention_mask(input_ids, attention_mask_genom)
 
-        if batch_size is None and seq_len is None:
-            if inputs_embeds is not None:
-                batch_size, seq_len = inputs_embeds.shape[:2]
-            else:
-                batch_size, seq_len = input_ids.shape[:2]
-        device = input_ids.device if input_ids is not None else inputs_embeds.device
+        assert input_ids.dim() == 3, f"Expected input_ids to be of shape (batch_size, gene_len, seq_len), but got {input_ids.shape}."
+        if batch_size is None or seq_len is None or gene_len is None:
+                batch_size, gene_len, seq_len = input_ids.shape
+        device = input_ids.device
 
-        if attention_mask is None:
-            attention_mask = torch.ones((batch_size, seq_len), device=device, dtype=torch.bool)
+        if attention_mask_genom is None:
+            attention_mask_genom = torch.ones((batch_size, gene_len), device=device, dtype=torch.bool)
+
+        if attention_mask_gene is None:
+            attention_mask_gene = torch.ones((gene_len, seq_len), device=device, dtype=torch.bool)
 
         repad = False
         if self.config._attn_implementation == "flash_attention_2":
             if indices is None and cu_seqlens is None and max_seqlen is None:
                 repad = True
-                if inputs_embeds is None:
-                    with torch.no_grad():
-                        input_ids, indices, cu_seqlens, max_seqlen, *_ = _unpad_prokbert_input(
-                            inputs=input_ids, attention_mask=attention_mask
-                        )
-                else:
-                    inputs_embeds, indices, cu_seqlens, max_seqlen, *_ = _unpad_prokbert_input(
-                        inputs=inputs_embeds, attention_mask=attention_mask
+                with torch.no_grad():
+                    input_ids, indices, cu_seqlens, max_seqlen, *_ = _unpad_prokbert_input( # ?
+                        inputs=input_ids, attention_mask=attention_mask_genom
                     )
         else:
             if position_ids is None:
                 position_ids = torch.arange(seq_len, device=device).unsqueeze(0)
-            attention_mask, sliding_window_mask = self._update_attention_mask(
-                attention_mask, output_attentions=output_attentions
+            attention_mask, sliding_window_mask = self._update_attention_mask(  # ?
+                attention_mask_genom, output_attentions=output_attentions
             )
 
-        hidden_states = self.embeddings(input_ids=input_ids, inputs_embeds=inputs_embeds)
+        # TODO create separate method?
+        embeddings = self.embeddings_model(
+            input_ids=input_ids.reshape(-1, seq_len),
+            attention_mask=attention_mask_gene.reshape(-1, seq_len),
+            token_type_ids=token_type_ids.reshape(-1, seq_len) if token_type_ids is not None else None
+        ).pooler_output
+        hidden_states = embeddings.reshape(batch_size, gene_len, -1)
 
         for encoder_layer in self.layers:
             if output_hidden_states:
@@ -738,7 +742,7 @@ class GenomeNetworkModel(GenomeNetworkPreTrainedModel):
 
         hidden_states = self.final_norm(hidden_states)
 
-        if repad:
+        if repad:  # ?
             hidden_states = _pad_prokbert_output(inputs=hidden_states, indices=indices, batch=batch_size, seqlen=seq_len)
             if all_hidden_states is not None:
                 all_hidden_states = tuple(
