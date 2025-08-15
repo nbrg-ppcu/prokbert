@@ -140,7 +140,7 @@ class GenomeNetworkConfig(PretrainedConfig):
         deterministic_flash_attn: bool = False,
         sparse_prediction: bool = False,
         sparse_pred_ignore_index: int = -100,
-        reference_compile: bool = None,
+        reference_compile: bool = False,
         repad_logits_with_grad: bool = False,
         **kwargs,
     ):
@@ -182,6 +182,7 @@ class GenomeNetworkConfig(PretrainedConfig):
         self.sparse_pred_ignore_index = sparse_pred_ignore_index
         self.reference_compile = reference_compile
         self.repad_logits_with_grad = repad_logits_with_grad
+        self.tie_word_embeddings = False
 
         if self.classifier_pooling not in ["cls", "mean"]:
             raise ValueError(f'Invalid value for `classifier_pooling`, should be either "cls" or "mean", but is {self.classifier_pooling}.')
@@ -368,46 +369,6 @@ def _pad_prokbert_output(
     return padded_inputs
 
 
-class GenomeNetworkEmbeddings(nn.Module):
-    """
-    Construct the embeddings from token embeddings, layer normalization, and dropout.
-    """
-
-    def __init__(self, config: GenomeNetworkConfig) -> None:
-        super().__init__()
-
-        self.config = config
-
-        self.tok_embeddings = nn.Embedding(config.vocab_size, config.hidden_size, padding_idx=config.pad_token_id)
-        self.norm = nn.LayerNorm(config.hidden_size, eps=config.norm_eps, bias=config.norm_bias)
-        self.drop = nn.Dropout(config.embedding_dropout)
-
-    @torch.compile(dynamic=True)
-    def compiled_embeddings(self, input_ids: torch.LongTensor) -> torch.Tensor:
-        return self.drop(self.norm(self.tok_embeddings(input_ids)))
-
-    def forward(
-        self, input_ids: torch.LongTensor = None, inputs_embeds: Optional[torch.Tensor] = None
-    ) -> torch.Tensor:
-        """
-        Forward pass for the embeddings layer.
-        Args:
-            input_ids: Tensor of input token ids.
-            inputs_embeds: Alternatively, a pre-computed embedding tensor.
-        Returns:
-            Tensor of embeddings with normalization and dropout applied.
-        """
-        if inputs_embeds is not None:
-            hidden_states = self.drop(self.norm(inputs_embeds))
-        else:
-            hidden_states = (
-                self.compiled_embeddings(input_ids)
-                if self.config.reference_compile
-                else self.drop(self.norm(self.tok_embeddings(input_ids)))
-            )
-        return hidden_states
-
-
 class GenomeNetworkMLP(nn.Module):
     def __init__(self, config: GenomeNetworkConfig):
         super().__init__()
@@ -541,15 +502,11 @@ class GenomeNetworkPreTrainedModel(PreTrainedModel):
     _supports_sdpa = True
     _supports_flex_attn = False
 
-    # TODO error in init_weights
-    def init_weights(self, module: nn.Module):
+    def _init_weights(self, module: nn.Module):
 
-        print("Module: ", module)
         cutoff_factor = self.config.initializer_cutoff_factor
-        if cutoff_factor is None:
-            cutoff_factor = 3
 
-        def _init_weight(module: nn.Module, std: float):
+        def init_weight(module: nn.Module, std: float):
             nn.init.trunc_normal_(
                 module.weight,
                 mean=0.0,
@@ -569,15 +526,15 @@ class GenomeNetworkPreTrainedModel(PreTrainedModel):
         }
 
         if isinstance(module, GenomeNetworkMLP):
-            _init_weight(module.Wi, stds["in"])
-            _init_weight(module.Wo, stds["out"])
+            init_weight(module.Wi, stds["in"])
+            init_weight(module.Wo, stds["out"])
         elif isinstance(module, GenomeNetworkAttention):
-            _init_weight(module.Wqkv, stds["in"])
-            _init_weight(module.Wo, stds["out"])
+            init_weight(module.Wqkv, stds["in"])
+            init_weight(module.Wo, stds["out"])
         elif isinstance(module, GenomeNetworkPredictionHead):
-            _init_weight(module.dense, stds["out"])
+            init_weight(module.dense, stds["out"])
         elif isinstance(module, GenomeNetworkLMPredictionHead):
-            _init_weight(module.decoder, stds["out"])
+            init_weight(module.decoder, stds["out"])
 
     def _maybe_set_compile(self):
         if self.config.reference_compile is False:
@@ -621,25 +578,16 @@ class GenomeNetworkPreTrainedModel(PreTrainedModel):
 
 
 class GenomeNetworkModel(GenomeNetworkPreTrainedModel):
-    def __init__(self, config: GenomeNetworkConfig, embeddings_model: torch.nn.Module):
+    def __init__(self, config: GenomeNetworkConfig, embeddings_model: ProkBertModel):
         super().__init__(config)
-
         self.config = config
-
         self.embeddings_model = embeddings_model
-
         self.layers = nn.ModuleList(
             [GenomeNetworkEncoderLayer(config, layer_id) for layer_id in range(config.num_hidden_layers)]
         )
         self.final_norm = nn.LayerNorm(config.hidden_size, eps=config.norm_eps, bias=config.norm_bias)
         self.gradient_checkpointing = False
         self.post_init()
-
-    def get_input_embeddings(self):
-        return self.embeddings_model
-
-    def set_input_embeddings(self, model):
-        self.embeddings_model = model
 
     def forward(
         self,
@@ -814,7 +762,7 @@ class GenomeNetworkLMPredictionHead(nn.Module):
 
 
 class GenomeNetworkForMaskedLM(GenomeNetworkPreTrainedModel):
-    _tied_weights_keys = ["decoder.weight"]
+    _tied_weights_keys = ["cls.decoder"]
 
     def __init__(
         self,
@@ -840,19 +788,6 @@ class GenomeNetworkForMaskedLM(GenomeNetworkPreTrainedModel):
         self.cls = GenomeNetworkLMPredictionHead(config)
 
         self.post_init() # initalize weights and apply final processing
-
-    def get_input_embeddings(self):
-        return self.bert.embeddings_model
-
-    def set_input_embeddings(self, model):
-        self.bert.embeddings_model = model
-
-
-    def get_output_embeddings(self) -> torch.nn.Linear:
-        return self.cls.decoder
-
-    def set_output_embeddings(self, new_embeddings: nn.Linear) -> None:
-        self.cls.decoder = new_embeddings
 
     @torch.compile(dynamic=True)
     def compiled_head(self, output: torch.Tensor) -> torch.Tensor:
