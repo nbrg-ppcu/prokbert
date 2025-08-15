@@ -1,4 +1,4 @@
-from typing import Optional, Tuple, Literal, List, Union
+from typing import Optional, Tuple, Literal, Union
 
 import math
 from contextlib import nullcontext
@@ -10,14 +10,14 @@ from transformers import PreTrainedModel
 from transformers.activations import ACT2FN
 from transformers.configuration_utils import PretrainedConfig
 from transformers.modeling_attn_mask_utils import _prepare_4d_attention_mask
-from transformers.modeling_outputs import BaseModelOutput, MaskedLMOutput, BaseModelOutputWithPooling
+from transformers.modeling_outputs import BaseModelOutput, MaskedLMOutput
 from transformers.utils import is_flash_attn_2_available, logging
 from transformers.utils.import_utils import is_triton_available
 
 if is_flash_attn_2_available():
     from flash_attn.flash_attn_interface import flash_attn_varlen_qkvpacked_func
 
-from .models import ProkBertConfig, ProkBertPreTrainedModel
+from .models import ProkBertConfig, ProkBertModel
 
 
 logger = logging.get_logger(__name__)
@@ -541,12 +541,15 @@ class GenomeNetworkPreTrainedModel(PreTrainedModel):
     _supports_sdpa = True
     _supports_flex_attn = False
 
-    def _init_weights(self, module: nn.Module):
+    # TODO error in init_weights
+    def init_weights(self, module: nn.Module):
+
+        print("Module: ", module)
         cutoff_factor = self.config.initializer_cutoff_factor
         if cutoff_factor is None:
             cutoff_factor = 3
 
-        def init_weight(module: nn.Module, std: float):
+        def _init_weight(module: nn.Module, std: float):
             nn.init.trunc_normal_(
                 module.weight,
                 mean=0.0,
@@ -566,15 +569,15 @@ class GenomeNetworkPreTrainedModel(PreTrainedModel):
         }
 
         if isinstance(module, GenomeNetworkMLP):
-            init_weight(module.Wi, stds["in"])
-            init_weight(module.Wo, stds["out"])
+            _init_weight(module.Wi, stds["in"])
+            _init_weight(module.Wo, stds["out"])
         elif isinstance(module, GenomeNetworkAttention):
-            init_weight(module.Wqkv, stds["in"])
-            init_weight(module.Wo, stds["out"])
+            _init_weight(module.Wqkv, stds["in"])
+            _init_weight(module.Wo, stds["out"])
         elif isinstance(module, GenomeNetworkPredictionHead):
-            init_weight(module.dense, stds["out"])
-        elif isinstance(module, GenomeNetworkForMaskedLM):
-            init_weight(module.decoder, stds["out"])
+            _init_weight(module.dense, stds["out"])
+        elif isinstance(module, GenomeNetworkLMPredictionHead):
+            _init_weight(module.decoder, stds["out"])
 
     def _maybe_set_compile(self):
         if self.config.reference_compile is False:
@@ -632,10 +635,10 @@ class GenomeNetworkModel(GenomeNetworkPreTrainedModel):
         self.gradient_checkpointing = False
         self.post_init()
 
-    def get_input_embeddings_model(self):
+    def get_input_embeddings(self):
         return self.embeddings_model
 
-    def set_input_embeddings_model(self, model):
+    def set_input_embeddings(self, model):
         self.embeddings_model = model
 
     def forward(
@@ -784,48 +787,84 @@ class GenomeNetworkModel(GenomeNetworkPreTrainedModel):
 class GenomeNetworkPredictionHead(nn.Module):
     def __init__(self, config):
         super().__init__()
-
-        self.config = config
         self.dense = nn.Linear(config.hidden_size, config.hidden_size, config.classifier_bias)
-        self.act = ACT2FN[config.classifier_activation]
+        if isinstance(config.classifier_activation, str):
+            self.act = ACT2FN[config.classifier_activation]
+        else:
+            self.act = config.classifier_activation
         self.norm = nn.LayerNorm(config.hidden_size, eps=config.norm_eps, bias=config.norm_bias)
 
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
-        return self.norm(self.act(self.dense(hidden_states)))
+        hidden_states = self.dense(hidden_states)
+        hidden_states = self.act(hidden_states)
+        hidden_states = self.norm(hidden_states)
+        return hidden_states
+
+
+class GenomeNetworkLMPredictionHead(nn.Module):
+    def __init__(self, config) -> None:
+        super().__init__()
+        self.head = GenomeNetworkPredictionHead(config)
+        self.decoder = nn.Linear(config.hidden_size, config.vocab_size, bias=config.decoder_bias)
+
+    def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
+        hidden_states = self.head(hidden_states)
+        hidden_states = self.decoder(hidden_states)
+        return hidden_states
 
 
 class GenomeNetworkForMaskedLM(GenomeNetworkPreTrainedModel):
     _tied_weights_keys = ["decoder.weight"]
 
-    def __init__(self, config):
-        super().__init__(config)
+    def __init__(
+        self,
+        config: GenomeNetworkConfig,
+        embedding_model: Optional[PreTrainedModel] = None,
+        embedding_config: Optional[ProkBertConfig] = None,
+        **kwargs
+    ) -> None:
+
+        if not isinstance(config, GenomeNetworkConfig):
+            raise ValueError(f"Expected `GenomeNetworkConfig`, got {config.__class__.__module__}.{config.__class__.__name__}")
+
+        super().__init__(config, **kwargs)
         self.config = config
-        self.model = GenomeNetworkModel(config)
-        self.head = GenomeNetworkPredictionHead(config)
-        self.decoder = nn.Linear(config.hidden_size, config.vocab_size, bias=config.decoder_bias)
 
-        self.sparse_prediction = self.config.sparse_prediction
-        self.sparse_pred_ignore_index = self.config.sparse_pred_ignore_index
+        if (embedding_model is None) == (embedding_config is None):
+            raise ValueError("You must specify exactly one of embedding_model or embedding_config")
 
-        self.post_init()
+        if embedding_model is None:
+            embedding_model = ProkBertModel(embedding_config)
 
-    def get_output_embeddings(self):
-        return self.decoder
+        self.bert = GenomeNetworkModel(config, embedding_model)
+        self.cls = GenomeNetworkLMPredictionHead(config)
 
-    def set_output_embeddings(self, new_embeddings: nn.Linear):
-        self.decoder = new_embeddings
+        self.post_init() # initalize weights and apply final processing
+
+    def get_input_embeddings(self):
+        return self.bert.embeddings_model
+
+    def set_input_embeddings(self, model):
+        self.bert.embeddings_model = model
+
+
+    def get_output_embeddings(self) -> torch.nn.Linear:
+        return self.cls.decoder
+
+    def set_output_embeddings(self, new_embeddings: nn.Linear) -> None:
+        self.cls.decoder = new_embeddings
 
     @torch.compile(dynamic=True)
     def compiled_head(self, output: torch.Tensor) -> torch.Tensor:
-        return self.decoder(self.head(output))
+        return self.cls.decoder(self.cls.head(output))
 
     def forward(
         self,
-        input_ids: Optional[torch.LongTensor] = None,
+        input_ids: torch.LongTensor,
         attention_mask: Optional[torch.Tensor] = None,
+        token_type_ids: Optional[torch.LongTensor] = None,
         sliding_window_mask: Optional[torch.Tensor] = None,
         position_ids: Optional[torch.Tensor] = None,
-        inputs_embeds: Optional[torch.Tensor] = None,
         labels: Optional[torch.Tensor] = None,
         indices: Optional[torch.Tensor] = None,
         cu_seqlens: Optional[torch.Tensor] = None,
@@ -836,39 +875,40 @@ class GenomeNetworkForMaskedLM(GenomeNetworkPreTrainedModel):
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
         **kwargs,
-    ) -> Tuple[torch.Tensor] | MaskedLMOutput:
+    ) -> Union[tuple,  MaskedLMOutput]:
+
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+
         self._maybe_set_compile()
 
         # For flash attention, unpad the inputs to avoid wasting compute on padding tokens.
-        if self.config._attn_implementation == "flash_attention_2":
-            if indices is None and cu_seqlens is None and max_seqlen is None:
-                if batch_size is None and seq_len is None:
-                    if inputs_embeds is not None:
-                        batch_size, seq_len = inputs_embeds.shape[:2]
-                    else:
-                        batch_size, seq_len = input_ids.shape[:2]
-                device = input_ids.device if input_ids is not None else inputs_embeds.device
+        # if self.config._attn_implementation == "flash_attention_2":
+        #     if indices is None and cu_seqlens is None and max_seqlen is None:
+        #         if batch_size is None and seq_len is None:
+        #             if inputs_embeds is not None:
+        #                 batch_size, seq_len = inputs_embeds.shape[:2]
+        #             else:
+        #                 batch_size, seq_len = input_ids.shape[:2]
+        #         device = input_ids.device if input_ids is not None else inputs_embeds.device
 
-                if attention_mask is None:
-                    attention_mask = torch.ones((batch_size, seq_len), device=device, dtype=torch.bool)
+        #         if attention_mask is None:
+        #             attention_mask = torch.ones((batch_size, seq_len), device=device, dtype=torch.bool)
 
-                if inputs_embeds is None:
-                    with torch.no_grad():
-                        input_ids, indices, cu_seqlens, max_seqlen, position_ids, labels = _unpad_prokbert_input(
-                            inputs=input_ids, attention_mask=attention_mask, position_ids=position_ids, labels=labels
-                        )
-                else:
-                    inputs_embeds, indices, cu_seqlens, max_seqlen, position_ids, labels = _unpad_prokbert_input(
-                        inputs=inputs_embeds, attention_mask=attention_mask, position_ids=position_ids, labels=labels
-                    )
+        #         if inputs_embeds is None:
+        #             with torch.no_grad():
+        #                 input_ids, indices, cu_seqlens, max_seqlen, position_ids, labels = _unpad_prokbert_input(
+        #                     inputs=input_ids, attention_mask=attention_mask, position_ids=position_ids, labels=labels
+        #                 )
+        #         else:
+        #             inputs_embeds, indices, cu_seqlens, max_seqlen, position_ids, labels = _unpad_prokbert_input(
+        #                 inputs=inputs_embeds, attention_mask=attention_mask, position_ids=position_ids, labels=labels
+        #             )
 
-        outputs = self.model(
+        outputs = self.bert(
             input_ids=input_ids,
             attention_mask=attention_mask,
             sliding_window_mask=sliding_window_mask,
             position_ids=position_ids,
-            inputs_embeds=inputs_embeds,
             indices=indices,
             cu_seqlens=cu_seqlens,
             max_seqlen=max_seqlen,
@@ -880,35 +920,36 @@ class GenomeNetworkForMaskedLM(GenomeNetworkPreTrainedModel):
         )
         last_hidden_state = outputs[0]
 
-        # If sparse prediction is enabled, filter out non-masked tokens.
-        if self.sparse_prediction and labels is not None:
-            labels = labels.view(-1)
-            last_hidden_state = last_hidden_state.view(labels.shape[0], -1)
-            mask_tokens = labels != self.sparse_pred_ignore_index
-            last_hidden_state = last_hidden_state[mask_tokens]
-            labels = labels[mask_tokens]
+        # filter out non-masked tokens, decrease compute in head + loss
+        if self.config.sparse_prediction and labels is not None:
+            labels = labels.view(-1) # (BxS) <- (B, S)
+            last_hidden_state = last_hidden_state.view(labels.shape[0], -1) # (BxS, H)
+            mask_tokens = labels != self.config.sparse_pred_ignore_index
+            last_hidden_state = last_hidden_state[mask_tokens] # (BxS, H) <- (B, S, H)
+            labels = labels[mask_tokens] # (BxS)
 
-        logits = (
+        logits = ( # (BxS, V)
             self.compiled_head(last_hidden_state)
             if self.config.reference_compile
-            else self.decoder(self.head(last_hidden_state))
+            else self.cls(last_hidden_state)
         )
 
-        loss = None
+        masked_lm_loss = None
         if labels is not None:
-            loss = self.loss_function(logits, labels, vocab_size=self.config.vocab_size)
+            loss_fct = torch.nn.CrossEntropyLoss()
+            masked_lm_loss = loss_fct(logits.view(-1, self.config.vocab_size), labels.view(-1))
 
         # If using flash attention, repad the output.
-        if self.config._attn_implementation == "flash_attention_2":
-            with nullcontext() if self.config.repad_logits_with_grad or labels is None else torch.no_grad():
-                logits = _pad_prokbert_output(inputs=logits, indices=indices, batch=batch_size, seqlen=seq_len)
+        # if self.config._attn_implementation == "flash_attention_2": # ?
+        #     with nullcontext() if self.config.repad_logits_with_grad or labels is None else torch.no_grad():
+        #         logits = _pad_prokbert_output(inputs=logits, indices=indices, batch=batch_size, seqlen=seq_len)
 
         if not return_dict:
-            output = (logits,)
-            return ((loss,) + output) if loss is not None else output
+            output = (logits,) + outputs[2:]
+            return ((masked_lm_loss,) + output) if masked_lm_loss is not None else output
 
         return MaskedLMOutput(
-            loss=loss,
+            loss=masked_lm_loss,
             logits=logits,
             hidden_states=outputs.hidden_states,
             attentions=outputs.attentions,
