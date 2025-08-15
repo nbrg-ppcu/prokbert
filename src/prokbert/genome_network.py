@@ -842,6 +842,7 @@ class GenomeNetworkForMaskedLM(GenomeNetworkPreTrainedModel):
         outputs = self.bert(
             input_ids=input_ids,
             attention_mask=attention_mask,
+            token_type_ids=token_type_ids,
             sliding_window_mask=sliding_window_mask,
             position_ids=position_ids,
             indices=indices,
