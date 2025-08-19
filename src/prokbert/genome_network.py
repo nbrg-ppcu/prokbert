@@ -591,51 +591,41 @@ class GenomeNetworkModel(GenomeNetworkPreTrainedModel):
 
     def forward(
         self,
-        input_ids: torch.LongTensor,
-        attention_mask_genom: Optional[torch.Tensor] = None,
-        attention_mask_gene: Optional[torch.Tensor] = None,
+        input_ids: torch.LongTensor, # TODO readd input_embeds when this is done
+        attention_mask: Optional[torch.Tensor] = None,
         token_type_ids: Optional[torch.LongTensor] = None,
         sliding_window_mask: Optional[torch.Tensor] = None,
         position_ids: Optional[torch.Tensor] = None,
         indices: Optional[torch.Tensor] = None,
         cu_seqlens: Optional[torch.Tensor] = None,
         max_seqlen: Optional[int] = None,
-        batch_size: Optional[int] = None,
-        gene_len: Optional[int] = None,
-        seq_len: Optional[int] = None,
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
     ) -> Tuple[torch.Tensor, ...] | BaseModelOutput:
 
-        # Set defaults for outputs
         output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
         output_hidden_states = (
             output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
         )
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
-        if input_ids is None:
-            raise ValueError("You must specify input_ids!")
-
         all_hidden_states = () if output_hidden_states else None
         all_self_attentions = () if output_attentions else None
 
         self._maybe_set_compile()
 
-        if input_ids is not None:
-            self.warn_if_padding_and_no_attention_mask(input_ids, attention_mask_genom)
-
+        self.warn_if_padding_and_no_attention_mask(input_ids, attention_mask)
         assert input_ids.dim() == 3, f"Expected input_ids to be of shape (batch_size, gene_len, seq_len), but got {input_ids.shape}."
-        if batch_size is None or seq_len is None or gene_len is None:
-                batch_size, gene_len, seq_len = input_ids.shape
+        batch_size, gene_len, seq_len = input_ids.shape
         device = input_ids.device
 
-        if attention_mask_genom is None:
-            attention_mask_genom = torch.ones((batch_size, gene_len), device=device, dtype=torch.bool)
+        if attention_mask is None:
+            attention_mask = torch.ones((batch_size, gene_len, seq_len), device=device, dtype=torch.bool)
+        collapsed_attention_mask = attention_mask.any(dim=-1)
 
-        if attention_mask_gene is None:
-            attention_mask_gene = torch.ones((gene_len, seq_len), device=device, dtype=torch.bool)
+        if token_type_ids is None:
+            token_type_ids = torch.zeros((batch_size, gene_len, seq_len), dtype=torch.long, device=device)
 
         repad = False
         if self.config._attn_implementation == "flash_attention_2":
@@ -643,22 +633,22 @@ class GenomeNetworkModel(GenomeNetworkPreTrainedModel):
                 repad = True
                 with torch.no_grad():
                     input_ids, indices, cu_seqlens, max_seqlen, *_ = _unpad_prokbert_input( # ?
-                        inputs=input_ids, attention_mask=attention_mask_genom
+                        inputs=input_ids, attention_mask=collapsed_attention_mask
                     )
         else:
-            if position_ids is None:
+            if position_ids is None: # ? should we handle sliding_window_mask also
                 position_ids = torch.arange(seq_len, device=device).unsqueeze(0)
-            attention_mask, sliding_window_mask = self._update_attention_mask(  # ?
-                attention_mask_genom, output_attentions=output_attentions
+            extended_attention_mask, sliding_window_mask = self._update_attention_mask(  # ?
+                collapsed_attention_mask, output_attentions=output_attentions
             )
 
-        # TODO create separate method?
         embeddings = self.embeddings_model(
             input_ids=input_ids.reshape(-1, seq_len),
-            attention_mask=attention_mask_gene.reshape(-1, seq_len),
-            token_type_ids=token_type_ids.reshape(-1, seq_len) if token_type_ids is not None else None
-        ).pooler_output
-        hidden_states = embeddings.reshape(batch_size, gene_len, -1)
+            attention_mask=attention_mask.reshape(-1, seq_len),
+            token_type_ids=token_type_ids.reshape(-1, seq_len)
+        )
+        embeddings_output = embeddings[1] if not return_dict else embeddings.pooler_output
+        hidden_states = embeddings_output.reshape(batch_size, gene_len, -1)
 
         for encoder_layer in self.layers:
             if output_hidden_states:
@@ -667,7 +657,7 @@ class GenomeNetworkModel(GenomeNetworkPreTrainedModel):
                 layer_outputs = self._gradient_checkpointing_func(
                     encoder_layer.__call__,
                     hidden_states,
-                    attention_mask,
+                    extended_attention_mask,
                     sliding_window_mask,
                     position_ids,
                     cu_seqlens,
@@ -677,7 +667,7 @@ class GenomeNetworkModel(GenomeNetworkPreTrainedModel):
             else:
                 layer_outputs = encoder_layer(
                     hidden_states,
-                    attention_mask=attention_mask,
+                    attention_mask=extended_attention_mask,
                     sliding_window_mask=sliding_window_mask,
                     position_ids=position_ids,
                     cu_seqlens=cu_seqlens,
@@ -804,8 +794,6 @@ class GenomeNetworkForMaskedLM(GenomeNetworkPreTrainedModel):
         indices: Optional[torch.Tensor] = None,
         cu_seqlens: Optional[torch.Tensor] = None,
         max_seqlen: Optional[int] = None,
-        batch_size: Optional[int] = None,
-        seq_len: Optional[int] = None,
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
@@ -848,8 +836,6 @@ class GenomeNetworkForMaskedLM(GenomeNetworkPreTrainedModel):
             indices=indices,
             cu_seqlens=cu_seqlens,
             max_seqlen=max_seqlen,
-            batch_size=batch_size,
-            seq_len=seq_len,
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
             return_dict=return_dict,
