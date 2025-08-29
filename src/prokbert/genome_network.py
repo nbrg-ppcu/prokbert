@@ -642,6 +642,7 @@ class GenomeNetworkModel(GenomeNetworkPreTrainedModel):
                 collapsed_attention_mask, output_attentions=output_attentions
             )
 
+        # (genom / batch size, gene, hidden state)
         embeddings = self.embeddings_model(
             input_ids=input_ids.reshape(-1, seq_len),
             attention_mask=attention_mask.reshape(-1, seq_len),
