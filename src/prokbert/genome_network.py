@@ -1,7 +1,6 @@
 from typing import Optional, Tuple, Literal, Union
 
 import math
-from contextlib import nullcontext
 
 import torch
 import torch.nn as nn
@@ -9,7 +8,6 @@ import torch.nn.functional as F
 from transformers import PreTrainedModel
 from transformers.activations import ACT2FN
 from transformers.configuration_utils import PretrainedConfig
-from transformers.modeling_attn_mask_utils import _prepare_4d_attention_mask
 from transformers.modeling_outputs import BaseModelOutput, MaskedLMOutput
 from transformers.utils import is_flash_attn_2_available, logging
 from transformers.utils.import_utils import is_triton_available
@@ -17,13 +15,11 @@ from transformers.utils.import_utils import is_triton_available
 if is_flash_attn_2_available():
     from flash_attn.flash_attn_interface import flash_attn_varlen_qkvpacked_func
 
-from .models import ProkBertConfig, ProkBertModel
-
 
 logger = logging.get_logger(__name__)
 
 
-class GenomeNetworkConfig(PretrainedConfig):
+class GenomeEncoderConfig(PretrainedConfig):
     r"""
     This is the configuration class to store the configuration of a [`ProkBertModel`]. It is used to
     instantiate a ProkBert model according to the specified arguments, defining the model architecture.
@@ -140,6 +136,8 @@ class GenomeNetworkConfig(PretrainedConfig):
         deterministic_flash_attn: bool = False,
         sparse_prediction: bool = False,
         sparse_pred_ignore_index: int = -100,
+        masked_gene_index: int = 1,
+        masked_gene_random_index: int = 2,
         reference_compile: bool = False,
         repad_logits_with_grad: bool = False,
         **kwargs,
@@ -180,6 +178,8 @@ class GenomeNetworkConfig(PretrainedConfig):
         self.deterministic_flash_attn = deterministic_flash_attn
         self.sparse_prediction = sparse_prediction
         self.sparse_pred_ignore_index = sparse_pred_ignore_index
+        self.masked_gene_index = masked_gene_index
+        self.masked_gene_random_index = masked_gene_random_index
         self.reference_compile = reference_compile
         self.repad_logits_with_grad = repad_logits_with_grad
         self.tie_word_embeddings = False
@@ -209,6 +209,7 @@ def eager_attention_forward(
     if local_attention != (-1, -1):
         attention_mask = sliding_window_mask
 
+    print(f"Attn weight: {attn_weights.shape}, attention_mask: {attention_mask.shape}")
     attn_weights = attn_weights + attention_mask
 
     # Upcast attention to fp32 for stability.
@@ -298,79 +299,8 @@ PROK_BERT_ATTENTION_FUNCTION = {
 }
 
 
-def _unpad_prokbert_input(
-    inputs: torch.LongTensor,
-    attention_mask: torch.Tensor,
-    position_ids: Optional[torch.Tensor] = None,
-    labels: Optional[torch.Tensor] = None,
-) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, int, Optional[torch.Tensor], Optional[torch.Tensor]]:
-    """
-    Remove padding from input sequences.
-
-    Args:
-        inputs: (batch, seqlen, ...) or (batch, seqlen)
-        attention_mask: (batch, seqlen), where 1 means valid and 0 means padding.
-        position_ids: (batch, seqlen), optional position ids.
-        labels: (batch, seqlen), optional labels.
-
-    Returns:
-        unpadded_inputs: Tensor of shape (total_nnz, ...) containing only valid tokens.
-        indices: Tensor of indices corresponding to valid tokens.
-        cu_seqlens: Cumulative sequence lengths of the unpadded tokens (shape: batch + 1).
-        max_seqlen_in_batch: Maximum sequence length among all sequences (excluding padding).
-        unpadded_position_ids: (total_nnz,) or None.
-        unpadded_labels: (total_nnz,) or None.
-    """
-    seqlens_in_batch = attention_mask.sum(dim=-1, dtype=torch.int32)
-    indices = torch.nonzero(attention_mask.flatten(), as_tuple=False).flatten()
-    max_seqlen_in_batch = int(seqlens_in_batch.max().item())
-    cu_seqlens = torch.nn.functional.pad(torch.cumsum(seqlens_in_batch, dim=0, dtype=torch.int32), (1, 0))
-
-    if inputs.dim() == 2:
-        unpadded_inputs = inputs.flatten()[indices]
-    else:
-        batch, seqlen, *rest = inputs.shape
-        shape = batch * seqlen
-        unpadded_inputs = inputs.view(shape, *rest)[indices]
-
-    unpadded_position_ids = position_ids.flatten()[indices] if position_ids is not None else None
-    unpadded_labels = labels.flatten()[indices] if labels is not None else None
-
-    return unpadded_inputs, indices, cu_seqlens, max_seqlen_in_batch, unpadded_position_ids, unpadded_labels
-
-
-def _pad_prokbert_output(
-    inputs: torch.Tensor,
-    indices: torch.Tensor,
-    batch: int,
-    seqlen: int,
-) -> torch.Tensor:
-    """
-    Add padding back to the output tensor.
-
-    Args:
-        inputs: Tensor of shape (total_nnz, ...) containing outputs for only valid tokens.
-        indices: Tensor of indices indicating positions of valid tokens.
-        batch: Batch size.
-        seqlen: Maximum sequence length (including padding).
-
-    Returns:
-        Tensor of shape (batch, seqlen, ...) with outputs in their original padded positions.
-    """
-    if inputs.dim() == 1:
-        output = torch.zeros(batch * seqlen, dtype=inputs.dtype, device=inputs.device)
-        output[indices] = inputs
-        padded_inputs = output.view(batch, seqlen)
-    else:
-        _, *rest = inputs.shape
-        output = torch.zeros(batch * seqlen, *rest, dtype=inputs.dtype, device=inputs.device)
-        output[indices] = inputs
-        padded_inputs = output.view(batch, seqlen, *rest)
-    return padded_inputs
-
-
 class GenomeNetworkMLP(nn.Module):
-    def __init__(self, config: GenomeNetworkConfig):
+    def __init__(self, config: GenomeEncoderConfig):
         super().__init__()
 
         self.config = config
@@ -386,7 +316,7 @@ class GenomeNetworkMLP(nn.Module):
 
 
 class GenomeNetworkAttention(nn.Module):
-    def __init__(self, config: GenomeNetworkConfig, layer_id: Optional[int] = None):
+    def __init__(self, config: GenomeEncoderConfig, layer_id: Optional[int] = None):
         super().__init__()
 
         self.config = config
@@ -443,12 +373,11 @@ class GenomeNetworkAttention(nn.Module):
 
 
 class GenomeNetworkEncoderLayer(nn.Module):
-    def __init__(self, config: GenomeNetworkConfig, layer_id: Optional[int] = None):
+    def __init__(self, config: GenomeEncoderConfig, layer_id: Optional[int] = None):
         super().__init__()
 
         self.config = config
 
-        # For the first layer, use Identity; otherwise, apply LayerNorm.
         if layer_id == 0:
             self.attn_norm = nn.Identity()
         else:
@@ -471,6 +400,7 @@ class GenomeNetworkEncoderLayer(nn.Module):
         max_seqlen: Optional[int] = None,
         output_attentions: Optional[bool] = False,
     ) -> torch.Tensor:
+
         attn_outputs = self.attn(
             self.attn_norm(hidden_states),
             attention_mask=attention_mask,
@@ -493,8 +423,8 @@ class GenomeNetworkEncoderLayer(nn.Module):
         return (hidden_states,) + attn_outputs[1:]  # Return additional outputs (e.g. attentions) if provided.
 
 
-class GenomeNetworkPreTrainedModel(PreTrainedModel):
-    config_class = GenomeNetworkConfig
+class GenomeEncoderPreTrainedModel(PreTrainedModel):
+    config_class = GenomeEncoderConfig
     base_model_prefix = "model"
     supports_gradient_checkpointing = True
     _no_split_modules = ["GenomeNetworkEmbeddings", "GenomeNetworkEncoderLayer"]
@@ -531,10 +461,6 @@ class GenomeNetworkPreTrainedModel(PreTrainedModel):
         elif isinstance(module, GenomeNetworkAttention):
             init_weight(module.Wqkv, stds["in"])
             init_weight(module.Wo, stds["out"])
-        elif isinstance(module, GenomeNetworkPredictionHead):
-            init_weight(module.dense, stds["out"])
-        elif isinstance(module, GenomeNetworkLMPredictionHead):
-            init_weight(module.decoder, stds["out"])
 
     def _maybe_set_compile(self):
         if self.config.reference_compile is False:
@@ -577,28 +503,25 @@ class GenomeNetworkPreTrainedModel(PreTrainedModel):
         return model_embeds
 
 
-class GenomeNetworkModel(GenomeNetworkPreTrainedModel):
-    def __init__(self, config: GenomeNetworkConfig, embeddings_model: ProkBertModel):
+class GenomeEncoder(GenomeEncoderPreTrainedModel):
+    def __init__(self, config: GenomeEncoderConfig) -> None:
         super().__init__(config)
         self.config = config
-        self.embeddings_model = embeddings_model
+
         self.layers = nn.ModuleList(
             [GenomeNetworkEncoderLayer(config, layer_id) for layer_id in range(config.num_hidden_layers)]
         )
         self.final_norm = nn.LayerNorm(config.hidden_size, eps=config.norm_eps, bias=config.norm_bias)
         self.gradient_checkpointing = False
-        self.post_init()
+
+        self.pooling = None # ! for now
+
+        self.post_init() # initalize weights and apply final processing
 
     def forward(
         self,
-        input_ids: torch.LongTensor, # TODO readd input_embeds when this is done
+        inputs_embeds: torch.FloatTensor,
         attention_mask: Optional[torch.Tensor] = None,
-        token_type_ids: Optional[torch.LongTensor] = None,
-        sliding_window_mask: Optional[torch.Tensor] = None,
-        position_ids: Optional[torch.Tensor] = None,
-        indices: Optional[torch.Tensor] = None,
-        cu_seqlens: Optional[torch.Tensor] = None,
-        max_seqlen: Optional[int] = None,
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
@@ -615,41 +538,14 @@ class GenomeNetworkModel(GenomeNetworkPreTrainedModel):
 
         self._maybe_set_compile()
 
-        self.warn_if_padding_and_no_attention_mask(input_ids, attention_mask)
-        assert input_ids.dim() == 3, f"Expected input_ids to be of shape (batch_size, gene_len, seq_len), but got {input_ids.shape}."
-        batch_size, gene_len, seq_len = input_ids.shape
-        device = input_ids.device
+        assert inputs_embeds.dim() == 3, f"Expected input_embeds to be of shape (batch_size / genoms, genes, embedding), but got {inputs_embeds.shape}."
+        batch_size, gene_len, hidden_size = inputs_embeds.shape
+        device = inputs_embeds.device
 
         if attention_mask is None:
-            attention_mask = torch.ones((batch_size, gene_len, seq_len), device=device, dtype=torch.bool)
-        collapsed_attention_mask = attention_mask.any(dim=-1)
+            attention_mask = torch.ones((batch_size, gene_len), device=device, dtype=torch.bool)
 
-        if token_type_ids is None:
-            token_type_ids = torch.zeros((batch_size, gene_len, seq_len), dtype=torch.long, device=device)
-
-        repad = False
-        if self.config._attn_implementation == "flash_attention_2":
-            if indices is None and cu_seqlens is None and max_seqlen is None:
-                repad = True
-                with torch.no_grad():
-                    input_ids, indices, cu_seqlens, max_seqlen, *_ = _unpad_prokbert_input( # ?
-                        inputs=input_ids, attention_mask=collapsed_attention_mask
-                    )
-        else:
-            if position_ids is None: # ? should we handle sliding_window_mask also
-                position_ids = torch.arange(seq_len, device=device).unsqueeze(0)
-            extended_attention_mask, sliding_window_mask = self._update_attention_mask(  # ?
-                collapsed_attention_mask, output_attentions=output_attentions
-            )
-
-        # (genom / batch size, gene, hidden state)
-        embeddings = self.embeddings_model(
-            input_ids=input_ids.reshape(-1, seq_len),
-            attention_mask=attention_mask.reshape(-1, seq_len),
-            token_type_ids=token_type_ids.reshape(-1, seq_len)
-        )
-        embeddings_output = embeddings[1] if not return_dict else embeddings.pooler_output
-        hidden_states = embeddings_output.reshape(batch_size, gene_len, -1)
+        hidden_states = inputs_embeds
 
         for encoder_layer in self.layers:
             if output_hidden_states:
@@ -658,21 +554,13 @@ class GenomeNetworkModel(GenomeNetworkPreTrainedModel):
                 layer_outputs = self._gradient_checkpointing_func(
                     encoder_layer.__call__,
                     hidden_states,
-                    extended_attention_mask,
-                    sliding_window_mask,
-                    position_ids,
-                    cu_seqlens,
-                    max_seqlen,
+                    attention_mask,
                     output_attentions,
                 )
             else:
                 layer_outputs = encoder_layer(
                     hidden_states,
-                    attention_mask=extended_attention_mask,
-                    sliding_window_mask=sliding_window_mask,
-                    position_ids=position_ids,
-                    cu_seqlens=cu_seqlens,
-                    max_seqlen=max_seqlen,
+                    attention_mask=attention_mask,
                     output_attentions=output_attentions,
                 )
             hidden_states = layer_outputs[0]
@@ -684,14 +572,6 @@ class GenomeNetworkModel(GenomeNetworkPreTrainedModel):
 
         hidden_states = self.final_norm(hidden_states)
 
-        if repad:  # ?
-            hidden_states = _pad_prokbert_output(inputs=hidden_states, indices=indices, batch=batch_size, seqlen=seq_len)
-            if all_hidden_states is not None:
-                all_hidden_states = tuple(
-                    _pad_prokbert_output(inputs=hs, indices=indices, batch=batch_size, seqlen=seq_len)
-                    for hs in all_hidden_states
-                )
-
         if not return_dict:
             return tuple(v for v in [hidden_states, all_hidden_states, all_self_attentions] if v is not None)
         return BaseModelOutput(
@@ -700,180 +580,76 @@ class GenomeNetworkModel(GenomeNetworkPreTrainedModel):
             attentions=all_self_attentions,
         )
 
-    def _update_attention_mask(self, attention_mask: torch.Tensor, output_attentions: bool) -> Tuple[torch.Tensor, torch.Tensor]:
-        if output_attentions:
-            if self.config._attn_implementation == "sdpa":
-                logger.warning_once(
-                    "Outputting attentions is only supported with the 'eager' attention implementation, "
-                    'not with "sdpa". Falling back to `attn_implementation="eager"`.'
-                )
-                self.config._attn_implementation = "eager"
-            elif self.config._attn_implementation != "eager":
-                logger.warning_once(
-                    "Outputting attentions is only supported with the eager attention implementation, "
-                    f'not with {self.config._attn_implementation}. Consider setting `attn_implementation="eager"`. '
-                    "Setting `output_attentions=False`."
-                )
-        global_attention_mask = _prepare_4d_attention_mask(attention_mask, self.dtype)
-        rows = torch.arange(global_attention_mask.shape[2]).unsqueeze(0)
-        distance = torch.abs(rows - rows.T)
-        window_mask = ((distance <= self.config.local_attention // 2).unsqueeze(0).unsqueeze(0)
-                       .to(attention_mask.device))
-        sliding_window_mask = global_attention_mask.masked_fill(window_mask.logical_not(), torch.finfo(self.dtype).min)
-        return global_attention_mask, sliding_window_mask
 
+class GenomeEncoderForMaskedLM(GenomeEncoderPreTrainedModel):
 
-class GenomeNetworkPredictionHead(nn.Module):
-    def __init__(self, config):
-        super().__init__()
-        self.dense = nn.Linear(config.hidden_size, config.hidden_size, config.classifier_bias)
-        if isinstance(config.classifier_activation, str):
-            self.act = ACT2FN[config.classifier_activation]
-        else:
-            self.act = config.classifier_activation
-        self.norm = nn.LayerNorm(config.hidden_size, eps=config.norm_eps, bias=config.norm_bias)
-
-    def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
-        hidden_states = self.dense(hidden_states)
-        hidden_states = self.act(hidden_states)
-        hidden_states = self.norm(hidden_states)
-        return hidden_states
-
-
-class GenomeNetworkLMPredictionHead(nn.Module):
-    def __init__(self, config) -> None:
-        super().__init__()
-        self.head = GenomeNetworkPredictionHead(config)
-        self.decoder = nn.Linear(config.hidden_size, config.vocab_size, bias=config.decoder_bias)
-
-    def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
-        hidden_states = self.head(hidden_states)
-        hidden_states = self.decoder(hidden_states)
-        return hidden_states
-
-
-class GenomeNetworkForMaskedLM(GenomeNetworkPreTrainedModel):
-    _tied_weights_keys = ["cls.decoder"]
-
-    def __init__(
-        self,
-        config: GenomeNetworkConfig,
-        embedding_model: Optional[PreTrainedModel] = None,
-        embedding_config: Optional[ProkBertConfig] = None,
-        **kwargs
-    ) -> None:
-
-        if not isinstance(config, GenomeNetworkConfig):
-            raise ValueError(f"Expected `GenomeNetworkConfig`, got {config.__class__.__module__}.{config.__class__.__name__}")
-
-        super().__init__(config, **kwargs)
+    def __init__(self, config: GenomeEncoderConfig):
+        super().__init__(config)
         self.config = config
-
-        if (embedding_model is None) == (embedding_config is None):
-            raise ValueError("You must specify exactly one of embedding_model or embedding_config")
-
-        if embedding_model is None:
-            embedding_model = ProkBertModel(embedding_config)
-
-        self.bert = GenomeNetworkModel(config, embedding_model)
-        self.cls = GenomeNetworkLMPredictionHead(config)
-
+        self.mask_embedding = nn.Parameter(torch.randn(config.hidden_size)) # TODO add to init weights
+        self.bert = GenomeEncoder(config)
         self.post_init() # initalize weights and apply final processing
-
-    @torch.compile(dynamic=True)
-    def compiled_head(self, output: torch.Tensor) -> torch.Tensor:
-        return self.cls.decoder(self.cls.head(output))
 
     def forward(
         self,
-        input_ids: torch.LongTensor,
-        attention_mask: Optional[torch.Tensor] = None,
-        token_type_ids: Optional[torch.LongTensor] = None,
-        sliding_window_mask: Optional[torch.Tensor] = None,
-        position_ids: Optional[torch.Tensor] = None,
-        labels: Optional[torch.Tensor] = None,
-        indices: Optional[torch.Tensor] = None,
-        cu_seqlens: Optional[torch.Tensor] = None,
-        max_seqlen: Optional[int] = None,
+        inputs_embeds: torch.Tensor,                # (B, G, H)
+        attention_mask: Optional[torch.Tensor] = None,  # (B, G)
+        labels: Optional[torch.Tensor] = None,          # (B, G, H)
+        labels_mask: Optional[torch.BoolTensor] = None,     # (B, G)
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
-        return_dict: Optional[bool] = None,
-        **kwargs,
+        return_dict: Optional[bool] = None
     ) -> Union[tuple,  MaskedLMOutput]:
 
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
         self._maybe_set_compile()
 
-        # For flash attention, unpad the inputs to avoid wasting compute on padding tokens.
-        # if self.config._attn_implementation == "flash_attention_2":
-        #     if indices is None and cu_seqlens is None and max_seqlen is None:
-        #         if batch_size is None and seq_len is None:
-        #             if inputs_embeds is not None:
-        #                 batch_size, seq_len = inputs_embeds.shape[:2]
-        #             else:
-        #                 batch_size, seq_len = input_ids.shape[:2]
-        #         device = input_ids.device if input_ids is not None else inputs_embeds.device
-
-        #         if attention_mask is None:
-        #             attention_mask = torch.ones((batch_size, seq_len), device=device, dtype=torch.bool)
-
-        #         if inputs_embeds is None:
-        #             with torch.no_grad():
-        #                 input_ids, indices, cu_seqlens, max_seqlen, position_ids, labels = _unpad_prokbert_input(
-        #                     inputs=input_ids, attention_mask=attention_mask, position_ids=position_ids, labels=labels
-        #                 )
-        #         else:
-        #             inputs_embeds, indices, cu_seqlens, max_seqlen, position_ids, labels = _unpad_prokbert_input(
-        #                 inputs=inputs_embeds, attention_mask=attention_mask, position_ids=position_ids, labels=labels
-        #             )
+        # replace masked gene to mask embedding
+        if labels is not None and labels_mask is not None:
+            inputs_embeds = torch.where(
+                labels_mask.unsqueeze(-1).expand_as(labels) == self.config.masked_gene_index,
+                self.mask_embedding.expand_as(labels),
+                inputs_embeds
+            )
 
         outputs = self.bert(
-            input_ids=input_ids,
+            inputs_embeds=inputs_embeds,
             attention_mask=attention_mask,
-            token_type_ids=token_type_ids,
-            sliding_window_mask=sliding_window_mask,
-            position_ids=position_ids,
-            indices=indices,
-            cu_seqlens=cu_seqlens,
-            max_seqlen=max_seqlen,
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
             return_dict=return_dict,
         )
         last_hidden_state = outputs[0]
 
-        # filter out non-masked tokens, decrease compute in head + loss
-        if self.config.sparse_prediction and labels is not None:
-            labels = labels.view(-1) # (BxS) <- (B, S)
-            last_hidden_state = last_hidden_state.view(labels.shape[0], -1) # (BxS, H)
-            mask_tokens = labels != self.config.sparse_pred_ignore_index
-            last_hidden_state = last_hidden_state[mask_tokens] # (BxS, H) <- (B, S, H)
-            labels = labels[mask_tokens] # (BxS)
+        # filter out non-masked genes
+        if self.config.sparse_prediction and labels is not None and labels_mask is not None:
+            mask_genes =  ( # (BxG, H) <- (B, G)
+                labels_mask.unsqueeze(-1).expand_as(labels) != self.config.sparse_pred_ignore_index
+            ).view(-1, self.config.hidden_size)
+            print(f"Masked genes: {mask_genes.shape}")
 
-        logits = ( # (BxS, V)
-            self.compiled_head(last_hidden_state)
-            if self.config.reference_compile
-            else self.cls(last_hidden_state)
-        )
+            labels = labels.view(-1, self.config.hidden_size) # (BxG, H) <- (B, G, H)
+            print(f"labels: {labels.shape}")
+            last_hidden_state = last_hidden_state.view(-1, self.config.hidden_size) # (BxG, H) <- (B, G, H)
+            print(f"last_hidden_state: {last_hidden_state.shape}")
+
+            last_hidden_state = last_hidden_state[mask_genes].view(-1, self.config.hidden_size)
+            print(f"last_hidden_state: {last_hidden_state.shape}")
+            labels = labels[mask_genes].view(-1, self.config.hidden_size) # remove non-masked genes
+            print(f"labels: {labels.shape}")
 
         masked_lm_loss = None
         if labels is not None:
-            loss_fct = torch.nn.CrossEntropyLoss()
-            masked_lm_loss = loss_fct(logits.view(-1, self.config.vocab_size), labels.view(-1))
-
-        # If using flash attention, repad the output.
-        # if self.config._attn_implementation == "flash_attention_2": # ?
-        #     with nullcontext() if self.config.repad_logits_with_grad or labels is None else torch.no_grad():
-        #         logits = _pad_prokbert_output(inputs=logits, indices=indices, batch=batch_size, seqlen=seq_len)
+            loss_fct = torch.nn.MSELoss() # squared L2 norm
+            # masked_lm_loss = loss_fct(last_hidden_state.view(-1, self.config.hidden_size), labels.view(-1, self.config.hidden_size))
+            masked_lm_loss = loss_fct(last_hidden_state.view(-1, self.config.hidden_size), labels.view(-1, self.config.hidden_size))
 
         if not return_dict:
-            output = (logits,) + outputs[2:]
-            return ((masked_lm_loss,) + output) if masked_lm_loss is not None else output
+            return ((masked_lm_loss,) + outputs[2:]) if masked_lm_loss is not None else outputs
 
         return MaskedLMOutput(
             loss=masked_lm_loss,
-            logits=logits,
             hidden_states=outputs.hidden_states,
             attentions=outputs.attentions,
         )
