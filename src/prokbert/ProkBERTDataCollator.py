@@ -382,9 +382,8 @@ class DataCollatorForGenomeNetwork:
             torch.bernoulli(torch.full(labels.shape[:-1], 0.8)).bool()
             & masked_genes_indices
         )
-        gene_indices_replaced = gene_indices_replaced.unsqueeze(-1).expand(batch_size, genes, seq_len)
-
-        indices_replaced = gene_indices_replaced.expand(-1, -1, seq_len) & ~special_tokens_mask.view(batch_size, genes, seq_len)
+        extended_gene_indices_replaced = gene_indices_replaced.unsqueeze(-1).expand(batch_size, genes, seq_len)
+        indices_replaced = extended_gene_indices_replaced & ~special_tokens_mask.view(batch_size, genes, seq_len)
 
         inputs[indices_replaced] = tokenizer.convert_tokens_to_ids(tokenizer.mask_token)
 
@@ -397,15 +396,16 @@ class DataCollatorForGenomeNetwork:
         # then random_replace_prob_scaled = 0.1 / 0.2 = 0.5
         random_replace_prob_scaled = self.random_replace_prob / remaining_prob
 
-        # TODO add random token replacement on gene level, not token level
-
         # random_replace_prob% of the time, we replace masked input tokens with random word
         indices_random = (
-            torch.bernoulli(torch.full(labels.shape, random_replace_prob_scaled)).bool()
-            & gene_indices_replaced
-            & ~special_tokens_mask.view(batch_size, genes, seq_len)
+            torch.bernoulli(torch.full(labels.shape[:-1], random_replace_prob_scaled)).bool()
+            & masked_genes_indices
+            & ~gene_indices_replaced
         )
+        extended_indices_random = indices_random.unsqueeze(-1).expand(batch_size, genes, seq_len)
+        indices_random_replaced = extended_indices_random & ~special_tokens_mask.view(batch_size, genes, seq_len)
+
         random_words = torch.randint(len(tokenizer), labels.shape, dtype=torch.long)
-        inputs[indices_random] = random_words[indices_random]
+        inputs[indices_random_replaced] = random_words[indices_random_replaced]
 
         return inputs, labels
