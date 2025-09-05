@@ -1,4 +1,5 @@
-from typing import Optional, Tuple, Literal, Union
+from ast import Dict
+from typing import Callable, Optional, Tuple, Literal, Union, Any
 
 import math
 
@@ -191,8 +192,8 @@ class GenomeEncoderConfig(PretrainedConfig):
 def eager_attention_forward(
     module: "GenomeNetworkAttention",
     qkv: torch.Tensor,
-    attention_mask: torch.Tensor,
-    sliding_window_mask: torch.Tensor,
+    attention_mask: torch.FloatTensor,
+    sliding_window_mask: torch.FloatTensor,
     position_ids: Optional[torch.LongTensor],
     local_attention: Tuple[int, int],
     bs: int,
@@ -200,19 +201,22 @@ def eager_attention_forward(
     output_attentions: Optional[bool] = False,
     **_kwargs,
 ) -> Tuple[torch.Tensor, torch.Tensor] | Tuple[torch.Tensor]:
-    # qkv: [batch_size, seqlen, 3, nheads, headdim]
+
+    # 3 x (batch size, n_heads, seq_len, head_dim) <- (batch size, seqlen, 3, nheads, head_dim)
     query, key, value = qkv.transpose(3, 1).unbind(dim=2)
 
-    scale = module.head_dim ** -0.5
+    scale = module.head_dim ** -0.5 # sqrt(head_dim)
+    # (bs, n_heads, seq_len, seq_len) <- (bs, n_heads, seq_len, head_dim) @ (batch size, n_heads, head_dim, seq_len)
     attn_weights = torch.matmul(query, key.transpose(2, 3)) * scale
 
     if local_attention != (-1, -1):
         attention_mask = sliding_window_mask
 
-    print(f"Attn weight: {attn_weights.shape}, attention_mask: {attention_mask.shape}")
-    attn_weights = attn_weights + attention_mask
+    if attention_mask is not None:
+        # (bs, n_heads, seq_len, seq_len) + (bs, 1, 1, seq_len)
+        attn_weights = attn_weights + attention_mask
 
-    # Upcast attention to fp32 for stability.
+    # upcast attention to fp32 for stability.
     attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query.dtype)
     attn_weights = nn.functional.dropout(attn_weights, p=module.attention_dropout, training=module.training)
     attn_output = torch.matmul(attn_weights, value)
@@ -410,9 +414,8 @@ class GenomeNetworkEncoderLayer(nn.Module):
             max_seqlen=max_seqlen,
             output_attentions=output_attentions,
         )
-        # Residual connection for attention.
-        hidden_states = hidden_states + attn_outputs[0]
-        # Apply the MLP block.
+        hidden_states = hidden_states + attn_outputs[0] # residual connection
+
         mlp_output = (
             self.compiled_mlp(hidden_states)
             if self.config.reference_compile
@@ -543,7 +546,9 @@ class GenomeEncoder(GenomeEncoderPreTrainedModel):
         device = inputs_embeds.device
 
         if attention_mask is None:
-            attention_mask = torch.ones((batch_size, gene_len), device=device, dtype=torch.bool)
+            attention_mask = torch.ones((batch_size, gene_len), device=device)
+
+        extended_attention_mask = self.get_extended_attention_mask(attention_mask, inputs_embeds.size())
 
         hidden_states = inputs_embeds
 
@@ -554,13 +559,13 @@ class GenomeEncoder(GenomeEncoderPreTrainedModel):
                 layer_outputs = self._gradient_checkpointing_func(
                     encoder_layer.__call__,
                     hidden_states,
-                    attention_mask,
+                    extended_attention_mask,
                     output_attentions,
                 )
             else:
                 layer_outputs = encoder_layer(
                     hidden_states,
-                    attention_mask=attention_mask,
+                    attention_mask=extended_attention_mask,
                     output_attentions=output_attentions,
                 )
             hidden_states = layer_outputs[0]
@@ -580,6 +585,44 @@ class GenomeEncoder(GenomeEncoderPreTrainedModel):
             attentions=all_self_attentions,
         )
 
+    def get_extended_attention_mask(
+        self,
+        attention_mask: torch.Tensor,
+        input_shape: tuple[int],
+        device: Optional[torch.device] = None,
+        dtype: Optional[torch.float] = None # type: ignore
+    ) -> torch.Tensor:
+        """
+        Makes broadcastable attention and causal masks so that future and masked tokens are ignored.
+
+        Arguments:
+            attention_mask (`torch.Tensor`):
+                Mask with ones indicating tokens to attend to, zeros for tokens to ignore.
+            inputs_embeds (`tuple[int]`):
+                The shape of the input to the model.
+
+        Returns:
+            `torch.Tensor` The extended attention mask, with a the same dtype as `attention_mask.dtype`.
+        """
+        if dtype is None:
+            dtype = self.dtype
+
+        if attention_mask.dim() == 2:
+            # encoder model, make mask broadcastable to [batch_size, num_heads, seq_length, seq_length]
+            extended_attention_mask = attention_mask[:, None, None, :]
+        else:
+            raise ValueError(
+                f"Wrong shape for inputs_embeds (shape {input_shape}) or attention_mask (shape {attention_mask.shape})"
+            )
+
+        # since attention_mask is 1.0 for positions we want to attend and 0.0 for
+        # masked positions, this operation will create a tensor which is 0.0 for
+        # positions we want to attend and the dtype's smallest value for masked positions.
+        # since we are adding it to the raw scores before the softmax, this is
+        # effectively the same as removing these entirely.
+        extended_attention_mask = extended_attention_mask.to(dtype=dtype)  # fp16 compatibility
+        extended_attention_mask = (1.0 - extended_attention_mask) * torch.finfo(dtype).min
+        return extended_attention_mask
 
 class GenomeEncoderForMaskedLM(GenomeEncoderPreTrainedModel):
 
