@@ -250,7 +250,7 @@ Collator Parameters:
 
 
 @dataclass
-class DataCollatorWithPaddingForGenomeNetwork:
+class DataCollatorForGenomeNetwork:
     """
     Collates a batch of genome examples where each example contains a 2D matrix per field:
       - input_ids:       [batch size / genoms, genes, sequences]
@@ -276,15 +276,37 @@ class DataCollatorWithPaddingForGenomeNetwork:
     """
 
     tokenizer: PreTrainedTokenizerBase
+    mlm: bool = False
+    mlm_probability: float = 0.15
+    mask_replace_prob: float = 0.8
+    random_replace_prob: float = 0.1
     return_tensors: str = "pt"
     torch_token_dtype = torch.int64
     attention_mask: int = 0
     token_type_id_mask: int = 0
+    generator: Optional[Any] = None
 
     def __post_init__(self):
         self.pad_token_id: int = self.tokenizer.pad_token_id # type: ignore[arg-type]
         self.cls_token_id: int = self.tokenizer.cls_token_id # type: ignore[arg-type]
         self.sep_token_id: int = self.tokenizer.sep_token_id # type: ignore[arg-type]
+
+        if self.mlm:
+            if self.tokenizer.mask_token is None:
+                raise ValueError(
+                    "This tokenizer does not have a mask token which is necessary for masked language modeling. "
+                    "You should pass `mlm=False` to train on causal language modeling instead."
+                )
+            self.mask_token_id = self.tokenizer.mask_token_id
+            if self.mlm_probability is None or self.mlm_probability < 0 or self.mlm_probability > 1:
+                raise ValueError("mlm_probability should be between 0 and 1.")
+            self.mlm_probability = float(self.mlm_probability)
+        if self.mask_replace_prob + self.random_replace_prob > 1:
+            raise ValueError("The sum of mask_replace_prob and random_replace_prob should not exceed 1")
+        if self.mask_replace_prob < 0 or self.mask_replace_prob > 1:
+            raise ValueError("mask_replace_prob should be between 0 and 1.")
+        if self.random_replace_prob < 0 or self.random_replace_prob > 1:
+            raise ValueError("random_replace_prob should be between 0 and 1.")
 
     # tokenisation should already done at sequence level
     def __call__(self, features: list[dict[str, Any]]) -> dict[str, Any]:
@@ -304,6 +326,8 @@ class DataCollatorWithPaddingForGenomeNetwork:
             "attention_mask": torch.stack([mask for mask in attention_mask], dim=0) ,
             "token_type_ids": torch.stack([token_type_id for token_type_id in token_type_ids], dim=0)
         }
+        if self.mlm:
+            batch["input_ids"], batch["labels"] = self.mask_genes(batch["input_ids"])
         return batch
 
     def pad_sequence(self, input, max_gene_len: int, max_seq_len: int, value: int):
@@ -319,3 +343,69 @@ class DataCollatorWithPaddingForGenomeNetwork:
             input[-pad_rows:, 0] = 1
             input[-pad_rows:, 1] = 1
         return input
+
+    def mask_genes(
+            self,
+            inputs: torch.Tensor,
+            special_tokens_mask: Optional[Any] = None
+        ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Prepare masked genes inputs/labels for masked language modeling: 80% MASK, 10% random, 10% original.
+        """
+
+        labels = inputs.clone()
+        batch_size, genes, seq_len = labels.shape
+
+        # sample a few genes in each genome for MLM training (with probability `self.mlm_probability`)
+        probability_matrix = torch.full(labels.shape[:-1], self.mlm_probability)
+
+        if special_tokens_mask is None:
+            special_tokens_mask = [
+                tokenizer.get_special_tokens_mask(val, already_has_special_tokens=True)
+                for gene in labels.tolist() for val in gene
+            ]
+            special_tokens_mask = torch.tensor(special_tokens_mask, dtype=torch.bool)
+            special_genes_mask = special_tokens_mask.all(dim=1).view(batch_size, -1)
+        else:
+            special_tokens_mask = special_tokens_mask.bool()
+            special_genes_mask = special_tokens_mask.all(dim=1).view(batch_size, -1)
+
+        # never mask virtual genes
+        probability_matrix.masked_fill_(special_genes_mask, value=0.0)
+        # sample genes to mask
+        masked_genes_indices = torch.bernoulli(probability_matrix).bool()
+
+        labels[~masked_genes_indices] = -100 # only compute loss on masked tokens
+
+        # mask_replace_prob% of the time, we replace genes tokens with tokenizer.mask_token ([MASK])
+        gene_indices_replaced = (
+            torch.bernoulli(torch.full(labels.shape[:-1], 0.8)).bool()
+            & masked_genes_indices
+        )
+        gene_indices_replaced = gene_indices_replaced.unsqueeze(-1).expand(batch_size, genes, seq_len)
+
+        indices_replaced = gene_indices_replaced.expand(-1, -1, seq_len) & ~special_tokens_mask.view(batch_size, genes, seq_len)
+
+        inputs[indices_replaced] = tokenizer.convert_tokens_to_ids(tokenizer.mask_token)
+
+        if self.mask_replace_prob == 1 or self.random_replace_prob == 0:
+            return inputs, labels
+
+        remaining_prob = 1 - self.mask_replace_prob
+        # scaling the random_replace_prob to the remaining probability for example if
+        # mask_replace_prob = 0.8 and random_replace_prob = 0.1,
+        # then random_replace_prob_scaled = 0.1 / 0.2 = 0.5
+        random_replace_prob_scaled = self.random_replace_prob / remaining_prob
+
+        # TODO add random token replacement on gene level, not token level
+
+        # random_replace_prob% of the time, we replace masked input tokens with random word
+        indices_random = (
+            torch.bernoulli(torch.full(labels.shape, random_replace_prob_scaled)).bool()
+            & gene_indices_replaced
+            & ~special_tokens_mask.view(batch_size, genes, seq_len)
+        )
+        random_words = torch.randint(len(tokenizer), labels.shape, dtype=torch.long)
+        inputs[indices_random] = random_words[indices_random]
+
+        return inputs, labels
