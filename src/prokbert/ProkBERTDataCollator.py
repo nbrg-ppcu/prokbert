@@ -327,7 +327,7 @@ class DataCollatorForGenomeNetwork:
             "token_type_ids": torch.stack([token_type_id for token_type_id in token_type_ids], dim=0)
         }
         if self.mlm:
-            batch["input_ids"], batch["labels"] = self.mask_genes(batch["input_ids"])
+            batch["input_ids"], batch["labels"], batch["labels_mask"] = self.mask_genes(batch["input_ids"])
         return batch
 
     def pad_sequence(self, input, max_gene_len: int, max_seq_len: int, value: int):
@@ -348,7 +348,7 @@ class DataCollatorForGenomeNetwork:
             self,
             inputs: torch.Tensor,
             special_tokens_mask: Optional[Any] = None
-        ) -> Tuple[torch.Tensor, torch.Tensor]:
+        ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Prepare masked genes inputs/labels for masked language modeling: 80% MASK, 10% random, 10% original.
         """
@@ -408,4 +408,5 @@ class DataCollatorForGenomeNetwork:
         random_words = torch.randint(len(self.tokenizer), labels.shape, dtype=torch.long)
         inputs[indices_random_replaced] = random_words[indices_random_replaced]
 
-        return inputs, labels
+        # labels mask (~masked_genes_indices) signals which genes are masked
+        return inputs, labels, ~masked_genes_indices
