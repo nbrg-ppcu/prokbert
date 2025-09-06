@@ -408,5 +408,5 @@ class DataCollatorForGenomeNetwork:
         random_words = torch.randint(len(self.tokenizer), labels.shape, dtype=torch.long)
         inputs[indices_random_replaced] = random_words[indices_random_replaced]
 
-        # labels mask (~masked_genes_indices) signals which genes are masked
-        return inputs, labels, ~masked_genes_indices
+        # labels mask (masked_genes_indices) signals which genes are masked
+        return inputs, labels, masked_genes_indices
