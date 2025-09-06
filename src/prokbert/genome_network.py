@@ -13,6 +13,8 @@ from transformers.modeling_outputs import BaseModelOutput, MaskedLMOutput
 from transformers.utils import is_flash_attn_2_available, logging
 from transformers.utils.import_utils import is_triton_available
 
+from prokbert.models import ProkBertConfig, ProkBertModel
+
 if is_flash_attn_2_available():
     from flash_attn.flash_attn_interface import flash_attn_varlen_qkvpacked_func
 
@@ -624,21 +626,47 @@ class GenomeNetwork(GenomeNetworkPreTrainedModel):
         extended_attention_mask = (1.0 - extended_attention_mask) * torch.finfo(dtype).min
         return extended_attention_mask
 
-class GenomeNetworkForMaskedLM(GenomeNetworkPreTrainedModel):
 
-    def __init__(self, config: GenomeNetworkConfig):
+class GenomeNetworkForMaskedLM(GenomeNetworkPreTrainedModel):
+    def __init__(
+        self,
+        config: GenomeNetworkConfig,
+        embedding_model: Optional[PreTrainedModel] = None,
+        embedding_config: Optional[ProkBertConfig] = None,
+    ) -> None:
+        if not isinstance(config, GenomeNetworkConfig):
+            raise ValueError(
+                f"Expected `GenomeNetworkConfig`, got {config.__class__.__module__}.{config.__class__.__name__}"
+            )
+
         super().__init__(config)
+
         self.config = config
-        self.mask_embedding = nn.Parameter(torch.randn(config.hidden_size)) # TODO add to init weights
+
+        if embedding_model is None and embedding_config is not None:
+            self.embedding_model = ProkBertModel(embedding_config)
+        elif embedding_model is not None:
+            self.embedding_model = embedding_model
+        else:
+            raise ValueError(
+                "Either `embedding_model` or `embedding_config` has to be provided."
+            )
+
+        # freeze embedding model
+        for param in self.embedding_model.parameters():
+            param.requires_grad = False
+
         self.bert = GenomeNetwork(config)
-        self.post_init() # initalize weights and apply final processing
+        self.post_init()  # initalize weights and apply final processing
 
     def forward(
         self,
-        inputs_embeds: torch.Tensor,                # (B, G, H)
-        attention_mask: Optional[torch.Tensor] = None,  # (B, G)
-        labels: Optional[torch.Tensor] = None,          # (B, G, H)
-        labels_mask: Optional[torch.BoolTensor] = None,     # (B, G)
+        input_ids: Optional[torch.LongTensor] = None,           # (bs, genes, seq len)
+        inputs_embeds: Optional[torch.FloatTensor] = None,      # (bs, genes, hidden size)
+        attention_mask: Optional[torch.Tensor] = None,          # (genes, seq_len)
+        token_type_ids: Optional[torch.LongTensor] = None,      # (genes, seq_len)
+        labels: Optional[torch.Tensor] = None,                  # (bs, genes, hidden size)
+        labels_mask: Optional[torch.BoolTensor] = None,         # (bs, genes)
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None
@@ -648,45 +676,41 @@ class GenomeNetworkForMaskedLM(GenomeNetworkPreTrainedModel):
 
         self._maybe_set_compile()
 
-        # replace masked gene to mask embedding
-        if labels is not None and labels_mask is not None:
-            inputs_embeds = torch.where(
-                labels_mask.unsqueeze(-1).expand_as(labels) == self.config.masked_gene_index,
-                self.mask_embedding.expand_as(labels),
-                inputs_embeds
-            )
+        if input_ids is not None and inputs_embeds is not None:
+            raise ValueError("You cannot specify both input_ids and inputs_embeds at the same time.")
+        if input_ids is not None and (attention_mask is None or token_type_ids is None):
+            raise ValueError("If input_ids is used, attention_mask and token_type_ids have to be provided.")
+
+        if input_ids is not None:
+            embedding_outputs = [
+                self.embedding_model(
+                    input_ids=input_id,
+                    attention_mask=attn_mask,
+                    token_type_ids=token_type_id
+                ).pooler_output.detach()
+                for input_id, attn_mask, token_type_id in zip(input_ids, attention_mask, token_type_ids)
+            ]
+            inputs_embeds = torch.stack(embedding_outputs, dim=0)
 
         outputs = self.bert(
             inputs_embeds=inputs_embeds,
-            attention_mask=attention_mask,
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
             return_dict=return_dict,
         )
         last_hidden_state = outputs[0]
 
-        # filter out non-masked genes
-        if self.config.sparse_prediction and labels is not None and labels_mask is not None:
-            mask_genes =  ( # (BxG, H) <- (B, G)
-                labels_mask.unsqueeze(-1).expand_as(labels) != self.config.sparse_pred_ignore_index
-            ).view(-1, self.config.hidden_size)
-            print(f"Masked genes: {mask_genes.shape}")
-
-            labels = labels.view(-1, self.config.hidden_size) # (BxG, H) <- (B, G, H)
-            print(f"labels: {labels.shape}")
-            last_hidden_state = last_hidden_state.view(-1, self.config.hidden_size) # (BxG, H) <- (B, G, H)
-            print(f"last_hidden_state: {last_hidden_state.shape}")
-
-            last_hidden_state = last_hidden_state[mask_genes].view(-1, self.config.hidden_size)
-            print(f"last_hidden_state: {last_hidden_state.shape}")
-            labels = labels[mask_genes].view(-1, self.config.hidden_size) # remove non-masked genes
-            print(f"labels: {labels.shape}")
+        if labels is not None and labels_mask is not None:
+            last_hidden_state = last_hidden_state[labels_mask].view(-1, self.config.hidden_size)
+            labels_embeds = inputs_embeds[labels_mask].view(-1, self.config.hidden_size)
 
         masked_lm_loss = None
         if labels is not None:
-            loss_fct = torch.nn.MSELoss() # squared L2 norm
-            # masked_lm_loss = loss_fct(last_hidden_state.view(-1, self.config.hidden_size), labels.view(-1, self.config.hidden_size))
-            masked_lm_loss = loss_fct(last_hidden_state.view(-1, self.config.hidden_size), labels.view(-1, self.config.hidden_size))
+            loss_fct = torch.nn.MSELoss()  # squared L2 norm
+            masked_lm_loss = loss_fct(
+                last_hidden_state,
+                labels_embeds,
+            )
 
         if not return_dict:
             return ((masked_lm_loss,) + outputs[2:]) if masked_lm_loss is not None else outputs
