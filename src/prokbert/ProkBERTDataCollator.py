@@ -361,7 +361,7 @@ class DataCollatorForGenomeNetwork:
 
         if special_tokens_mask is None:
             special_tokens_mask = [
-                tokenizer.get_special_tokens_mask(val, already_has_special_tokens=True)
+                self.tokenizer.get_special_tokens_mask(val, already_has_special_tokens=True)
                 for gene in labels.tolist() for val in gene
             ]
             special_tokens_mask = torch.tensor(special_tokens_mask, dtype=torch.bool)
@@ -385,7 +385,7 @@ class DataCollatorForGenomeNetwork:
         extended_gene_indices_replaced = gene_indices_replaced.unsqueeze(-1).expand(batch_size, genes, seq_len)
         indices_replaced = extended_gene_indices_replaced & ~special_tokens_mask.view(batch_size, genes, seq_len)
 
-        inputs[indices_replaced] = tokenizer.convert_tokens_to_ids(tokenizer.mask_token)
+        inputs[indices_replaced] = self.tokenizer.convert_tokens_to_ids(self.tokenizer.mask_token)
 
         if self.mask_replace_prob == 1 or self.random_replace_prob == 0:
             return inputs, labels
@@ -405,7 +405,7 @@ class DataCollatorForGenomeNetwork:
         extended_indices_random = indices_random.unsqueeze(-1).expand(batch_size, genes, seq_len)
         indices_random_replaced = extended_indices_random & ~special_tokens_mask.view(batch_size, genes, seq_len)
 
-        random_words = torch.randint(len(tokenizer), labels.shape, dtype=torch.long)
+        random_words = torch.randint(len(self.tokenizer), labels.shape, dtype=torch.long)
         inputs[indices_random_replaced] = random_words[indices_random_replaced]
 
         return inputs, labels
