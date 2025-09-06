@@ -20,7 +20,7 @@ if is_flash_attn_2_available():
 logger = logging.get_logger(__name__)
 
 
-class GenomeEncoderConfig(PretrainedConfig):
+class GenomeNetworkConfig(PretrainedConfig):
     r"""
     This is the configuration class to store the configuration of a [`ProkBertModel`]. It is used to
     instantiate a ProkBert model according to the specified arguments, defining the model architecture.
@@ -304,7 +304,7 @@ PROK_BERT_ATTENTION_FUNCTION = {
 
 
 class GenomeNetworkMLP(nn.Module):
-    def __init__(self, config: GenomeEncoderConfig):
+    def __init__(self, config: GenomeNetworkConfig):
         super().__init__()
 
         self.config = config
@@ -320,7 +320,7 @@ class GenomeNetworkMLP(nn.Module):
 
 
 class GenomeNetworkAttention(nn.Module):
-    def __init__(self, config: GenomeEncoderConfig, layer_id: Optional[int] = None):
+    def __init__(self, config: GenomeNetworkConfig, layer_id: Optional[int] = None):
         super().__init__()
 
         self.config = config
@@ -377,7 +377,7 @@ class GenomeNetworkAttention(nn.Module):
 
 
 class GenomeNetworkEncoderLayer(nn.Module):
-    def __init__(self, config: GenomeEncoderConfig, layer_id: Optional[int] = None):
+    def __init__(self, config: GenomeNetworkConfig, layer_id: Optional[int] = None):
         super().__init__()
 
         self.config = config
@@ -426,8 +426,8 @@ class GenomeNetworkEncoderLayer(nn.Module):
         return (hidden_states,) + attn_outputs[1:]  # Return additional outputs (e.g. attentions) if provided.
 
 
-class GenomeEncoderPreTrainedModel(PreTrainedModel):
-    config_class = GenomeEncoderConfig
+class GenomeNetworkPreTrainedModel(PreTrainedModel):
+    config_class = GenomeNetworkConfig
     base_model_prefix = "model"
     supports_gradient_checkpointing = True
     _no_split_modules = ["GenomeNetworkEmbeddings", "GenomeNetworkEncoderLayer"]
@@ -506,8 +506,8 @@ class GenomeEncoderPreTrainedModel(PreTrainedModel):
         return model_embeds
 
 
-class GenomeEncoder(GenomeEncoderPreTrainedModel):
-    def __init__(self, config: GenomeEncoderConfig) -> None:
+class GenomeNetwork(GenomeNetworkPreTrainedModel):
+    def __init__(self, config: GenomeNetworkConfig) -> None:
         super().__init__(config)
         self.config = config
 
@@ -624,13 +624,13 @@ class GenomeEncoder(GenomeEncoderPreTrainedModel):
         extended_attention_mask = (1.0 - extended_attention_mask) * torch.finfo(dtype).min
         return extended_attention_mask
 
-class GenomeEncoderForMaskedLM(GenomeEncoderPreTrainedModel):
+class GenomeNetworkForMaskedLM(GenomeNetworkPreTrainedModel):
 
-    def __init__(self, config: GenomeEncoderConfig):
+    def __init__(self, config: GenomeNetworkConfig):
         super().__init__(config)
         self.config = config
         self.mask_embedding = nn.Parameter(torch.randn(config.hidden_size)) # TODO add to init weights
-        self.bert = GenomeEncoder(config)
+        self.bert = GenomeNetwork(config)
         self.post_init() # initalize weights and apply final processing
 
     def forward(
