@@ -6,9 +6,10 @@ import torch.nn as nn
 import torch.nn.functional as F
 from transformers import PreTrainedModel
 from transformers.activations import ACT2FN
-from transformers.modeling_outputs import BaseModelOutput, MaskedLMOutput
-from transformers.utils import is_flash_attn_2_available, logging
 from transformers.utils.import_utils import is_triton_available
+from transformers.utils import is_flash_attn_2_available, logging
+from transformers.modeling_outputs import BaseModelOutput, MaskedLMOutput
+from transformers.modeling_attn_mask_utils import _prepare_4d_attention_mask
 
 from ...models import ProkBertConfig, ProkBertModel
 from .configuration_genome_network import GenomeNetworkConfig
@@ -380,7 +381,9 @@ class GenomeNetwork(GenomeNetworkPreTrainedModel):
         if attention_mask is None:
             attention_mask = torch.ones((batch_size, gene_len), device=device)
 
-        extended_attention_mask = self.get_extended_attention_mask(attention_mask, inputs_embeds.size())
+        extended_attention_mask, sliding_window_attention_mask = self.update_attention_mask(
+            attention_mask, output_attentions
+        )
 
         hidden_states = inputs_embeds
 
@@ -417,44 +420,26 @@ class GenomeNetwork(GenomeNetworkPreTrainedModel):
             attentions=all_self_attentions,
         )
 
-    def get_extended_attention_mask(
-        self,
-        attention_mask: torch.Tensor,
-        input_shape: tuple[int],
-        device: Optional[torch.device] = None,
-        dtype: Optional[torch.float] = None # type: ignore
-    ) -> torch.Tensor:
-        """
-        Makes broadcastable attention and causal masks so that future and masked tokens are ignored.
-
-        Arguments:
-            attention_mask (`torch.Tensor`):
-                Mask with ones indicating tokens to attend to, zeros for tokens to ignore.
-            inputs_embeds (`tuple[int]`):
-                The shape of the input to the model.
-
-        Returns:
-            `torch.Tensor` The extended attention mask, with a the same dtype as `attention_mask.dtype`.
-        """
-        if dtype is None:
-            dtype = self.dtype
-
-        if attention_mask.dim() == 2:
-            # encoder model, make mask broadcastable to [batch_size, num_heads, seq_length, seq_length]
-            extended_attention_mask = attention_mask[:, None, None, :]
-        else:
-            raise ValueError(
-                f"Wrong shape for inputs_embeds (shape {input_shape}) or attention_mask (shape {attention_mask.shape})"
-            )
-
-        # since attention_mask is 1.0 for positions we want to attend and 0.0 for
-        # masked positions, this operation will create a tensor which is 0.0 for
-        # positions we want to attend and the dtype's smallest value for masked positions.
-        # since we are adding it to the raw scores before the softmax, this is
-        # effectively the same as removing these entirely.
-        extended_attention_mask = extended_attention_mask.to(dtype=dtype)  # fp16 compatibility
-        extended_attention_mask = (1.0 - extended_attention_mask) * torch.finfo(dtype).min
-        return extended_attention_mask
+    def update_attention_mask(self, attention_mask: torch.Tensor, output_attentions: bool) -> Tuple[torch.Tensor, torch.Tensor]:
+        if output_attentions:
+            if self.config._attn_implementation == "sdpa":
+                logger.warning(
+                    "Outputting attentions is only supported with the 'eager' attention implementation, "
+                    'not with "sdpa". Falling back to `attn_implementation="eager"`.'
+                )
+                self.config._attn_implementation = "eager"
+            elif self.config._attn_implementation != "eager":
+                logger.warning(
+                    "Outputting attentions is only supported with the eager attention implementation, "
+                    f'not with {self.config._attn_implementation}. Consider setting `attn_implementation="eager"`. '
+                    "Setting `output_attentions=False`."
+                )
+        global_attention_mask = _prepare_4d_attention_mask(attention_mask, self.dtype)
+        rows = torch.arange(global_attention_mask.shape[2]).unsqueeze(0)
+        distance = torch.abs(rows - rows.T)
+        window_mask = ((distance <= self.config.local_attention // 2).unsqueeze(0).unsqueeze(0).to(attention_mask.device))
+        sliding_window_mask = global_attention_mask.masked_fill(window_mask.logical_not(), torch.finfo(self.dtype).min)
+        return global_attention_mask, sliding_window_mask
 
 
 class GenomeNetworkForMaskedLM(GenomeNetworkPreTrainedModel):

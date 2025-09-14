@@ -111,7 +111,7 @@ class GenomeNetworkConfig(PretrainedConfig):
         attention_bias: bool = False,
         attention_dropout: float = 0.0,
         global_attn_every_n_layers: int = 1,  # Use global attention in every layer.
-        local_attention: int = 256,
+        local_attention: int = 256, # sliding window attention's size
         local_rope_theta: float = 10000.0,
         embedding_dropout: float = 0.0,
         mlp_bias: bool = False,
