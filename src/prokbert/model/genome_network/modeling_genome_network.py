@@ -26,7 +26,7 @@ def eager_attention_forward(
     module: "GenomeNetworkAttention",
     qkv: torch.Tensor,
     attention_mask: torch.FloatTensor,
-    sliding_window_mask: torch.FloatTensor,
+    sliding_window_attention_mask: torch.FloatTensor,
     position_ids: Optional[torch.LongTensor],
     local_attention: Tuple[int, int],
     bs: int,
@@ -43,7 +43,7 @@ def eager_attention_forward(
     attn_weights = torch.matmul(query, key.transpose(2, 3)) * scale
 
     if local_attention != (-1, -1):
-        attention_mask = sliding_window_mask
+        attention_mask = sliding_window_attention_mask
 
     if attention_mask is not None:
         # (bs, n_heads, seq_len, seq_len) + (bs, 1, 1, seq_len)
@@ -101,8 +101,7 @@ def sdpa_attention_forward(
     module: "GenomeNetworkAttention",
     qkv: torch.Tensor,
     attention_mask: torch.Tensor,
-    sliding_window_mask: torch.Tensor,
-    position_ids: Optional[torch.LongTensor],
+    sliding_window_attention_mask: torch.Tensor,
     local_attention: Tuple[int, int],
     bs: int,
     dim: int,
@@ -112,7 +111,7 @@ def sdpa_attention_forward(
     query, key, value = qkv.transpose(3, 1).unbind(dim=2)
 
     if local_attention != (-1, -1):
-        attention_mask = sliding_window_mask
+        attention_mask = sliding_window_attention_mask
 
     attn_output = (
         F.scaled_dot_product_attention(
@@ -169,14 +168,10 @@ class GenomeNetworkAttention(nn.Module):
         self.all_head_size = self.head_dim * self.num_heads
         self.Wqkv = nn.Linear(config.hidden_size, 3 * self.all_head_size, bias=config.attention_bias)
 
-        if layer_id % config.global_attn_every_n_layers != 0:
+        if layer_id is not None and layer_id % config.global_attn_every_n_layers != 0:
             self.local_attention = (config.local_attention // 2, config.local_attention // 2)
         else:
             self.local_attention = (-1, -1)
-
-        max_position_embeddings = config.max_position_embeddings # ? unused
-        if self.local_attention != (-1, -1):
-            max_position_embeddings = config.local_attention # ? unused
 
         self.Wo = nn.Linear(config.hidden_size, config.hidden_size, bias=config.attention_bias)
         self.out_drop = nn.Dropout(config.attention_dropout) if config.attention_dropout > 0.0 else nn.Identity()
@@ -215,7 +210,7 @@ class GenomeNetworkEncoderLayer(nn.Module):
 
         self.config = config
 
-        if layer_id == 0:
+        if layer_id and layer_id == 0:
             self.attn_norm = nn.Identity()
         else:
             self.attn_norm = nn.LayerNorm(config.hidden_size, eps=config.norm_eps, bias=config.norm_bias)
@@ -231,7 +226,7 @@ class GenomeNetworkEncoderLayer(nn.Module):
         self,
         hidden_states: torch.Tensor,
         attention_mask: Optional[torch.Tensor] = None,
-        sliding_window_mask: Optional[torch.Tensor] = None,
+        sliding_window_attention_mask: Optional[torch.Tensor] = None,
         position_ids: Optional[torch.LongTensor] = None,
         cu_seqlens: Optional[torch.Tensor] = None,
         max_seqlen: Optional[int] = None,
@@ -241,7 +236,7 @@ class GenomeNetworkEncoderLayer(nn.Module):
         attn_outputs = self.attn(
             self.attn_norm(hidden_states),
             attention_mask=attention_mask,
-            sliding_window_mask=sliding_window_mask,
+            sliding_window_attention_mask=sliding_window_attention_mask,
             position_ids=position_ids,
             cu_seqlens=cu_seqlens,
             max_seqlen=max_seqlen,
@@ -395,12 +390,14 @@ class GenomeNetwork(GenomeNetworkPreTrainedModel):
                     encoder_layer.__call__,
                     hidden_states,
                     extended_attention_mask,
-                    output_attentions,
+                    sliding_window_attention_mask=sliding_window_attention_mask,
+                    output_attentions=output_attentions,
                 )
             else:
                 layer_outputs = encoder_layer(
                     hidden_states,
                     attention_mask=extended_attention_mask,
+                    sliding_window_attention_mask=sliding_window_attention_mask,
                     output_attentions=output_attentions,
                 )
             hidden_states = layer_outputs[0]
@@ -438,8 +435,8 @@ class GenomeNetwork(GenomeNetworkPreTrainedModel):
         rows = torch.arange(global_attention_mask.shape[2]).unsqueeze(0)
         distance = torch.abs(rows - rows.T)
         window_mask = ((distance <= self.config.local_attention // 2).unsqueeze(0).unsqueeze(0).to(attention_mask.device))
-        sliding_window_mask = global_attention_mask.masked_fill(window_mask.logical_not(), torch.finfo(self.dtype).min)
-        return global_attention_mask, sliding_window_mask
+        sliding_window_attention_mask = global_attention_mask.masked_fill(window_mask.logical_not(), torch.finfo(self.dtype).min)
+        return global_attention_mask, sliding_window_attention_mask
 
 
 class GenomeNetworkForMaskedLM(GenomeNetworkPreTrainedModel):
