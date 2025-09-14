@@ -494,6 +494,7 @@ class GenomeNetworkForMaskedLM(GenomeNetworkPreTrainedModel):
         input_ids: Optional[torch.LongTensor] = None,           # (bs, genes, seq len)
         inputs_embeds: Optional[torch.FloatTensor] = None,      # (bs, genes, hidden size)
         attention_mask: Optional[torch.Tensor] = None,          # (genes, seq_len)
+        attention_mask_genome: Optional[torch.Tensor] = None,   # (bs, genes)
         token_type_ids: Optional[torch.LongTensor] = None,      # (genes, seq_len)
         labels: Optional[torch.Tensor] = None,                  # (bs, genes, hidden size)
         labels_mask: Optional[torch.BoolTensor] = None,         # (bs, genes)
@@ -524,6 +525,7 @@ class GenomeNetworkForMaskedLM(GenomeNetworkPreTrainedModel):
 
         outputs = self.bert(
             inputs_embeds=inputs_embeds,
+            attention_mask=attention_mask_genome,
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
             return_dict=return_dict,

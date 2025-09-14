@@ -49,10 +49,11 @@ class DataCollatorForGenomeNetwork:
     mask_replace_prob: float = 0.8
     random_replace_prob: float = 0.1
     return_tensors: str = "pt"
-    torch_token_dtype = torch.int64
+    torch_token_dtype: torch.dtype = torch.int64
     attention_mask: int = 0
     token_type_id_mask: int = 0
     generator: Optional[Any] = None
+    attention_mask_genome: bool = True # create attention mask for genome (2D)
 
     def __post_init__(self):
         self.pad_token_id: int = self.tokenizer.pad_token_id # type: ignore[arg-type]
@@ -76,7 +77,7 @@ class DataCollatorForGenomeNetwork:
         if self.random_replace_prob < 0 or self.random_replace_prob > 1:
             raise ValueError("random_replace_prob should be between 0 and 1.")
 
-    # tokenisation should already done at sequence level
+    # tokenisation should be already done at sequence level
     def __call__(self, features: list[dict[str, Any]]) -> dict[str, Any]:
 
         max_gene_len = max(m["input_ids"].shape[0] for m in features)
@@ -94,6 +95,8 @@ class DataCollatorForGenomeNetwork:
             "attention_mask": torch.stack([mask for mask in attention_mask], dim=0) ,
             "token_type_ids": torch.stack([token_type_id for token_type_id in token_type_ids], dim=0)
         }
+        if self.attention_mask_genome:
+            batch["attention_mask_genome"] = self.create_attention_mask_genome(batch["attention_mask"])
         if self.mlm:
             batch["input_ids"], batch["labels"], batch["labels_mask"] = self.mask_genes(batch["input_ids"])
         return batch
@@ -111,6 +114,19 @@ class DataCollatorForGenomeNetwork:
             input[-pad_rows:, 0] = 1
             input[-pad_rows:, 1] = 1
         return input
+
+    def create_attention_mask_genome(self, attention_mask: torch.Tensor) -> torch.Tensor:
+        """
+        Create attention mask at genome level (2D) from attention mask for genes (3D).
+
+        Virtual genes have attention mask of all 0s, except for CLS and SEP tokens (both has 1 attention mask value),
+        so we create a genome-level attention mask where virtual genes are masked out.
+        1 indicates the gene is NOT a virtual gene, 0 indicates it is a virtual gene.
+
+        The resulting tensor is of shape:
+            - attention_mask_genome: [batch size, max_gene_len]
+        """
+        return (~(attention_mask.sum(dim=-1) == 2)).int()
 
     def mask_genes(
             self,
@@ -178,3 +194,72 @@ class DataCollatorForGenomeNetwork:
 
         # labels mask (masked_genes_indices) signals which genes are masked
         return inputs, labels, masked_genes_indices
+
+
+if __name__ == "__main__":
+    import random
+    from datasets import Dataset
+    from torch.utils.data import DataLoader
+    from transformers import AutoTokenizer
+    model_name = 'neuralbioinfo/prokbert-mini'
+    tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
+    print("PAD token:", tokenizer.pad_token, "->", tokenizer.pad_token_id)
+    print("CLS token:", tokenizer.cls_token, "->", tokenizer.cls_token_id)
+    print("SEP token:", tokenizer.sep_token, "->", tokenizer.sep_token_id)
+    print("MASK token:", tokenizer.mask_token, "->", tokenizer.mask_token_id)
+    print("UNK token:", tokenizer.unk_token, "->", tokenizer.unk_token_id)
+    print("VOCAB SIZE:", tokenizer.vocab_size, len(tokenizer))
+    def random_gene_sequence(low = 10, high = 20):
+        n = random.randint(low, high)
+        return "".join(random.choice("ACGT") for _ in range(n))
+
+    def create_random_genome_dataset(
+            dataset_num=100,
+            gene_per_genom_low=2,
+            gene_per_genom_high=5,
+            gene_seq_low=10,
+            gene_seq_high=20
+    ):
+        genoms = {"genom": [], "gene_nums": [], "sequences": []}
+        for i in range(1, dataset_num + 1):
+
+            gene_nums = []
+            gene_sequences = []
+
+            n = random.randint(gene_per_genom_low, gene_per_genom_high)
+            for j in range(n):
+
+                gene_sequence = random_gene_sequence(gene_seq_low, gene_seq_high)
+                gene_nums.append(j)
+                gene_sequences.append(gene_sequence)
+
+            genoms["genom"].append(i)
+            genoms["gene_nums"].append(gene_nums)
+            genoms["sequences"].append(gene_sequences)
+
+        return genoms
+
+
+    genoms = create_random_genome_dataset(
+        dataset_num=100,
+        gene_per_genom_low=4,
+        gene_per_genom_high=7,
+        gene_seq_low=10,
+        gene_seq_high=15
+    )
+
+    dataset = Dataset.from_dict(genoms)
+    tokenized_dataset = [tokenizer(genom["sequences"], padding=True, return_tensors="pt") for genom in dataset.to_list()]
+    dataset.remove_columns(["sequences", "gene_nums", "genom"])
+
+    data_collator = DataCollatorForGenomeNetwork(
+        tokenizer,
+        mlm=True,
+        mlm_probability=0.7,
+        mask_replace_prob=0.6,
+        random_replace_prob=0.4
+    )
+    loader = DataLoader(tokenized_dataset, batch_size=2, collate_fn=data_collator)
+    for batch in loader:
+        print({k: v.shape for k, v in batch.items()})
+        break
