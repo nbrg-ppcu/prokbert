@@ -1449,7 +1449,7 @@ class CurricularFace(nn.Module):
 
 class ProkBertForCurricularClassification(ProkBertPreTrainedModel):
     config_class = ProkBertConfigCurr
-    base_model_prefix = "bert"
+    base_model_prefix = "model"
 
     def __init__(self, config):
         super().__init__(config)
@@ -1457,7 +1457,9 @@ class ProkBertForCurricularClassification(ProkBertPreTrainedModel):
         #bert_config = AutoConfig.from_pretrained(config.bert_base_model)
         #self.bert = ProkBertModel.from_pretrained(config.bert_base_model)
 
-        self.bert = ProkBertModel(config)
+        #self.bert = ProkBertModel(config)
+        self.model = ProkBertModel(config)
+
         
         # A weighting layer for pooling the sequence output
         self.weighting_layer = nn.Linear(self.config.hidden_size, 1)
