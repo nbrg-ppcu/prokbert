@@ -845,7 +845,7 @@ def inference_binary_sequence_predictions(predictions, segment_dataset):
 
 
 
-def compute_metrics(p: EvalPrediction):
+def compute_metrics_masked(p: EvalPrediction):
     # p.predictions: np.ndarray of shape (batch, seq_len, vocab_size)
     # p.label_ids:   np.ndarray of shape (batch, seq_len)
     return evaluate_masked_lm(p.predictions, p.label_ids)
