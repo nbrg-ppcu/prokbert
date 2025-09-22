@@ -1446,7 +1446,7 @@ class CurricularFace(nn.Module):
         cos_theta.scatter_(1, label.view(-1, 1).long(), final_target_logit)
         output = cos_theta * self.s
         return output, origin_cos * self.s
-
+        
 class ProkBertForCurricularClassification(ProkBertPreTrainedModel):
     config_class = ProkBertConfigCurr
     base_model_prefix = "model"
@@ -1501,7 +1501,7 @@ class ProkBertForCurricularClassification(ProkBertPreTrainedModel):
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
         # Get the outputs from the base ProkBert model
-        outputs = self.bert(
+        outputs = self.model(
             input_ids,
             attention_mask=attention_mask,
             position_ids=position_ids,
@@ -1531,15 +1531,11 @@ class ProkBertForCurricularClassification(ProkBertPreTrainedModel):
         weights = torch.nn.functional.softmax(weights, dim=1)  # (batch_size, seq_length)
 
         # Weighted pooling
-        weights = weights.unsqueeze(-1)                        # (batch_size, seq_length, 1)
-        print(weights.shape)
-        print(sequence_output.shape)
+        weights = weights.unsqueeze(-1)                        # (batch_size, seq_length, 1)        
         pooled_output = torch.sum(weights * sequence_output, dim=1)  # (batch_size, hidden_size)
-        print(pooled_output.shape)
         # Classifier head
         pooled_output = self.dropout(pooled_output)
         pooled_output = self.linear(pooled_output)
-        print(pooled_output.shape)
 
         # CurricularFace requires the embeddings and the corresponding labels.
         # Note: During inference (labels is None), we just return l2 norm of bert part of the model
