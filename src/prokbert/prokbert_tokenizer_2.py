@@ -108,10 +108,10 @@ class DNATokenizerFast(PreTrainedTokenizerFast):
         else:
             return BatchEncoding(output)
 
-
-def create_prokbert_tokenizer(vocab: Optional[Dict[str, int]],
+def create_prokbert_tokenizer(vocab: Optional[Dict[str, int]]= None,
                               kmer_size: Optional[int] = 6,
                               kmer_shift: Optional[int] = 6,
+                              unknown_token: str = "N",
                               max_seq_len: Optional[int] = 512):
 
     vocab = vocab if vocab is not None else {
@@ -121,14 +121,14 @@ def create_prokbert_tokenizer(vocab: Optional[Dict[str, int]],
         "[MASK]": 3,
         "[BOS]": 4,
         "[EOS]": 5,
-        "[UNK]": 6,
+        unknown_token: 6,
         "A": 7,
         "C": 8,
         "T": 9,
         "G": 10
     }
 
-    base_tokenizer = Tokenizer(WordLevel(vocab, unk_token="[UNK]"))
+    base_tokenizer = Tokenizer(WordLevel(vocab, unk_token=unknown_token))
     base_tokenizer.pre_tokenizer = Split(pattern="", behavior="isolated")
 
     base_tokenizer.post_processor = TemplateProcessing(
@@ -149,6 +149,6 @@ def create_prokbert_tokenizer(vocab: Optional[Dict[str, int]],
     tokenizer.cls_token = "[CLS]"
     tokenizer.sep_token = "[SEP]"
     tokenizer.mask_token = "[MASK]"
-    tokenizer.unk_token = "[UNK]"
+    tokenizer.unk_token = unknown_token
 
     return tokenizer
