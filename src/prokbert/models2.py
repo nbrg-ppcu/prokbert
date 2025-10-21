@@ -163,9 +163,9 @@ class ProkBertConfig(PretrainedConfig):
             Whether to compile model layers for performance (if supported).
         repad_logits_with_grad (bool, optional, defaults to False):
             If True, logits are repadded with gradient tracking.
-        kmer_size (int, optional, defaults to 6):
+        embedding_kmer_size (int, optional, defaults to 6):
             The size of the kmer used for the model.
-        kmer_shift (int, optional, defaults to 6):
+        embedding_kmer_shift (int, optional, defaults to 6):
             The shift applied to the kmer used for the model.
         char_embedding_dim (int, optional, defaults to 32):
             The intermediate character embedding dimension used in the embedding.
@@ -219,11 +219,12 @@ class ProkBertConfig(PretrainedConfig):
         sparse_pred_ignore_index: int = -100,
         reference_compile: bool = None,
         repad_logits_with_grad: bool = False,
-        kmer_size: int = 6,
-        kmer_shift: int = 6,
-        embedding_num_heads: int = 4,
-        char_embedding_dim: int = 24,
+        char_embedding_dim: int = 32,
+        embedding_hidden_size=64,
+        embedding_kmer_size: int = 8,
+        embedding_kmer_shift: int = 8,
         embedding_local_attention: int = 128,
+        embedding_num_heads: int = 8,
         embedding_num_layers: int = 2,
         **kwargs,
     ):
@@ -267,11 +268,12 @@ class ProkBertConfig(PretrainedConfig):
         self.sparse_pred_ignore_index = sparse_pred_ignore_index
         self.reference_compile = reference_compile
         self.repad_logits_with_grad = repad_logits_with_grad
-        self.kmer_size = kmer_size
-        self.kmer_shift = kmer_shift
-        self.embedding_num_heads = embedding_num_heads
         self.char_embedding_dim = char_embedding_dim
+        self.embedding_hidden_size = embedding_hidden_size
+        self.embedding_kmer_size = embedding_kmer_size
+        self.embedding_kmer_shift = embedding_kmer_shift
         self.embedding_local_attention = embedding_local_attention
+        self.embedding_num_heads = embedding_num_heads
         self.embedding_num_layers = embedding_num_layers
 
         if self.classifier_pooling not in ["cls", "mean"]:
@@ -509,10 +511,10 @@ class ProkBertEmbeddingMLP(ProkBertMLP):
     def __init__(self, config: ProkBertConfig):
         super().__init__(config)
         self.config = config
-        self.Wi = nn.Linear(config.char_embedding_dim, int(config.hidden_size) * 2, bias=config.mlp_bias)
+        self.Wi = nn.Linear(config.char_embedding_dim, int(config.embedding_hidden_size) * 2, bias=config.mlp_bias)
         self.act = ACT2FN[config.hidden_activation]
         self.drop = nn.Dropout(config.embedding_dropout)
-        self.Wo = nn.Linear(config.hidden_size, config.char_embedding_dim, bias=config.mlp_bias)
+        self.Wo = nn.Linear(config.embedding_hidden_size, config.char_embedding_dim, bias=config.mlp_bias)
 
 
 
@@ -726,8 +728,8 @@ class ProkBertEmbeddings(nn.Module):
 
         # The encoder used for compressing the windows
         layer = nn.TransformerEncoderLayer(d_model=self.config.char_embedding_dim,
-                                        nhead=self.config.num_attention_heads,
-                                        dim_feedforward=self.config.intermediate_size,
+                                        nhead=self.config.embedding_num_heads,
+                                        dim_feedforward=self.config.embedding_hidden_size,
                                         dropout=self.config.embedding_dropout,
                                         activation=self.config.hidden_activation,
                                         batch_first=True)
@@ -740,7 +742,7 @@ class ProkBertEmbeddings(nn.Module):
 
 
         # Linear layer to create a single token for each kmer
-        self.aggregator = nn.Linear(in_features= self.config.kmer_size * self.config.char_embedding_dim ,
+        self.aggregator = nn.Linear(in_features=self.config.embedding_kmer_size * self.config.char_embedding_dim,
                                     out_features=self.config.hidden_size)
 
     @property
@@ -819,7 +821,7 @@ class ProkBertEmbeddings(nn.Module):
 
         # Unfold along the sequence dimension with a given window size and step.
         # Unfold returns a view with shape: [B, num_windows, model_dim, kmer_size]
-        x = x.unfold(dimension=1, size=self.config.kmer_size, step=self.config.kmer_shift)
+        x = x.unfold(dimension=1, size=self.config.embedding_kmer_size, step=self.config.embedding_kmer_shift)
 
         # Permute so that the kmer window can later become the sequence dimension:
         # New shape: [B, num_windows, kmer_size, model_dim]
@@ -829,7 +831,7 @@ class ProkBertEmbeddings(nn.Module):
         # x now has shape: [B * num_windows, kmer_seq_len, feat_dim]
         batch_size, num_windows, kmer_seq_len, feat_dim = x.shape
 
-        assert kmer_seq_len == self.config.kmer_size
+        assert kmer_seq_len == self.config.embedding_kmer_size
         assert feat_dim == self.config.char_embedding_dim
 
         x = x.reshape(batch_size * num_windows, kmer_seq_len, feat_dim)
@@ -880,7 +882,7 @@ class ProkBertSequenceDecompresser(nn.Module):
 
         # Linear layer to create the multiple vocab tokens from one compressed token of the encoder stack
         self.decompresser = nn.Linear(in_features=self.config.hidden_size,
-                                      out_features=self.config.vocab_size * self.config.kmer_size)
+                                      out_features=self.config.vocab_size * self.config.embedding_kmer_size)
 
     def forward(self, x: Tensor) -> Tensor:
         batch_size, seq_len, feature_dim = x.shape
@@ -891,10 +893,10 @@ class ProkBertSequenceDecompresser(nn.Module):
         x = self.decompresser(x)  # Gets a [B*S, F] returns a [B*S, vocab_size * kmer_size] tensor
 
         # Separate the collapsed dimensions
-        x = x.view(batch_size, seq_len, self.config.kmer_size, self.config.vocab_size)
+        x = x.view(batch_size, seq_len, self.config.embedding_kmer_size, self.config.vocab_size)
 
         # Get the original uncompressed sequence back
-        return x.reshape(batch_size, seq_len * self.config.kmer_size, self.config.vocab_size)
+        return x.reshape(batch_size, seq_len * self.config.embedding_kmer_size, self.config.vocab_size)
 
 
 
