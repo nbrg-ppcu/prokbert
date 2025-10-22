@@ -1,8 +1,6 @@
 import logging
-from collections.abc import Mapping
 from dataclasses import dataclass
-from random import randint
-from typing import Any, Callable, Dict, List, NewType, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 import torch
 
 import numpy as np
@@ -11,7 +9,103 @@ from transformers import DataCollatorForLanguageModeling
 logger = logging.getLogger(__name__)
 
 
+from transformers import PreTrainedTokenizer, PreTrainedTokenizerFast, BatchEncoding
+from torch import tensor
 
+
+
+
+class VarLenDataCollatorWithPadding:
+    def __init__(
+        self,
+        tokenizer: Union[PreTrainedTokenizerFast, PreTrainedTokenizer],
+        max_length: int, # TODO should be inferred from the tokenizer?
+        min_length: int = 0,
+        distribution: str = "uniform",
+        seed: int = 42,
+        distribution_kwargs: Optional[Dict] = None,
+    ):
+        self.tokenizer = tokenizer
+
+        assert min_length <= max_length, "min_length should be smaller than max_length"
+        assert 0 < max_length, "max_length should be larger than 0"
+
+        self.min_length = max(0,min_length)
+        self.max_length = max_length
+
+        self.rng = np.random.default_rng(seed=seed)
+        kw = distribution_kwargs if distribution_kwargs is not None else {}
+
+        # Create internal generator with the given distribution
+        if distribution == "uniform":
+            self._generator = lambda n: self.rng.uniform(low=min_length, high=max_length, size=n)
+        elif distribution == "normal":
+            center = (min_length + max_length) / 2
+            sigma = (max_length - min_length) / 4 # TODO tune
+            self._generator = lambda n: self.rng.normal(loc=center, scale=sigma, size=n)
+        elif distribution == "exponential":
+            scale = kw.get("scale", 100 )
+            self._generator = lambda n: self.rng.exponential(scale=scale, size=n)
+        else:
+            raise ValueError(f"Unknown distribution: {distribution}. Possible distributions: 'uniform', 'normal', 'exponential'")
+
+    # Helper function to clip the values to the right len and set their type
+    def _sample_lengths(self, n: int):
+        x = self._generator(n)
+        # Clip the values to pre-defined range and convert them to int
+        return np.clip(np.rint(x), self.min_length, self.max_length).astype(int)
+
+    def __call__(self, features: List[Any], return_tensors: Optional[str] = "pt") -> BatchEncoding:
+        # Generate random seq_lens between the boundaries
+        seq_lens = self._sample_lengths(len(features))
+        # Extract labels if available the 'labels' column takes precedence but try with 'y' too
+        labels = None
+        if "labels" in features[0]:
+            labels = [f["labels"] for f in features]
+
+        if labels is None and "y" in features[0]:
+            labels = [f["y"] for f in features]
+
+        # Truncate the input_ids based on the seq_lens
+        input_ids = [{'input_ids': f["input_ids"][:length]} for f, length in zip(features, seq_lens)]
+        # Pad input_ids
+        batch = self.tokenizer.pad(input_ids, padding='longest', max_length=self.max_length, return_tensors=return_tensors)
+
+        # Add labels if present in the dataset
+        if labels is not None:
+            if return_tensors == "pt":
+                batch["labels"] = tensor(labels)
+            else:
+                batch["labels"] = labels
+        return batch
+
+
+
+class VarLenDataCollatorForMaskedLanguageModeling(VarLenDataCollatorWithPadding):
+    def __call__(self, features: List[Any], return_tensors: Optional[str] = "pt") -> BatchEncoding:
+        # Generate random seq_lens between the boundaries
+        seq_lens = self._sample_lengths(len(features))
+        # Truncate the input_ids based on the seq_lens
+        input_ids = [{'input_ids': f["input_ids"][:length]} for f, length in zip(features, seq_lens)]
+        # Pad input_ids
+        batch = self.tokenizer.pad(input_ids, padding='longest', max_length=self.max_length, return_tensors=return_tensors)
+
+        # To handle the weighted loss if the label distribution is in the ds
+        if isinstance(features[0], dict) and "labels" in features[0]:
+            labels = [f["labels"][:length] for f, length in zip(features, seq_lens)]
+            # what should be the distribution here? [0.0, 0.0, 0.0, 0.0] I guess?
+            zero_dist = [0.0, 0.0, 0.0,0.0]
+            # Pad labels to the same length as the corresponding padded input_id is
+            labels[:] = [lbl + [zero_dist] * (len(f['input_ids']) - len(lbl)) for lbl, f in zip(labels, features)]
+
+            if 'pt' == return_tensors:
+                batch["labels"] = tensor(labels)
+            else:
+                batch["labels"] = labels
+        else:         # Create target labels if they were missing from the dataset
+            batch['labels'] = batch['input_ids'] # Since we copy this will be tensor or list depending on return_tensors
+
+        return batch
 
 @dataclass
 class ExpProkBERTDataCollator(DataCollatorForLanguageModeling):
