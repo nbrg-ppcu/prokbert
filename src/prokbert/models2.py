@@ -1467,7 +1467,7 @@ class ProkBertForCurricularClassification(ProkBertPreTrainedModel):
 
         if config.curriculum_hidden_size != -1:
             self.linear = nn.Linear(self.config.hidden_size, config.curriculum_hidden_size)
-            initialize_linear_kaiming(self.linear)
+            
             # Replace the simple classifier with the CurricularFace head.
             # Defaults m=0.5 and s=64 are used, but these can be adjusted if needed.
             self.curricular_face = CurricularFace(config.curriculum_hidden_size, 
@@ -1485,6 +1485,18 @@ class ProkBertForCurricularClassification(ProkBertPreTrainedModel):
         self.loss_fct = torch.nn.CrossEntropyLoss()
         self.post_init()
 
+    def _init_weights(self, module: nn.Module):
+        # first let the base class init everything else
+        super()._init_weights(module)
+
+        # then catch our pooling head and zero it
+        if module is getattr(self, "weighting_layer", None):
+            nn.init.xavier_uniform_(module.weight)
+            nn.init.zeros_(module.bias)
+
+        if module is getattr(self, "linear", None):
+            initialize_linear_kaiming(self.linear)
+        
     def forward(
         self,
         input_ids: Optional[torch.LongTensor] = None,
@@ -1499,7 +1511,6 @@ class ProkBertForCurricularClassification(ProkBertPreTrainedModel):
         return_dict: Optional[bool] = None,
     ) -> Union[Tuple, SequenceClassifierOutput]:
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
-
         # Get the outputs from the base ProkBert model
         outputs = self.model(
             input_ids,
