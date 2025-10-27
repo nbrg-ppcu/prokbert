@@ -1,6 +1,6 @@
 import torch
 import os
-from ncbi_dataset import NCBI_dataset
+from prokbert.ncbi_dataset import NCBI_dataset
 from prokbert.tokenizer import LCATokenizer
 from datetime import datetime
 from prokbert.models import *
