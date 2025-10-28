@@ -465,13 +465,13 @@ class ProkBertForCurricularClassification(ProkBertPreTrainedModel):
             raise ValueError(f"Unexpected attention_mask shape {attention_mask.shape}")
 
         # Apply mask (masked positions -> -inf before softmax)
-        weights = weights.masked_fill(mask == 0, float('-inf'))
+        weights = weights.masked_fill(mask.unsqueeze(-1) == 0, float('-inf'))
 
         # Normalize
         weights = torch.nn.functional.softmax(weights, dim=1)  # (batch_size, seq_length)
 
         # Weighted pooling
-        weights = weights.unsqueeze(-1)                        # (batch_size, seq_length, 1)        
+        #weights = weights.unsqueeze(-1)                        # (batch_size, seq_length, 1)        
         pooled_output = torch.sum(weights * sequence_output, dim=1)  # (batch_size, hidden_size)
         # Classifier head
         pooled_output = self.dropout(pooled_output)
