@@ -254,6 +254,7 @@ class ProkBertConfigCurr(ProkBertConfig):
         curricular_face_m = 0.5,
         curricular_face_s=64.,
         curricular_num_labels = 2,
+        curriculum_hidden_size = -1, 
         classification_dropout_rate = 0.0, 
         **kwargs,
     ):
@@ -263,6 +264,7 @@ class ProkBertConfigCurr(ProkBertConfig):
         self.curricular_face_s = curricular_face_s
         self.classification_dropout_rate = classification_dropout_rate
         self.bert_base_model = bert_base_model
+        self.curriculum_hidden_size = curriculum_hidden_size
 
 _CHECKPOINT_FOR_DOC = "example/prokbert-base"
 _CONFIG_FOR_DOC = "ProkBertConfig"
@@ -1444,8 +1446,127 @@ class CurricularFace(nn.Module):
         cos_theta.scatter_(1, label.view(-1, 1).long(), final_target_logit)
         output = cos_theta * self.s
         return output, origin_cos * self.s
-
+        
 class ProkBertForCurricularClassification(ProkBertPreTrainedModel):
+    config_class = ProkBertConfigCurr
+    base_model_prefix = "model"
+
+    def __init__(self, config):
+        super().__init__(config)
+        self.config = config
+        #bert_config = AutoConfig.from_pretrained(config.bert_base_model)
+        #self.bert = ProkBertModel.from_pretrained(config.bert_base_model)
+
+        #self.bert = ProkBertModel(config)
+        self.model = ProkBertModel(config)
+
+        
+        # A weighting layer for pooling the sequence output
+        self.weighting_layer = nn.Linear(self.config.hidden_size, 1)
+        self.dropout = nn.Dropout(self.config.classification_dropout_rate)
+
+        if config.curriculum_hidden_size != -1:
+            self.linear = nn.Linear(self.config.hidden_size, config.curriculum_hidden_size)
+            
+            # Replace the simple classifier with the CurricularFace head.
+            # Defaults m=0.5 and s=64 are used, but these can be adjusted if needed.
+            self.curricular_face = CurricularFace(config.curriculum_hidden_size, 
+                                                self.config.curricular_num_labels,
+                                                m=self.config.curricular_face_m,
+                                                s=self.config.curricular_face_s)
+        else:
+            self.linear = nn.Identity()
+            self.curricular_face = CurricularFace(self.config.hidden_size, 
+                                                self.config.curricular_num_labels,
+                                                m=self.config.curricular_face_m,
+                                                s=self.config.curricular_face_s)
+        
+
+        self.loss_fct = torch.nn.CrossEntropyLoss()
+        self.post_init()
+
+    def _init_weights(self, module: nn.Module):
+        # first let the base class init everything else
+        super()._init_weights(module)
+
+        # then catch our pooling head and zero it
+        if module is getattr(self, "weighting_layer", None):
+            nn.init.xavier_uniform_(module.weight)
+            nn.init.zeros_(module.bias)
+
+        if module is getattr(self, "linear", None):
+            initialize_linear_kaiming(self.linear)
+        
+    def forward(
+        self,
+        input_ids: Optional[torch.LongTensor] = None,
+        attention_mask: Optional[torch.FloatTensor] = None,
+        token_type_ids: Optional[torch.LongTensor] = None,
+        position_ids: Optional[torch.LongTensor] = None,
+        head_mask: Optional[torch.FloatTensor] = None,
+        inputs_embeds: Optional[torch.FloatTensor] = None,
+        labels: Optional[torch.LongTensor] = None,
+        output_attentions: Optional[bool] = None,
+        output_hidden_states: Optional[bool] = None,
+        return_dict: Optional[bool] = None,
+    ) -> Union[Tuple, SequenceClassifierOutput]:
+        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+        # Get the outputs from the base ProkBert model
+        outputs = self.model(
+            input_ids,
+            attention_mask=attention_mask,
+            position_ids=position_ids,
+            inputs_embeds=inputs_embeds,
+            output_attentions=output_attentions,
+            output_hidden_states=output_hidden_states,
+            return_dict=return_dict,
+        )
+        sequence_output = outputs[0]  # (batch_size, seq_length, hidden_size)
+        
+        # Pool the sequence output using a learned weighting (attention-like)
+        # Compute raw weights
+        weights = self.weighting_layer(sequence_output).squeeze(-1)  # (batch_size, seq_length)
+
+        # Ensure mask shape matches
+        if attention_mask.dim() == 2:
+            mask = attention_mask
+        elif attention_mask.dim() == 4:
+            mask = attention_mask.squeeze(1).squeeze(1)  # (batch_size, seq_length)
+        else:
+            raise ValueError(f"Unexpected attention_mask shape {attention_mask.shape}")
+
+        # Apply mask (masked positions -> -inf before softmax)
+        weights = weights.masked_fill(mask == 0, float('-inf'))
+
+        # Normalize
+        weights = torch.nn.functional.softmax(weights, dim=1)  # (batch_size, seq_length)
+
+        # Weighted pooling
+        weights = weights.unsqueeze(-1)                        # (batch_size, seq_length, 1)        
+        pooled_output = torch.sum(weights * sequence_output, dim=1)  # (batch_size, hidden_size)
+        # Classifier head
+        pooled_output = self.dropout(pooled_output)
+        pooled_output = self.linear(pooled_output)
+
+        # CurricularFace requires the embeddings and the corresponding labels.
+        # Note: During inference (labels is None), we just return l2 norm of bert part of the model
+        if labels is None:
+            return l2_norm(pooled_output, axis = 1) 
+        else:
+            logits, origin_cos = self.curricular_face(pooled_output, labels)
+        
+        loss = None
+        if labels is not None:
+            loss = self.loss_fct(logits, labels.view(-1))
+        
+        return SequenceClassifierOutput(
+            loss=loss,
+            logits=logits,
+            hidden_states=outputs.hidden_states,
+            attentions=outputs.attentions,
+        )
+
+class ProkBertForCurricularClassificationAvg(ProkBertPreTrainedModel):
     config_class = ProkBertConfigCurr
     base_model_prefix = "bert"
 
@@ -1454,19 +1575,24 @@ class ProkBertForCurricularClassification(ProkBertPreTrainedModel):
         self.config = config
         #bert_config = AutoConfig.from_pretrained(config.bert_base_model)
         self.bert = ProkBertModel.from_pretrained(config.bert_base_model)
-
-        #self.bert = ProkBertModel(config)
-        
-        # A weighting layer for pooling the sequence output
-        self.weighting_layer = nn.Linear(self.config.hidden_size, 1)
+    
         self.dropout = nn.Dropout(self.config.classification_dropout_rate)
-        
-        # Replace the simple classifier with the CurricularFace head.
-        # Defaults m=0.5 and s=64 are used, but these can be adjusted if needed.
-        self.curricular_face = CurricularFace(self.config.hidden_size, 
-                                              self.config.curricular_num_labels,
-                                              m=self.config.curricular_face_m,
-                                              s=self.config.curricular_face_s)
+
+        if config.curriculum_hidden_size != -1:
+            self.linear = nn.Linear(self.config.hidden_size, config.curriculum_hidden_size)
+            initialize_linear_kaiming(self.linear)
+            # Replace the simple classifier with the CurricularFace head.
+            # Defaults m=0.5 and s=64 are used, but these can be adjusted if needed.
+            self.curricular_face = CurricularFace(config.curriculum_hidden_size, 
+                                                self.config.curricular_num_labels,
+                                                m=self.config.curricular_face_m,
+                                                s=self.config.curricular_face_s)
+        else:
+            self.linear = nn.Identity()
+            self.curricular_face = CurricularFace(self.config.hidden_size, 
+                                                self.config.curricular_num_labels,
+                                                m=self.config.curricular_face_m,
+                                                s=self.config.curricular_face_s)
         
 
         self.loss_fct = torch.nn.CrossEntropyLoss()
@@ -1500,10 +1626,33 @@ class ProkBertForCurricularClassification(ProkBertPreTrainedModel):
         sequence_output = outputs[0]  # (batch_size, seq_length, hidden_size)
         
         # Pool the sequence output using a learned weighting (attention-like)
-        weights = self.weighting_layer(sequence_output)  # (batch_size, seq_length, 1)
-        weights = torch.nn.functional.softmax(weights, dim=1)
+        # Compute raw weights
+        weights = self.weighting_layer(sequence_output).squeeze(-1)  # (batch_size, seq_length)
+
+        # Ensure mask shape matches
+        if attention_mask.dim() == 2:
+            mask = attention_mask
+        elif attention_mask.dim() == 4:
+            mask = attention_mask.squeeze(1).squeeze(1)  # (batch_size, seq_length)
+        else:
+            raise ValueError(f"Unexpected attention_mask shape {attention_mask.shape}")
+
+        # Apply mask (masked positions -> -inf before softmax)
+        weights = weights.masked_fill(mask == 0, float('-inf'))
+
+        # Normalize
+        weights = torch.nn.functional.softmax(weights, dim=1)  # (batch_size, seq_length)
+
+        # Weighted pooling
+        weights = weights.unsqueeze(-1)                        # (batch_size, seq_length, 1)
+        print(weights.shape)
+        print(sequence_output.shape)
         pooled_output = torch.sum(weights * sequence_output, dim=1)  # (batch_size, hidden_size)
+        print(pooled_output.shape)
+        # Classifier head
         pooled_output = self.dropout(pooled_output)
+        pooled_output = self.linear(pooled_output)
+        print(pooled_output.shape)
 
         # CurricularFace requires the embeddings and the corresponding labels.
         # Note: During inference (labels is None), we just return l2 norm of bert part of the model
@@ -1522,9 +1671,6 @@ class ProkBertForCurricularClassification(ProkBertPreTrainedModel):
             hidden_states=outputs.hidden_states,
             attentions=outputs.attentions,
         )
-    
-
-
 
 class ProkBertForSequenceClassification(ProkBertPreTrainedModel):
     """
@@ -1614,6 +1760,40 @@ class ProkBertForSequenceClassification(ProkBertPreTrainedModel):
             output_hidden_states=output_hidden_states,
             return_dict=return_dict,
         )
+
+        sequence_output = outputs[0]  # (batch_size, seq_length, hidden_size)
+
+        # Ensure mask shape matches (batch_size, seq_length)
+        if attention_mask.dim() == 2:
+            mask = attention_mask
+        elif attention_mask.dim() == 4:
+            mask = attention_mask.squeeze(1).squeeze(1)  # (batch_size, seq_length)
+        else:
+            raise ValueError(f"Unexpected attention_mask shape {attention_mask.shape}")
+
+        # Expand mask to match hidden size
+        mask_expanded = mask.unsqueeze(-1).expand(sequence_output.size())  # (batch_size, seq_length, hidden_size)
+
+        # Apply mask and compute mean pooling
+        sum_embeddings = torch.sum(sequence_output * mask_expanded, dim=1)  # (batch_size, hidden_size)
+        lengths = torch.clamp(mask.sum(dim=1, keepdim=True), min=1e-9).to(sequence_output.dtype)      # avoid division by zero
+        pooled_output = (sum_embeddings / lengths).to(sequence_output.dtype)                           # (batch_size, hidden_size)
+        # Classifier head
+        #print(pooled_output.dtype)
+        pooled_output = self.dropout(pooled_output)
+        pooled_output = self.linear(pooled_output)
+
+        # CurricularFace requires the embeddings and the corresponding labels.
+        # Note: During inference (labels is None), we just return l2 norm of bert part of the model
+        if labels is None:
+            return l2_norm(pooled_output, axis = 1) 
+        else:
+            logits, origin_cos = self.curricular_face(pooled_output, labels)
+        
+        loss = None
+        if labels is not None:
+            loss = self.loss_fct(logits, labels.view(-1))
+        
         # Get hidden states
         sequence_output = outputs[0]
         weights = self.weighting_layer(sequence_output)
@@ -1640,7 +1820,6 @@ class ProkBertForSequenceClassification(ProkBertPreTrainedModel):
         )
         return classification_output
         print(last_hidden_state)
-
 
 class ddssProkBertForSequenceClassification(ProkBertPreTrainedModel):
     """
@@ -1758,23 +1937,16 @@ class ddssProkBertForSequenceClassification(ProkBertPreTrainedModel):
             else:
                 loss_fct = CrossEntropyLoss()
                 loss = loss_fct(logits.view(-1, self.num_labels), labels.view(-1))
-        #print('Loss')
-        #print(loss)
-
-        #1/0
 
         if not return_dict:
             output = (logits,)
             return ((loss,) + output) if loss is not None else output
-
         return SequenceClassifierOutput(
             loss=loss,
             logits=logits,
             hidden_states=outputs.hidden_states,
             attentions=outputs.attentions,
         )
-
-
 
 
 class ddssProkBertForSequenceClassification(ProkBertPreTrainedModel):
@@ -1858,7 +2030,6 @@ class ddssProkBertForSequenceClassification(ProkBertPreTrainedModel):
         else:
             # mean pooling over valid tokens
             pooled = (last_hidden_state * attention_mask.unsqueeze(-1)).sum(dim=1) / attention_mask.sum(dim=1, keepdim=True)
-        print(pooled)
         # Classification head
         pooled = self.head(pooled)
         pooled = self.dropout(pooled)
@@ -1874,7 +2045,7 @@ class ddssProkBertForSequenceClassification(ProkBertPreTrainedModel):
                     self.config.problem_type = "single_label_classification"
                 else:
                     self.config.problem_type = "multi_label_classification"
-            print('Guessed problem type:' + self.config.problem_type)
+            #print('Guessed problem type:' + self.config.problem_type)
             # Compute loss
             if self.config.problem_type == "regression":
                 loss_fct = MSELoss()
@@ -1888,8 +2059,6 @@ class ddssProkBertForSequenceClassification(ProkBertPreTrainedModel):
             else:
                 loss_fct = CrossEntropyLoss()
                 loss = loss_fct(logits.view(-1, self.num_labels), labels.view(-1))
-        print('Loss')
-        print(loss)
 
         if not return_dict:
             output = (logits,)
@@ -1902,12 +2071,6 @@ class ddssProkBertForSequenceClassification(ProkBertPreTrainedModel):
             attentions=outputs.attentions,
         )
     
-
-
-
-
-
-
 
 class ProkBertForMaskedLM2(ProkBertPreTrainedModel):
     _tied_weights_keys = ["decoder.weight"]

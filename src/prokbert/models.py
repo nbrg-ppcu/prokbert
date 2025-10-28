@@ -10,7 +10,7 @@ from torch.nn.parameter import Parameter
 from transformers import MegatronBertConfig, MegatronBertModel, MegatronBertForMaskedLM, MegatronBertPreTrainedModel, PreTrainedModel
 from transformers.modeling_outputs import SequenceClassifierOutput
 from transformers.utils.hub import cached_file
-
+import math
 #from prokbert.training_utils import compute_metrics_eval_prediction
 
 
@@ -171,6 +171,7 @@ class ProkBertConfigCurr(ProkBertConfig):
         curricular_face_m = 0.5,
         curricular_face_s=64.,
         curricular_num_labels = 2,
+        curriculum_hidden_size = -1, 
         classification_dropout_rate = 0.0, 
         **kwargs,
     ):
@@ -180,6 +181,7 @@ class ProkBertConfigCurr(ProkBertConfig):
         self.curricular_face_s = curricular_face_s
         self.classification_dropout_rate = classification_dropout_rate
         self.bert_base_model = bert_base_model
+        self.curriculum_hidden_size = curriculum_hidden_size
 
 class ProkBertClassificationConfig(ProkBertConfig):
     model_type = "prokbert"
@@ -391,17 +393,38 @@ class ProkBertForCurricularClassification(ProkBertPreTrainedModel):
         self.weighting_layer = nn.Linear(self.config.hidden_size, 1)
         self.dropout = nn.Dropout(self.config.classification_dropout_rate)
         
-        # Replace the simple classifier with the CurricularFace head.
-        # Defaults m=0.5 and s=64 are used, but these can be adjusted if needed.
-        self.curricular_face = CurricularFace(self.config.hidden_size, 
-                                              self.config.curricular_num_labels,
-                                              m=self.config.curricular_face_m,
-                                              s=self.config.curricular_face_s)
+        if config.curriculum_hidden_size != -1:
+            self.linear = nn.Linear(self.config.hidden_size, config.curriculum_hidden_size)
+            
+            # Replace the simple classifier with the CurricularFace head.
+            # Defaults m=0.5 and s=64 are used, but these can be adjusted if needed.
+            self.curricular_face = CurricularFace(config.curriculum_hidden_size, 
+                                                self.config.curricular_num_labels,
+                                                m=self.config.curricular_face_m,
+                                                s=self.config.curricular_face_s)
+        else:
+            self.linear = nn.Identity()
+            self.curricular_face = CurricularFace(self.config.hidden_size, 
+                                                self.config.curricular_num_labels,
+                                                m=self.config.curricular_face_m,
+                                                s=self.config.curricular_face_s)
         
 
         self.loss_fct = torch.nn.CrossEntropyLoss()
         self.post_init()
 
+    def _init_weights(self, module: nn.Module):
+        # first let the base class init everything else
+        super()._init_weights(module)
+
+        # then catch our pooling head and zero it
+        if module is getattr(self, "weighting_layer", None):
+            nn.init.xavier_uniform_(module.weight)
+            nn.init.zeros_(module.bias)
+
+        if module is getattr(self, "linear", None):
+            initialize_linear_kaiming(self.linear)
+        
     def forward(
         self,
         input_ids: Optional[torch.LongTensor] = None,
@@ -433,9 +456,26 @@ class ProkBertForCurricularClassification(ProkBertPreTrainedModel):
         
         # Pool the sequence output using a learned weighting (attention-like)
         weights = self.weighting_layer(sequence_output)  # (batch_size, seq_length, 1)
-        weights = torch.nn.functional.softmax(weights, dim=1)
+        # Ensure mask shape matches
+        if attention_mask.dim() == 2:
+            mask = attention_mask
+        elif attention_mask.dim() == 4:
+            mask = attention_mask.squeeze(1).squeeze(1)  # (batch_size, seq_length)
+        else:
+            raise ValueError(f"Unexpected attention_mask shape {attention_mask.shape}")
+
+        # Apply mask (masked positions -> -inf before softmax)
+        weights = weights.masked_fill(mask == 0, float('-inf'))
+
+        # Normalize
+        weights = torch.nn.functional.softmax(weights, dim=1)  # (batch_size, seq_length)
+
+        # Weighted pooling
+        weights = weights.unsqueeze(-1)                        # (batch_size, seq_length, 1)        
         pooled_output = torch.sum(weights * sequence_output, dim=1)  # (batch_size, hidden_size)
+        # Classifier head
         pooled_output = self.dropout(pooled_output)
+        pooled_output = self.linear(pooled_output)
 
         # CurricularFace requires the embeddings and the corresponding labels.
         # Note: During inference (labels is None), we just return l2 norm of bert part of the model
