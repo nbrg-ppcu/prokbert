@@ -1,6 +1,6 @@
 import logging
 from dataclasses import dataclass
-from typing import Any, AnyStr, Dict, List, Optional, Tuple, Union
+from typing import Any, AnyStr, Dict, List, Optional, Tuple, Union, Set
 import torch
 
 import numpy as np
@@ -10,7 +10,6 @@ logger = logging.getLogger(__name__)
 
 
 from transformers import PreTrainedTokenizer, PreTrainedTokenizerFast, BatchEncoding
-from torch import tensor
 
 
 
@@ -24,6 +23,7 @@ class VarLenDataCollatorWithPadding:
         distribution: str = "uniform",
         seed: int = 42,
         distribution_kwargs: Optional[Dict] = None,
+        special_token_ids_to_mask: Set[int] = None,
     ):
         self.tokenizer = tokenizer
 
@@ -33,15 +33,23 @@ class VarLenDataCollatorWithPadding:
         self.min_length = max(0,min_length)
         self.max_output_seq_len = max_output_seq_len
 
+        # Internal max length that takes the added special tokens into account
+        self._max_seq_len = max_output_seq_len - tokenizer.num_special_tokens_to_add(pair=False)
+
+        # Make sure all ID-s to mask are integers
+        if special_token_ids_to_mask is not None:
+            assert all(type(x) is int for x in special_token_ids_to_mask), "special_token_ids_to_mask must contain only integer IDs."
+        self.special_token_ids_to_mask = special_token_ids_to_mask
+
         self.rng = np.random.default_rng(seed=seed)
         kw = distribution_kwargs if distribution_kwargs is not None else {}
 
         # Create internal generator with the given distribution
         if distribution == "uniform":
-            self._generator = lambda n: self.rng.uniform(low=min_length, high=max_output_seq_len, size=n)
+            self._generator = lambda n: self.rng.uniform(low=min_length, high=self._max_seq_len, size=n)
         elif distribution == "normal":
-            center = (min_length + max_output_seq_len) / 2
-            sigma = (max_output_seq_len - min_length) / 4
+            center = (min_length + self._max_seq_len) / 2
+            sigma = (self._max_seq_len - min_length) / 4
             self._generator = lambda n: self.rng.normal(loc=center, scale=sigma, size=n)
         elif distribution == "exponential":
             scale = kw.get("scale", 100 )
@@ -54,10 +62,10 @@ class VarLenDataCollatorWithPadding:
         input_id_lens = []
         for f in features:
             current_len = len(f['input_ids'])
-            assert self.min_length < current_len, f"All input_ids must have at least min_length{self.min_length} tokens to choose from."
+            assert self.min_length <= current_len, f"All input_ids must have at least min_length {self.min_length} tokens to choose from."
             input_id_lens.append(current_len)
 
-        return [self.rng.integers(low=0, high=max(0, input_id_len - self.max_output_seq_len), endpoint=True).astype(int)
+        return [self.rng.integers(low=0, high=max(0, input_id_len - self._max_seq_len), endpoint=True).astype(int)
                 for input_id_len in input_id_lens]
 
 
@@ -67,7 +75,7 @@ class VarLenDataCollatorWithPadding:
         sample_lens = self._generator(len(features)).astype(int)
 
         # Make sure the sample end is smaller than the max_len and the sequences length
-        return [min(min(sample_len + self.min_length, self.max_output_seq_len), len(f['input_ids']))
+        return [min(min(sample_len + self.min_length, self._max_seq_len), len(f['input_ids']))
                 for sample_len, f in zip(sample_lens, features)]
 
 
@@ -79,7 +87,7 @@ class VarLenDataCollatorWithPadding:
         seq_ends = self._sample_seq_end(features=features)
 
 
-        # Extract labels if available. The 'labels' column takes precedence but try with 'y' too
+        # Extract labels if available the 'labels' column takes precedence but try with 'y' too
         labels = None
         if "labels" in features[0]:
             labels = [f["labels"] for f in features]
@@ -87,15 +95,32 @@ class VarLenDataCollatorWithPadding:
         if labels is None and "y" in features[0]:
             labels = [f["y"] for f in features]
 
-        # Sample the input_ids
-        input_ids = [{'input_ids': f["input_ids"][start:end]} for f, start, end in zip(features, seq_starts, seq_ends)]
+        # Truncate the input_ids based on the seq_ends
+        input_ids = [{'input_ids': self.tokenizer.build_inputs_with_special_tokens(f["input_ids"][start:end])}
+                     for f, start, end in zip(features, seq_starts, seq_ends)]
+
         # Pad input_ids
-        batch = self.tokenizer.pad(input_ids, padding='longest', max_length=self.max_output_seq_len, return_tensors=return_tensors)
+        batch = self.tokenizer.pad(input_ids, padding='longest',
+                                   max_length=self.max_output_seq_len,
+                                   return_tensors=return_tensors)
+
+        if self.special_token_ids_to_mask is not None:
+            mask = batch['input_ids']
+
+            if isinstance(mask, torch.Tensor):
+                # Create a tensor holding the set's values
+                special_ids = torch.tensor(list(self.special_token_ids_to_mask), device=mask.device, dtype=mask.dtype)
+                batch['attention_mask'] = torch.isin(elements=mask, test_elements=special_ids, invert=True).long()
+            else: # List of lists version
+                batch['attention_mask'] = [
+                    [0 if tok in self.special_token_ids_to_mask else 1 for tok in seq]
+                    for seq in mask
+                ]
 
         # Add labels if present in the dataset
         if labels is not None:
             if return_tensors == "pt":
-                batch["labels"] = tensor(labels)
+                batch["labels"] = torch.tensor(labels)
             else:
                 batch["labels"] = labels
         return batch
@@ -123,7 +148,7 @@ class VarLenDataCollatorForMaskedLanguageModeling(VarLenDataCollatorWithPadding)
             labels[:] = [lbl + [zero_dist] * (len(f) - len(lbl)) for lbl, f in zip(labels, batch['input_ids'])]
 
             if 'pt' == return_tensors:
-                batch["labels"] = tensor(labels)
+                batch["labels"] = torch.tensor(labels)
             else:
                 batch["labels"] = labels
         else:         # Create target labels if they were missing from the dataset
