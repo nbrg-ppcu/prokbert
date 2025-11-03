@@ -22,8 +22,6 @@ from tqdm import tqdm
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 
 
-from safetensors.torch import load_file
-
 from transformers import AutoTokenizer, AutoModel
 
 def get_model_embeddings_umap(grouped_means, labels, seq_ids, plot_path,
@@ -160,10 +158,6 @@ def finetune(output_folder_path):
         curriculum_hidden_size = 128,
     )
 
-    pretrained_checkpoint_path = "/leonardo_work/EUHPC_R04_194/test_prokbert/checkpoint-460"
-    weights_path = f"{pretrained_checkpoint_path}/model.safetensors"
-    state_dict = load_file(weights_path)
-    model.load_state_dict(state_dict)
     model = model.to(device)
 
     num_params = sum(p.numel() for p in model.parameters())
