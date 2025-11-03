@@ -1497,6 +1497,10 @@ class ProkBertForCurricularClassification(ProkBertPreTrainedModel):
         if module is getattr(self, "linear", None):
             initialize_linear_kaiming(self.linear)
         
+        if module is getattr(self, "curricular_face", None):
+            nn.init.kaiming_uniform_(module.kernel, a=math.sqrt(self.config.curricular_num_labels))
+
+        
     def forward(
         self,
         input_ids: Optional[torch.LongTensor] = None,
