@@ -62,7 +62,8 @@ class VarLenDataCollatorWithPadding:
         input_id_lens = []
         for f in features:
             current_len = len(f['input_ids'])
-            assert self.min_length <= current_len, f"All input_ids must have at least min_length {self.min_length} tokens to choose from."
+            assert self.min_length <= current_len, (f"All input_ids must have at least min_length {self.min_length} tokens to choose from,"
+                                                    f"got sequence with length: {current_len}.")
             input_id_lens.append(current_len)
 
         return [self.rng.integers(low=0, high=max(0, input_id_len - self._max_seq_len), endpoint=True).astype(int)
@@ -91,8 +92,9 @@ class VarLenDataCollatorWithPadding:
         labels = None
         if "labels" in features[0]:
             labels = [f["labels"] for f in features]
-
-        if labels is None and "y" in features[0]:
+        elif "label" in features[0]:
+            labels = [f["label"] for f in features]
+        elif "y" in features[0]:
             labels = [f["y"] for f in features]
 
         # Truncate the input_ids based on the seq_ends
@@ -123,6 +125,7 @@ class VarLenDataCollatorWithPadding:
                 batch["labels"] = torch.tensor(labels)
             else:
                 batch["labels"] = labels
+
         return batch
 
 
