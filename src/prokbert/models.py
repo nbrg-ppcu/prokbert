@@ -329,7 +329,6 @@ class CurricularFace(nn.Module):
         self.mm = math.sin(math.pi - m) * m
         self.kernel = Parameter(torch.Tensor(in_features, out_features))
         self.register_buffer('t', torch.zeros(1))
-        initialize_linear_kaiming(self.kernel)
 
     def forward(self, embeddings, label):
         # Normalize embeddings and the classifier kernel
@@ -338,6 +337,9 @@ class CurricularFace(nn.Module):
         # Compute cosine similarity between embeddings and kernel columns
         cos_theta = torch.mm(embeddings, kernel_norm)
         cos_theta = cos_theta.clamp(-1, 1)  # for numerical stability
+
+        # print(f"cos theta")
+        # print(cos_theta)
         
         # Clone original cosine values (used later for analysis if needed)
         with torch.no_grad():
@@ -347,7 +349,7 @@ class CurricularFace(nn.Module):
         target_logit = cos_theta[torch.arange(0, embeddings.size(0)), label].view(-1, 1)
         sin_theta = torch.sqrt(1.0 - torch.pow(target_logit, 2))
         cos_theta_m = target_logit * self.cos_m - sin_theta * self.sin_m  # cos(target + margin)
-        
+
         # Create a mask for positions where the cosine similarity exceeds the modified value
         mask = (cos_theta > cos_theta_m) #.to(dtype=torch.uint8)
         
@@ -423,7 +425,11 @@ class ProkBertForCurricularClassification(ProkBertPreTrainedModel):
             nn.init.zeros_(module.bias)
 
         if module is getattr(self, "linear", None):
-            initialize_linear_kaiming(self.linear)
+            initialize_linear_kaiming(module)
+        
+        if module is getattr(self, "curricular_face", None):
+            nn.init.kaiming_uniform_(module.kernel, a=math.sqrt(self.config.curricular_num_labels))
+
         
     def forward(
         self,
@@ -483,7 +489,7 @@ class ProkBertForCurricularClassification(ProkBertPreTrainedModel):
             return l2_norm(pooled_output, axis = 1) 
         else:
             logits, origin_cos = self.curricular_face(pooled_output, labels)
-        
+
         loss = None
         if labels is not None:
             loss = self.loss_fct(logits, labels.view(-1))
