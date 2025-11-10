@@ -69,7 +69,7 @@ class VarLenDataCollatorWithPadding:
                                                     f"got sequence with length: {current_len}.")
             input_id_lens.append(current_len)
 
-        random_lengths =  [self.rng.integers(low=0, high=max(0, input_id_len - self._max_seq_len), endpoint=True).astype(int)
+        random_lengths =  [self.rng.integers(low=0, high=max(0, input_id_len - self.max_output_seq_len), endpoint=True).astype(int)
                 for input_id_len in input_id_lens]
 
         return [random_length if trunc else 0 for trunc, random_length in zip(truncate_samples, random_lengths) ]
@@ -83,7 +83,7 @@ class VarLenDataCollatorWithPadding:
         random_lengths = [min(max(self.min_length, min(sample_len, self._max_seq_len)), len(f['input_ids']))
                          for sample_len, f in zip(sample_lens, features)]
 
-        return [random_length if trunc else len(f['input_ids'])
+        return [random_length if trunc else min(len(f['input_ids']), self._max_seq_len)
                 for trunc, random_length, f in zip(truncate_samples, random_lengths, features) ]
 
 
@@ -113,7 +113,8 @@ class VarLenDataCollatorWithPadding:
                      for f, start, end in zip(features, seq_starts, seq_ends)]
 
         # Pad input_ids
-        batch = self.tokenizer.pad(input_ids, padding='longest',
+        batch = self.tokenizer.pad(input_ids,
+                                   padding='longest',
                                    max_length=self.max_output_seq_len,
                                    return_tensors=return_tensors)
 
