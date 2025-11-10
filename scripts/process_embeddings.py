@@ -6,7 +6,7 @@ import torch
 import pyarrow as pa
 import pyarrow.ipc as ipc
 from tqdm import tqdm
-from datasets import load_from_disk
+from datasets import load_from_disk, Dataset
 from torch.utils.data import DataLoader
 from transformers import AutoModel
 
@@ -91,6 +91,9 @@ def main():
     # check that embeddings were written correctly, and dataset loads
     with pa.memory_map(str(ds_embedding_path), "r") as f:
         table = ipc.open_file(f).read_all()
+
+    ds = Dataset(table)
+    assert len(ds) == len(dataset_chunk_tokenized), "Length mismatch after embedding processing!"
 
     print(f"Done embedding processing: {args.chunk_path} in {time.time() - start_time:.2f} seconds.")
 

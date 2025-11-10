@@ -21,10 +21,9 @@ if (( NGPUS == 0 )); then
   echo "Error: GPU_IDS array is empty"; exit 1
 fi
 
-# checks how many background jobs are running
-# and wait until a background slot is free
-sem() {
-    while (( $(jobs -rp | wc -l) >= MAX_JOBS )); do
+# wait until NO background jobs remain, avoid OOM on GPUs
+sem_all() {
+    while (( $(jobs -rp | wc -l) > 0 )); do
         sleep 1
     done
 }
@@ -34,17 +33,22 @@ echo "Using chunks in: $DATASET_PATH"
 echo "Max parallel jobs: $MAX_JOBS (2 per GPU across ${#GPU_IDS[@]} GPUs)"
 echo
 
-job_idx=0
+count=0
+batch_size=6
 
 for d in "$DATASET_PATH"/dataset_*_tokenized; do
     [ -d "$d" ] || continue # skip if not a directory
 
-    sem  # wait until a slot is free
+    # if batch is full -> wait for all to finish
+    if (( count > 0 && count % batch_size == 0 )); then
+        sem_all
+    fi
 
     # round-robin GPU assignment: 0,1,2,0,1,2,...
-    idx=$(( job_idx % NGPUS ))
+    idx=$(( count % NGPUS ))
     gpu=${GPU_IDS[$idx]}
-    (( job_idx += 1 ))
+
+    (( count += 1 ))
 
     echo "Starting: $d on GPU $gpu"
 
@@ -53,7 +57,7 @@ for d in "$DATASET_PATH"/dataset_*_tokenized; do
 
 done
 
-wait # for all background jobs to finish
+sem_all # wait for the last batch
 
 TOTAL_TIME=$SECONDS
 hours=$(( TOTAL_TIME / 3600 ))
