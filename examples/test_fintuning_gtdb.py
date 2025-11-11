@@ -23,7 +23,6 @@ from transformers import default_data_collator
 from tqdm import tqdm
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 
-
 from transformers import AutoTokenizer, AutoModel
 
 def get_model_embeddings_umap(grouped_means, labels, seq_ids, plot_path,
