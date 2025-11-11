@@ -224,9 +224,6 @@ class ProkBertPreTrainedModel(PreTrainedModel):
         if isinstance(module, nn.Linear) and module.bias is not None:
             module.bias.data.zero_()
 
-
-
-
 class ProkBertModel(MegatronBertModel):
     config_class = ProkBertConfig
 
@@ -320,7 +317,6 @@ class ProkBertForSequenceClassification(ProkBertPreTrainedModel):
                 attentions=outputs.attentions,
             )
             return classification_output
-
 
 class CurricularFace(nn.Module):
     def __init__(self, in_features, out_features, m=0.5, s=64.):
