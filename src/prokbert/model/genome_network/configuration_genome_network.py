@@ -14,8 +14,6 @@ class GenomeNetworkConfig(PretrainedConfig):
     Instantiating a configuration with the defaults will yield a similar configuration to that of a ProkBERT-base.
 
     Args:
-        vocab_size (int, optional, defaults to ):
-            Vocabulary size of the ProkBert model.
         hidden_size (int, optional, defaults to ):
             Dimension of the hidden representations.
         intermediate_size (int, optional, defaults to ):
@@ -91,7 +89,6 @@ class GenomeNetworkConfig(PretrainedConfig):
 
     def __init__(
         self,
-        vocab_size: int = 4608,
         hidden_size: int = 384,
         intermediate_size: int = 1152,
         num_hidden_layers: int = 6,
@@ -138,7 +135,6 @@ class GenomeNetworkConfig(PretrainedConfig):
             sep_token_id=sep_token_id,
             **kwargs,
         )
-        self.vocab_size = vocab_size
         self.max_position_embeddings = max_position_embeddings
         self.hidden_size = hidden_size
         self.intermediate_size = intermediate_size

@@ -258,7 +258,7 @@ class GenomeNetworkPreTrainedModel(PreTrainedModel):
     config_class = GenomeNetworkConfig
     base_model_prefix = "model"
     supports_gradient_checkpointing = True
-    _no_split_modules = ["GenomeNetworkEmbeddings", "GenomeNetworkEncoderLayer"]
+    _no_split_modules = ["GenomeNetworkEncoderLayer"]
     _supports_flash_attn_2 = True
     _supports_sdpa = True
     _supports_flex_attn = False
@@ -463,6 +463,8 @@ class GenomeNetworkForMaskedLM(GenomeNetworkPreTrainedModel):
             raise ValueError(
                 "Either `embedding_model` or `embedding_config` has to be provided."
             )
+        self.embedding_model.eval() # TODO should be parametrized
+        # TODO compile?
 
         # freeze embedding model
         for param in self.embedding_model.parameters():

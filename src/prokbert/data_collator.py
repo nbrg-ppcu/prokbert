@@ -32,7 +32,7 @@ class DataCollatorForGenomeNetwork:
         - labels:          [batch size, max_gene_len, max_seq_len] (if `mlm` is True)
         - labels_mask:     [batch size, max_gene_len] (if `mlm` is True) - indicates which genes are masked
 
-    Batches are filled / padded with “virtual genes” with if needed:
+    Batches are filled / padded with “virtual genes”, if needed. That is:
       - input_ids:       [CLS, SEP, 0, ..., 0]
       - attention_mask:  1 for the first two positions, 0 elsewhere
       - token_type_ids:  0 (or a configured value)
@@ -79,6 +79,13 @@ class DataCollatorForGenomeNetwork:
 
     # tokenisation should be already done at sequence level
     def __call__(self, features: list[dict[str, Any]]) -> dict[str, Any]:
+
+        if not isinstance(features[0]["input_ids"], torch.Tensor):
+            for feature in features:
+                feature["input_ids"] = torch.tensor(feature["input_ids"], dtype=self.torch_token_dtype)
+                feature["attention_mask"] = torch.tensor(feature["attention_mask"], dtype=self.torch_token_dtype)
+                if "token_type_ids" in feature:
+                    feature["token_type_ids"] = torch.tensor(feature["token_type_ids"], dtype=self.torch_token_dtype)
 
         max_gene_len = max(m["input_ids"].shape[0] for m in features)
         max_seq_len = max(m["input_ids"].shape[1] for m in features)
@@ -194,72 +201,3 @@ class DataCollatorForGenomeNetwork:
 
         # labels mask (masked_genes_indices) signals which genes are masked
         return inputs, labels, masked_genes_indices
-
-
-if __name__ == "__main__":
-    import random
-    from datasets import Dataset
-    from torch.utils.data import DataLoader
-    from transformers import AutoTokenizer
-    model_name = 'neuralbioinfo/prokbert-mini'
-    tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
-    print("PAD token:", tokenizer.pad_token, "->", tokenizer.pad_token_id)
-    print("CLS token:", tokenizer.cls_token, "->", tokenizer.cls_token_id)
-    print("SEP token:", tokenizer.sep_token, "->", tokenizer.sep_token_id)
-    print("MASK token:", tokenizer.mask_token, "->", tokenizer.mask_token_id)
-    print("UNK token:", tokenizer.unk_token, "->", tokenizer.unk_token_id)
-    print("VOCAB SIZE:", tokenizer.vocab_size, len(tokenizer))
-    def random_gene_sequence(low = 10, high = 20):
-        n = random.randint(low, high)
-        return "".join(random.choice("ACGT") for _ in range(n))
-
-    def create_random_genome_dataset(
-            dataset_num=100,
-            gene_per_genom_low=2,
-            gene_per_genom_high=5,
-            gene_seq_low=10,
-            gene_seq_high=20
-    ):
-        genoms = {"genom": [], "gene_nums": [], "sequences": []}
-        for i in range(1, dataset_num + 1):
-
-            gene_nums = []
-            gene_sequences = []
-
-            n = random.randint(gene_per_genom_low, gene_per_genom_high)
-            for j in range(n):
-
-                gene_sequence = random_gene_sequence(gene_seq_low, gene_seq_high)
-                gene_nums.append(j)
-                gene_sequences.append(gene_sequence)
-
-            genoms["genom"].append(i)
-            genoms["gene_nums"].append(gene_nums)
-            genoms["sequences"].append(gene_sequences)
-
-        return genoms
-
-
-    genoms = create_random_genome_dataset(
-        dataset_num=100,
-        gene_per_genom_low=4,
-        gene_per_genom_high=7,
-        gene_seq_low=10,
-        gene_seq_high=15
-    )
-
-    dataset = Dataset.from_dict(genoms)
-    tokenized_dataset = [tokenizer(genom["sequences"], padding=True, return_tensors="pt") for genom in dataset.to_list()]
-    dataset.remove_columns(["sequences", "gene_nums", "genom"])
-
-    data_collator = DataCollatorForGenomeNetwork(
-        tokenizer,
-        mlm=True,
-        mlm_probability=0.7,
-        mask_replace_prob=0.6,
-        random_replace_prob=0.4
-    )
-    loader = DataLoader(tokenized_dataset, batch_size=2, collate_fn=data_collator)
-    for batch in loader:
-        print({k: v.shape for k, v in batch.items()})
-        break
