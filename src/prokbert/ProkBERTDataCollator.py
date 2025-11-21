@@ -4,7 +4,7 @@ from typing import Any, AnyStr, Dict, List, Optional, Tuple, Union, Set
 import torch
 
 import numpy as np
-from transformers import DataCollatorForLanguageModeling
+from transformers import DataCollatorForLanguageModeling, BatchEncoding
 
 logger = logging.getLogger(__name__)
 
@@ -87,7 +87,9 @@ class VarLenDataCollatorWithPadding:
                 for trunc, random_length, f in zip(truncate_samples, random_lengths, features) ]
 
 
-    def __call__(self, features: List[Dict[AnyStr,Any]], return_tensors: Optional[str] = "pt") -> BatchEncoding:
+    def __call__(self, features: List[Dict[AnyStr,Any]], return_tensors: Optional[str] = "pt") -> Optional[BatchEncoding] :
+        if len(features) == 0:
+            return None
         if 0.0 < self.truncation_probability:
             truncate_samples = [ self.truncation_probability >= prob for prob in self.rng.uniform(low=0.0, high=1.0, size=len(features))]
         else:
