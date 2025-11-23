@@ -4,7 +4,7 @@ from typing import Any, AnyStr, Dict, List, Optional, Tuple, Union, Set
 import torch
 
 import numpy as np
-from transformers import DataCollatorForLanguageModeling
+from transformers import DataCollatorForLanguageModeling, BatchEncoding
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +24,7 @@ class VarLenDataCollatorWithPadding:
         seed: int = 42,
         distribution_kwargs: Optional[Dict] = None,
         special_token_ids_to_mask: Set[int] = None,
+        truncation_probability: float = 0.8,
     ):
         self.tokenizer = tokenizer
 
@@ -40,6 +41,8 @@ class VarLenDataCollatorWithPadding:
         if special_token_ids_to_mask is not None:
             assert all(type(x) is int for x in special_token_ids_to_mask), "special_token_ids_to_mask must contain only integer IDs."
         self.special_token_ids_to_mask = special_token_ids_to_mask
+
+        self. truncation_probability = max(0.0, truncation_probability)
 
         self.rng = np.random.default_rng(seed=seed)
         kw = distribution_kwargs if distribution_kwargs is not None else {}
@@ -58,7 +61,7 @@ class VarLenDataCollatorWithPadding:
             raise ValueError(f"Unknown distribution: {distribution}. Possible distributions: 'uniform', 'normal', 'exponential'")
 
 
-    def _sample_seq_start(self, features: List[Dict[AnyStr,Any]] ) -> List[int]:
+    def _sample_seq_start(self, features: List[Dict[AnyStr,Any]], truncate_samples: List[bool] ) -> List[int]:
         input_id_lens = []
         for f in features:
             current_len = len(f['input_ids'])
@@ -66,26 +69,36 @@ class VarLenDataCollatorWithPadding:
                                                     f"got sequence with length: {current_len}.")
             input_id_lens.append(current_len)
 
-        return [self.rng.integers(low=0, high=max(0, input_id_len - self._max_seq_len), endpoint=True).astype(int)
+        random_lengths =  [self.rng.integers(low=0, high=max(0, input_id_len - self.max_output_seq_len), endpoint=True).astype(int)
                 for input_id_len in input_id_lens]
 
+        return [random_length if trunc else 0 for trunc, random_length in zip(truncate_samples, random_lengths) ]
 
     # Helper function to clip the values to the right len and set their type
-    def _sample_seq_end(self, features: List[Dict[AnyStr,Any]]) -> List[int]:
+    def _sample_seq_end(self, features: List[Dict[AnyStr,Any]],  truncate_samples: List[bool] ) -> List[int]:
         # Create a random number for each input_id, make sure they are integers
         sample_lens = self._generator(len(features)).astype(int)
 
         # Make sure the sample end is smaller than the max_len and the sequences length
-        return [min(min(sample_len + self.min_length, self._max_seq_len), len(f['input_ids']))
-                for sample_len, f in zip(sample_lens, features)]
+        random_lengths = [min(max(self.min_length, min(sample_len, self._max_seq_len)), len(f['input_ids']))
+                         for sample_len, f in zip(sample_lens, features)]
+
+        return [random_length if trunc else min(len(f['input_ids']), self._max_seq_len)
+                for trunc, random_length, f in zip(truncate_samples, random_lengths, features) ]
 
 
-    def __call__(self, features: List[Dict[AnyStr,Any]], return_tensors: Optional[str] = "pt") -> BatchEncoding:
+    def __call__(self, features: List[Dict[AnyStr,Any]], return_tensors: Optional[str] = "pt") -> Optional[BatchEncoding] :
+        if len(features) == 0:
+            return None
+        if 0.0 < self.truncation_probability:
+            truncate_samples = [ self.truncation_probability >= prob for prob in self.rng.uniform(low=0.0, high=1.0, size=len(features))]
+        else:
+            truncate_samples = [ False for _ in range(len(features))]
 
-        seq_starts = self._sample_seq_start(features=features)
+        seq_starts = self._sample_seq_start(features=features, truncate_samples=truncate_samples)
 
         # Generate random seq_ends between the boundaries
-        seq_ends = self._sample_seq_end(features=features)
+        seq_ends = self._sample_seq_end(features=features, truncate_samples=truncate_samples)
 
 
         # Extract labels if available the 'labels' column takes precedence but try with 'y' too
@@ -102,7 +115,8 @@ class VarLenDataCollatorWithPadding:
                      for f, start, end in zip(features, seq_starts, seq_ends)]
 
         # Pad input_ids
-        batch = self.tokenizer.pad(input_ids, padding='longest',
+        batch = self.tokenizer.pad(input_ids,
+                                   padding='longest',
                                    max_length=self.max_output_seq_len,
                                    return_tensors=return_tensors)
 
