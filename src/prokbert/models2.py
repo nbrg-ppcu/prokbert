@@ -1683,8 +1683,6 @@ class ProkBertForSequenceClassification(ProkBertPreTrainedModel):
             attentions=outputs.attentions,
         )
         return classification_output
-        print(last_hidden_state)
-
 
 class ddssProkBertForSequenceClassification(ProkBertPreTrainedModel):
     """
@@ -1802,23 +1800,16 @@ class ddssProkBertForSequenceClassification(ProkBertPreTrainedModel):
             else:
                 loss_fct = CrossEntropyLoss()
                 loss = loss_fct(logits.view(-1, self.num_labels), labels.view(-1))
-        #print('Loss')
-        #print(loss)
-
-        #1/0
 
         if not return_dict:
             output = (logits,)
             return ((loss,) + output) if loss is not None else output
-
         return SequenceClassifierOutput(
             loss=loss,
             logits=logits,
             hidden_states=outputs.hidden_states,
             attentions=outputs.attentions,
         )
-
-
 
 
 class ddssProkBertForSequenceClassification(ProkBertPreTrainedModel):

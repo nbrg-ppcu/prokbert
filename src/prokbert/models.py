@@ -179,15 +179,9 @@ class ProkBertConfigCurr(ProkBertConfig):
         self.curricular_num_labels = curricular_num_labels
         self.curricular_face_m = curricular_face_m
         self.curricular_face_s = curricular_face_s
-<<<<<<< HEAD
-        self.classification_dropout_rate = classification_dropout_rate
         self.bert_base_model = bert_base_model
-<<<<<<< HEAD
-=======
->>>>>>> 8d02c79 (Adding RMS norm, new classification model for modernbert, changing loss function to KL)
-=======
         self.curriculum_hidden_size = curriculum_hidden_size
->>>>>>> 7ccc982 (fix prokbert model in models add NCBI dataset class)
+        self.classification_dropout_rate = classification_dropout_rate
 
 class ProkBertClassificationConfig(ProkBertConfig):
     model_type = "prokbert"
