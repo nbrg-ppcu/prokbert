@@ -167,19 +167,28 @@ class ProkBertConfigCurr(ProkBertConfig):
 
     def __init__(
         self,
+<<<<<<< HEAD
         bert_base_model = "neuralbioinfo/prokbert-mini",
         curricular_face_m = 0.5,
         curricular_face_s=64.,
         curricular_num_labels = 2,
         classification_dropout_rate = 0.0, 
+=======
+        curricular_face_m = 0.5,
+        curricular_face_s=64.,
+        curricular_num_labels = 2,
+>>>>>>> 8d02c79 (Adding RMS norm, new classification model for modernbert, changing loss function to KL)
         **kwargs,
     ):
         super().__init__( **kwargs)
         self.curricular_num_labels = curricular_num_labels
         self.curricular_face_m = curricular_face_m
         self.curricular_face_s = curricular_face_s
+<<<<<<< HEAD
         self.classification_dropout_rate = classification_dropout_rate
         self.bert_base_model = bert_base_model
+=======
+>>>>>>> 8d02c79 (Adding RMS norm, new classification model for modernbert, changing loss function to KL)
 
 class ProkBertClassificationConfig(ProkBertConfig):
     model_type = "prokbert"
