@@ -320,6 +320,9 @@ def evaluate_binary_classification_bert(pred_results: np.ndarray) -> Tuple[Dict,
     tn, fp, fn, tp = confusion_matrix(y_true, y_pred).ravel()
     recall = tp / (tp + fn)
     specificity = tn / (tn + fp)
+    precision = tp / (tp + fp) 
+    negative_predicted_value = tn / (tn + fn)
+
     Np = tp + fn
     Nn = tn + fp
     
@@ -333,6 +336,8 @@ def evaluate_binary_classification_bert(pred_results: np.ndarray) -> Tuple[Dict,
         'mcc': mcc,
         'recall': recall,
         'sensitivity': recall,
+        'precision' : precision,
+        'neg_pred_val' : negative_predicted_value,
         'specificity': specificity,
         'tn': tn,
         'fp': fp,
@@ -725,9 +730,16 @@ def evaluate_binary_sequence_predictions(predictions, segment_dataset):
     logits = predictions.predictions
     labels = predictions.label_ids
 
+    if labels is None:
+        labels = [0] * len(logits)
+
+
     # Convert logits and labels to tensors
     logits_tensor = torch.tensor(logits)
     labels_tensor = torch.tensor(labels)
+
+    
+
 
     print('Building predictions...')
     pred_results = evaluate_binary_classification_bert_build_pred_results(logits_tensor, labels_tensor)
@@ -830,3 +842,173 @@ def inference_binary_sequence_predictions(predictions, segment_dataset):
     final_table = sequence_predictions[final_cols]
 
     return final_table
+
+
+
+def compute_metrics_masked(p: EvalPrediction):
+    # p.predictions: np.ndarray of shape (batch, seq_len, vocab_size)
+    # p.label_ids:   np.ndarray of shape (batch, seq_len)
+    return evaluate_masked_lm(p.predictions, p.label_ids)
+
+
+def evaluate_masked_lm(logits: np.ndarray,
+                       label_ids: np.ndarray,
+                       ks: list[int] = [1,5,10,100]):
+    """
+    logits:    np.array of shape (batch_size, seq_len, vocab_size)
+    label_ids: np.array of shape (batch_size, seq_len) with -100 for non-masked
+    
+    Returns a dict of metrics.
+    """
+    mask_positions = label_ids != -100               # boolean mask (batch, seq)
+    true_ids       = label_ids[mask_positions]       # shape (N,)
+    flat_logits    = logits[mask_positions]          # shape (N, vocab_size)
+
+    if true_ids.size == 0:
+        # no masked tokens at all
+        return {
+            "avg_rank":   None,
+            "median_rank": None,
+            "mrr":        None,
+            "loss":       None,
+            "perplexity": None,
+            **{f"hit@{k}": None for k in ks}
+        }
+
+
+    sorted_indices = np.argsort(-flat_logits, axis=1)  # descending sort
+    ranks = np.empty_like(true_ids, dtype=int)
+    for i, true_id in enumerate(true_ids):
+        # np.where returns a tuple, take first element of the array
+        ranks[i] = np.where(sorted_indices[i] == true_id)[0][0] + 1
+
+    avg_rank = ranks.mean()
+    med_rank = np.median(ranks)
+    mrr      = np.mean(1.0 / ranks)
+
+    hits = {f"hit@{k}": np.mean(ranks <= k) for k in ks}
+
+
+    flattened_logits = torch.tensor(flat_logits)            # (N, V)
+    flattened_labels = torch.tensor(true_ids, dtype=torch.long)  # (N,)
+    loss_fct = torch.nn.CrossEntropyLoss(reduction="mean")
+    loss = loss_fct(flattened_logits, flattened_labels).item()
+
+    ppl = float(np.exp(loss))
+
+    metrics = {
+        "avg_rank":   float(avg_rank),
+        "median_rank":int(med_rank),
+        "mrr":        float(mrr),
+        "loss":       loss,
+        "perplexity": ppl,
+    }
+    metrics.update(hits)
+    return metrics
+
+
+
+def get_token_position(seq_position, tokenizer, Ls, shift=0):
+
+    token_start_pos, token_end_pos = get_token_coordinates(seq_position, 
+                                                           tokenizer.kmer, 
+                                                           tokenizer.shift, 
+                                                           shift, 
+                                                           Ls)
+    token_middle = int((token_start_pos + token_end_pos)/2)
+
+    return token_middle
+    print(token_start_pos, token_end_pos, token_middle)
+
+
+def repretraining_masking_preprocess_function(sample, tokenizer, max_length=200, mask_to_left=3, mask_to_right=3):
+    """
+    Tokenizes the sample's 'segment' field. Adjust max_length and padding strategy as needed.
+    """  
+    tokenized = tokenizer(
+        sample["sample_seq"],
+        padding="longest",
+        truncation=True,
+        max_length=max_length,
+        
+    )
+    input_ids = tokenized["input_ids"]
+    mask_token_id = getattr(tokenizer, "mask_token_id", 4) or 4
+    batch_size = len(input_ids)
+    seq_len = len(input_ids[0])
+
+    for i, pos in enumerate(sample["pos2mask"]):
+        to_mask = list(range(pos - mask_to_left,
+                             pos + mask_to_right + 1))      
+        for mp in to_mask:
+            if 0 <= mp < len(input_ids[i]):
+                input_ids[i][mp] = mask_token_id
+        #1/0
+    #print(tokenized)
+    results = {}
+    results['input_ids'] = input_ids
+    return results
+
+def pretraining_masking_preprocess_function(sample, tokenizer, max_length=200, mask_to_left=3, mask_to_right=3):
+    """
+    Tokenizes the sample's 'sample_seq' field, applies a sliding mask window
+    around each position in sample['pos2mask'], and builds labels for MLM.
+    Returns dict with input_ids, attention_mask, and labels.
+    """
+    tokenized = tokenizer(
+        sample["sample_seq"],
+        padding="longest",
+        truncation=True,
+        max_length=max_length,
+    )
+    input_ids = tokenized["input_ids"]          # List[List[int]]
+    attention_mask = tokenized["attention_mask"]  # List[List[int]]
+    
+    mask_token_id = getattr(tokenizer, "mask_token_id", 4)
+    
+    batch_size = len(input_ids)
+    seq_len = len(input_ids[0])
+    
+    labels = [[-100] * seq_len for _ in range(batch_size)]
+    
+    positions_masked_in_batch = sample["pos2mask"]
+
+    for i, pos_list in enumerate(sample["pos2mask"]):
+
+        positions = pos_list if isinstance(pos_list, (list, tuple)) else [pos_list]
+        
+        for pos in positions:
+            pos = get_token_position(pos, tokenizer, max_length, shift=0)
+
+            to_mask = range(pos - mask_to_left, pos + mask_to_right + 1)
+            for mp in to_mask:
+                if 0 <= mp < seq_len:
+                    labels[i][mp] = input_ids[i][mp]
+                    input_ids[i][mp] = mask_token_id
+    
+    return {
+        "input_ids": input_ids,
+        "attention_mask": attention_mask,
+        "labels": labels,
+    }
+
+
+
+
+def pretraining_masking_tokenize_test_masking_db(tokenizer, ds, 
+                                                 max_token_length, 
+                                                 mask_to_left=3,
+                                                 mask_to_right=3 ):
+
+    
+    print('Tokenizing the dataset: ')
+    cols_to_remove = []
+    cols_to_remove = [c for c in ds.column_names if c != "sample_id"]
+    
+    ds2 = ds.map(
+        lambda sample: pretraining_masking_preprocess_function(sample, tokenizer, max_token_length, mask_to_left, mask_to_right),
+        batched=True,
+        num_proc=8,
+        remove_columns=cols_to_remove,
+    )
+    return ds2
