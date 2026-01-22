@@ -472,8 +472,75 @@ class TrainingHelper:
             hf_path = model_row['hf_path']
             
             # Load the tokenizer using the hf_path and allow remote code.
-            tokenizer = AutoTokenizer.from_pretrained(hf_path, trust_remote_code=True)
+            tokenizer = AutoTokenizer.from_pretrained(hf_path, trust_remote_code=True,
+                                                      local_files_only=True)
             return tokenizer
         except Exception as e:
             print(f"Error loading tokenizer for basemodel '{basemodel}': {e}")
             raise
+
+    def get_tokenizer_short_name(self, hf_path: str) -> str:
+        """
+        Return the tokenizer short name from the model database for the specified HF model path.
+        
+        Args:
+            hf_path (str): The huggingface path (from the 'hf_path' column) to look up in the model database.
+        
+        Returns:
+            str: The tokenizer short name associated with that HF model path.
+        
+        Raises:
+            ValueError: If the hf_path is not found in the model database or
+                        the 'tokenizer_short_name' field is missing.
+        """
+        # Check if there's a row matching the provided hf_path
+        matching_rows = self.model_db[self.model_db['hf_path'] == hf_path]
+        if matching_rows.empty:
+            raise ValueError(
+                f"The provided hf_path '{hf_path}' was not found in the model database. "
+                f"Valid hf_paths include: {self.model_db['hf_path'].unique().tolist()}"
+            )
+        
+        # Grab the tokenizer_short_name from the first matching row
+        tokenizer_short_name = matching_rows.iloc[0].get('tokenizer_short_name', None)
+        if not tokenizer_short_name:
+            raise ValueError(
+                f"No 'tokenizer_short_name' found for hf_path '{hf_path}' in the model database."
+            )
+        
+        return tokenizer_short_name
+    
+    def get_max_token_scaling(self, base_name: str) -> float:
+        """
+        Return the max_token_scaling parameter from the model database for the specified base model name.
+        
+        Args:
+            base_name (str): The base model name (should match the 'hf_name' column in the model database).
+        
+        Returns:
+            float: The max_token_scaling parameter associated with that base model.
+        
+        Raises:
+            ValueError: If the base model is not found in the model database or
+                        the 'max_token_scaling' field is missing.
+        """
+        # Check if there's a row matching the provided base_name.
+        matching_rows = self.model_db[self.model_db['hf_name'] == base_name]
+        if matching_rows.empty:
+            raise ValueError(
+                f"The base model '{base_name}' was not found in the model database. "
+                f"Available base models are: {list(self.basemodels)}"
+            )
+        
+        # Retrieve the max_token_scaling value from the first matching row.
+        max_token_scaling = matching_rows.iloc[0].get('max_token_scaling', None)
+        if max_token_scaling is None:
+            raise ValueError(
+                f"No 'max_token_scaling' found for base model '{base_name}' in the model database."
+            )
+        
+        # Convert the value to float before returning.
+        try:
+            return float(max_token_scaling)
+        except ValueError:
+            raise ValueError(f"Value for 'max_token_scaling' cannot be converted to float: {max_token_scaling}")
