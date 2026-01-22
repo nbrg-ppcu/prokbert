@@ -1,13 +1,11 @@
 import torch
 import os
-import random
 from torch.utils.data import DataLoader
 
 from datasets import load_from_disk
 from prokbert.models import *
 from transformers import AdamW
 
-from datasets import DatasetDict
 from prokbert.tokenizer import LCATokenizer
 from transformers import DataCollatorWithPadding
 from transformers import get_scheduler
@@ -22,6 +20,7 @@ from transformers import TrainerCallback
 from transformers import default_data_collator
 from tqdm import tqdm
 from torch.optim.lr_scheduler import ReduceLROnPlateau
+
 
 from transformers import AutoTokenizer, AutoModel
 
@@ -128,7 +127,6 @@ def finetune(output_folder_path):
     cat2id = {cat: i for i, cat in enumerate(unique_cats)}
 
     def encode_batch(batch):
-        batch['full_labels'] = batch['labels']
         batch['labels'] = [cat2id[c] for c in batch['labels']]
         return batch
 
@@ -146,16 +144,6 @@ def finetune(output_folder_path):
         lambda batch: [label in allowed_labels for label in batch["labels"]],
         batched=True
     )
-    unique_cats = dataset_new_genome.unique('labels')
-    cat2id = {cat: i for i, cat in enumerate(unique_cats)}
-
-    def encode_batch(batch):
-        batch['full_labels'] = batch['labels']
-        batch['labels'] = [cat2id[c] for c in batch['labels']]
-        return batch
-
-    dataset_new_genome = dataset_new_genome.map(encode_batch, batched=True)
-
     test_dataloader = DataLoader(dataset_new_genome, batch_size=128, shuffle=False, collate_fn=default_data_collator)
 
     bert_model_path = "neuralbioinfo/prokbert-mini-long"
@@ -221,9 +209,9 @@ def finetune(output_folder_path):
         gradient_accumulation_steps=4,
         max_steps = max_steps, 
         weight_decay=0.0,
-        logging_steps=10,
+        logging_steps=5,
         report_to=None,
-        eval_steps = 100,
+        eval_steps = 10,
         eval_accumulation_steps=1,
         dataloader_num_workers=1,
         dataloader_prefetch_factor=1,
@@ -234,7 +222,6 @@ def finetune(output_folder_path):
         load_best_model_at_end=True,
         max_grad_norm=1.0,
         ddp_find_unused_parameters=True,
-        ddp_backend="nccl",
     )
 
     trainer = Trainer(
