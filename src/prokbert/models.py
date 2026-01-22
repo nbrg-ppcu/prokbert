@@ -143,8 +143,6 @@ class BertForBinaryClassificationWithPooling(nn.Module):
 
         return model
 
-
-
 class ProkBertConfig(MegatronBertConfig):
     model_type = "prokbert"
 

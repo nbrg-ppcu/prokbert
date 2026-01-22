@@ -1396,7 +1396,6 @@ class CurricularFace(nn.Module):
         self.mm = math.sin(math.pi - m) * m
         self.kernel = Parameter(torch.Tensor(in_features, out_features))
         self.register_buffer('t', torch.zeros(1))
-        initialize_linear_kaiming(self.kernel)
 
     def forward(self, embeddings, label):
         # Normalize embeddings and the classifier kernel
@@ -1454,10 +1453,6 @@ class ProkBertForCurricularClassification(ProkBertPreTrainedModel):
     def __init__(self, config):
         super().__init__(config)
         self.config = config
-        #bert_config = AutoConfig.from_pretrained(config.bert_base_model)
-        #self.bert = ProkBertModel.from_pretrained(config.bert_base_model)
-
-        #self.bert = ProkBertModel(config)
         self.model = ProkBertModel(config)
 
         
@@ -1515,11 +1510,14 @@ class ProkBertForCurricularClassification(ProkBertPreTrainedModel):
         return_dict: Optional[bool] = None,
     ) -> Union[Tuple, SequenceClassifierOutput]:
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+        
         # Get the outputs from the base ProkBert model
         outputs = self.model(
             input_ids,
             attention_mask=attention_mask,
+            token_type_ids=token_type_ids,
             position_ids=position_ids,
+            head_mask=head_mask,
             inputs_embeds=inputs_embeds,
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
@@ -1529,7 +1527,7 @@ class ProkBertForCurricularClassification(ProkBertPreTrainedModel):
         
         # Pool the sequence output using a learned weighting (attention-like)
         # Compute raw weights
-        weights = self.weighting_layer(sequence_output).squeeze(-1)  # (batch_size, seq_length)
+        weights = self.weighting_layer(sequence_output)  # (batch_size, seq_length, 1)
 
         # Ensure mask shape matches
         if attention_mask.dim() == 2:
@@ -1540,13 +1538,13 @@ class ProkBertForCurricularClassification(ProkBertPreTrainedModel):
             raise ValueError(f"Unexpected attention_mask shape {attention_mask.shape}")
 
         # Apply mask (masked positions -> -inf before softmax)
-        weights = weights.masked_fill(mask == 0, float('-inf'))
+        weights = weights.masked_fill(mask.unsqueeze(-1) == 0, float('-inf'))
 
         # Normalize
         weights = torch.nn.functional.softmax(weights, dim=1)  # (batch_size, seq_length)
 
         # Weighted pooling
-        weights = weights.unsqueeze(-1)                        # (batch_size, seq_length, 1)        
+        #weights = weights.unsqueeze(-1)                        # (batch_size, seq_length, 1)        
         pooled_output = torch.sum(weights * sequence_output, dim=1)  # (batch_size, hidden_size)
         # Classifier head
         pooled_output = self.dropout(pooled_output)
