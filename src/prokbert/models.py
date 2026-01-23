@@ -143,8 +143,6 @@ class BertForBinaryClassificationWithPooling(nn.Module):
 
         return model
 
-
-
 class ProkBertConfig(MegatronBertConfig):
     model_type = "prokbert"
 
@@ -179,9 +177,9 @@ class ProkBertConfigCurr(ProkBertConfig):
         self.curricular_num_labels = curricular_num_labels
         self.curricular_face_m = curricular_face_m
         self.curricular_face_s = curricular_face_s
-        self.classification_dropout_rate = classification_dropout_rate
         self.bert_base_model = bert_base_model
         self.curriculum_hidden_size = curriculum_hidden_size
+        self.classification_dropout_rate = classification_dropout_rate
 
 class ProkBertClassificationConfig(ProkBertConfig):
     model_type = "prokbert"
@@ -217,9 +215,6 @@ class ProkBertPreTrainedModel(PreTrainedModel):
             module.weight.data.fill_(1.0)
         if isinstance(module, nn.Linear) and module.bias is not None:
             module.bias.data.zero_()
-
-
-
 
 class ProkBertModel(MegatronBertModel):
     config_class = ProkBertConfig
@@ -314,7 +309,6 @@ class ProkBertForSequenceClassification(ProkBertPreTrainedModel):
                 attentions=outputs.attentions,
             )
             return classification_output
-
 
 class CurricularFace(nn.Module):
     def __init__(self, in_features, out_features, m=0.5, s=64.):
