@@ -1471,7 +1471,7 @@ class ProkBertForSequenceClassification(ProkBertPreTrainedModel):
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
             return_dict=return_dict,
-        )       
+        )
         # Get hidden states
         sequence_output = outputs[0]
         weights = self.weighting_layer(sequence_output)
@@ -1497,7 +1497,6 @@ class ProkBertForSequenceClassification(ProkBertPreTrainedModel):
             attentions=outputs.attentions,
         )
         return classification_output
-        print(last_hidden_state)
 
     
 
