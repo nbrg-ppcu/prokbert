@@ -6,12 +6,9 @@
 
 import collections
 import os
-import unicodedata
 from typing import List, Optional, Tuple, Union
 from copy import deepcopy
 from transformers import PreTrainedTokenizer
-from transformers.tokenization_utils import _is_control, _is_punctuation, _is_whitespace
-from transformers.utils import logging
 
 # These utils contains the tools needed by the ProkBERT tokenizer
 
