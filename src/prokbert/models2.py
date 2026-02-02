@@ -1500,9 +1500,7 @@ class ProkBertForCurricularClassification(ProkBertPreTrainedModel):
         self,
         input_ids: Optional[torch.LongTensor] = None,
         attention_mask: Optional[torch.FloatTensor] = None,
-        token_type_ids: Optional[torch.LongTensor] = None,
         position_ids: Optional[torch.LongTensor] = None,
-        head_mask: Optional[torch.FloatTensor] = None,
         inputs_embeds: Optional[torch.FloatTensor] = None,
         labels: Optional[torch.LongTensor] = None,
         output_attentions: Optional[bool] = None,
@@ -1515,9 +1513,7 @@ class ProkBertForCurricularClassification(ProkBertPreTrainedModel):
         outputs = self.model(
             input_ids,
             attention_mask=attention_mask,
-            token_type_ids=token_type_ids,
             position_ids=position_ids,
-            head_mask=head_mask,
             inputs_embeds=inputs_embeds,
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
@@ -1552,6 +1548,7 @@ class ProkBertForCurricularClassification(ProkBertPreTrainedModel):
 
         # CurricularFace requires the embeddings and the corresponding labels.
         # Note: During inference (labels is None), we just return l2 norm of bert part of the model
+        loss = None
         if labels is None:
             return l2_norm(pooled_output, axis = 1) 
         else:
