@@ -4,11 +4,11 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "prokbert"
-version = "0.0.48"
+version = "0.0.49"
 description = "ProkBERT"
 readme = "README.md"
 requires-python = ">=3.10"
-dependencies = ["transformers>=4.23", "biopython>=1.79", "pandas>=1.5.0", "h5py>=3.7.0", "torch>=2.0.0", "torchvision>=0.15.0", "datasets>2.0.1", "scikit-learn>=1.2.2", "scipy>=1.10.1", "tables>=3.8.0","blosc2>=2.2.8", "accelerate>=0.20.1",]
+dependencies = ["transformers>=4.23,<5", "biopython>=1.79", "pandas>=1.5.0", "h5py>=3.7.0", "torch>=2.0.0", "torchvision>=0.15.0", "datasets>2.0.1", "scikit-learn>=1.2.2", "scipy>=1.10.1", "tables>=3.8.0","blosc2>=2.2.8", "accelerate>=0.20.1",]
 classifiers = [ "Programming Language :: Python :: 3", "License :: OSI Approved :: MIT License", "Operating System :: OS Independent",]
 [[project.authors]]
 name = "nbrg-ppcu"

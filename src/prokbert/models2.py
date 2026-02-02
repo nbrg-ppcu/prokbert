@@ -43,9 +43,9 @@ else:
 
 logger = logging.get_logger(__name__)
 
-from flash_attn.flash_attn_interface import flash_attn_varlen_qkvpacked_func
-from flash_attn.layers.rotary import RotaryEmbedding
-from flash_attn.ops.triton.rotary import apply_rotary
+#from flash_attn.flash_attn_interface import flash_attn_varlen_qkvpacked_func
+#from flash_attn.layers.rotary import RotaryEmbedding
+#from flash_attn.ops.triton.rotary import apply_rotary
 
 
 from typing import Literal
@@ -182,6 +182,7 @@ class ProkBertConfig(PretrainedConfig):
         global_attn_every_n_layers: int = 1,  # Use global attention in every layer.
         local_attention: int = 256,
         local_rope_theta: float = 10000.0,
+        rope_theta: Optional[float] = None,  # will be defined later
         embedding_dropout: float = 0.0,
         mlp_bias: bool = False,
         mlp_dropout: float = 0.0,
@@ -239,6 +240,7 @@ class ProkBertConfig(PretrainedConfig):
         self.repad_logits_with_grad = repad_logits_with_grad
         self.norm_type = norm_type
         self.num_labels = num_labels
+        self.rope_theta = rope_theta
 
         if self.classifier_pooling not in ["cls", "mean"]:
             raise ValueError(
@@ -254,8 +256,8 @@ class ProkBertConfigCurr(ProkBertConfig):
         curricular_face_m = 0.5,
         curricular_face_s=64.,
         curricular_num_labels = 2,
-        curriculum_hidden_size = -1, 
-        classification_dropout_rate = 0.0, 
+        curriculum_hidden_size = -1,
+        classification_dropout_rate = 0.0,
         **kwargs,
     ):
         super().__init__( **kwargs)
@@ -298,7 +300,7 @@ class RMSNorm(nn.Module):
         if self.bias is not None:
             x = x + self.bias
         return self.weight * x
-    
+
 
 def rotate_half(x):
     """Rotates half the hidden dims of the input."""
@@ -692,7 +694,7 @@ class ProkBertEmbeddings(nn.Module):
 
 
 class ProkBertRotaryEmbedding(nn.Module):
-    def __init__(self, config: ProkBertConfig, dim: int, base: float, device: Optional[torch.device] = None):
+    def __init__(self, config: ProkBertConfig, base: float, device: Optional[torch.device] = None):
         super().__init__()
         # BC: "rope_type" was originally "type"
         if hasattr(config, "rope_scaling") and config.rope_scaling is not None:
@@ -703,8 +705,9 @@ class ProkBertRotaryEmbedding(nn.Module):
         self.original_max_seq_len = config.max_position_embeddings
 
         self.config = config
+        config.rope_theta = base
         self.rope_init_fn = ROPE_INIT_FUNCTIONS[self.rope_type]
-        inv_freq, self.attention_scaling = self.rope_init_fn(None, device, dim=dim, base=base)
+        inv_freq, self.attention_scaling = self.rope_init_fn(config, device)
         self.register_buffer("inv_freq", inv_freq, persistent=False)
         self.original_inv_freq = self.inv_freq
 
@@ -766,7 +769,7 @@ class ProkBertMLP(nn.Module):
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
         input, gate = self.Wi(hidden_states).chunk(2, dim=-1)
         return self.Wo(self.drop(self.act(input) * gate))
-    
+
 
 class ProkBertAttention(nn.Module):
     """Performs multi-headed self attention on a batch of unpadded sequences.
@@ -809,7 +812,7 @@ class ProkBertAttention(nn.Module):
                 dim=self.head_dim, max_seqlen=max_position_embeddings, base=rope_theta
             )
         else:
-            self.rotary_emb = ProkBertRotaryEmbedding(config=config, dim=self.head_dim, base=rope_theta)
+            self.rotary_emb = ProkBertRotaryEmbedding(config=config, base=rope_theta)
 
         self.Wo = nn.Linear(config.hidden_size, config.hidden_size, bias=config.attention_bias)
         self.out_drop = nn.Dropout(config.attention_dropout) if config.attention_dropout > 0.0 else nn.Identity()
@@ -841,7 +844,7 @@ class ProkBertAttention(nn.Module):
         hidden_states = attn_outputs[0]
         hidden_states = self.out_drop(self.Wo(hidden_states))
         return (hidden_states,) + attn_outputs[1:]
-    
+
 
 
 class test__ProkBertEncoderLayer(nn.Module):
@@ -1049,8 +1052,8 @@ class ProkBertPreTrainedModel(PreTrainedModel):
                 )
             self.config.reference_compile = False
 
-        return model_embeds    
-    
+        return model_embeds
+
 @add_start_docstrings(
     "The bare ProkBert Model outputting raw hidden-states without any specific head on top.",
     PROK_BERT_START_DOCSTRING,
@@ -1262,7 +1265,7 @@ class ProkBertForMaskedLM(ProkBertPreTrainedModel):
     def __init__(self, config):
         super().__init__(config)
         self.config = config
-        self.model = ProkBertModel(config)  
+        self.model = ProkBertModel(config)
         self.head = ProkBertPredictionHead(config)
         self.decoder = nn.Linear(config.hidden_size, config.vocab_size, bias=config.decoder_bias)
 
@@ -1574,7 +1577,7 @@ class ProkBertForSequenceClassification(ProkBertPreTrainedModel):
         self.num_labels = config.num_labels
         self.config = config
 
-        self.model = ProkBertModel(config)           
+        self.model = ProkBertModel(config)
         self.norm = nn.LayerNorm(config.hidden_size, eps=1e-5)
 
         self.weighting_layer = nn.Linear(self.config.hidden_size, 1)
@@ -1656,10 +1659,10 @@ class ProkBertForSequenceClassification(ProkBertPreTrainedModel):
         # Get hidden states
         sequence_output = outputs[0]
         weights = self.weighting_layer(sequence_output)
-        weights = torch.nn.functional.softmax(weights, dim=1)            
+        weights = torch.nn.functional.softmax(weights, dim=1)
         # Compute weighted sum
-        pooled_output = torch.sum(weights * sequence_output, dim=1)   
-        pooled_output = self.norm(pooled_output)          
+        pooled_output = torch.sum(weights * sequence_output, dim=1)
+        pooled_output = self.norm(pooled_output)
         # Classification head
         pooled_output = self.dropout(pooled_output)
         logits = self.classifier(pooled_output)
@@ -1679,7 +1682,7 @@ class ProkBertForSequenceClassification(ProkBertPreTrainedModel):
         )
         return classification_output
 
-    
+
 
 class ProkBertForMaskedLM2(ProkBertPreTrainedModel):
     _tied_weights_keys = ["decoder.weight"]
@@ -1859,15 +1862,15 @@ class ProkBertForMaskedLM2(ProkBertPreTrainedModel):
             eps  = 1e-8
             targ = targ.clamp_min(eps)
             targ = targ / targ.sum(dim=-1, keepdim=True)
-            targ = targ.to(pred.dtype).detach()   
+            targ = targ.to(pred.dtype).detach()
 
             #print('Tar')
             #print(targ)
-            #print(targ.shape)            
+            #print(targ.shape)
             #print(targ[0,:])
             #print(targ[0,:].sum())
             logp = F.log_softmax(pred, dim=-1)
-            loss = F.kl_div(logp, targ, reduction="batchmean")  
+            loss = F.kl_div(logp, targ, reduction="batchmean")
 
             #print(loss)
             #print('prevois loss: ')

@@ -32,6 +32,21 @@ from Bio.SeqRecord import SeqRecord
 from scipy.ndimage import convolve1d
 import h5py
 
+_RC_TABLE = str.maketrans({
+    "A":"T","C":"G","G":"C","T":"A","U":"A",
+    "R":"Y","Y":"R","S":"S","W":"W","K":"M","M":"K",
+    "B":"V","D":"H","H":"D","V":"B","N":"N",
+    "a":"t","c":"g","g":"c","t":"a","u":"a",
+    "r":"y","y":"r","s":"s","w":"w","k":"m","m":"k",
+    "b":"v","d":"h","h":"d","v":"b","n":"n",
+})
+
+
+def revcomp(seq: str) -> str:
+    # translate then reverse
+    return seq.translate(_RC_TABLE)[::-1]
+
+
 def load_contigs(
     fasta_files_list: Union[List[str], str],
     adding_reverse_complement: bool = True,
