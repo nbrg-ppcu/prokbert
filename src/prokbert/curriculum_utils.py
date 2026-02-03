@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 import seaborn as sns
 import torch
-import umap
+import umap.umap_ as umap
 from matplotlib import pyplot as plt
 from torch.utils.data import DataLoader
 from tqdm import tqdm
