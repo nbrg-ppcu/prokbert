@@ -494,3 +494,173 @@ class ProkBertForCurricularClassification(ProkBertPreTrainedModel):
             hidden_states=outputs.hidden_states,
             attentions=outputs.attentions,
         )
+
+
+
+class ProkBertForSequenceClassificationExt(ProkBertPreTrainedModel):
+    """
+    Extensions vs. baseline ProkBertForSequenceClassification:
+      - Fixes attention-pooling bug by masking PAD positions using attention_mask
+      - Neutral pooling init: weighting_layer starts at zero => uniform pooling over non-masked tokens
+      - LN + MLP head on pooled embedding
+      - Temperature-controlled attention pooling with learnable temperature (scalar)
+    """
+    config_class = ProkBertConfig
+    base_model_prefix = "bert"
+
+    def __init__(self, config):
+        super().__init__(config)
+        self.config = config
+
+        self.bert = ProkBertModel(config)
+
+        # Attention pooling (token-wise scalar score)
+        self.weighting_layer = nn.Linear(self.config.hidden_size, 1)
+
+        # Learnable temperature for pooling: temperature = exp(log_temperature), clamped
+        self.log_temperature = nn.Parameter(torch.zeros(()))  # scalar, starts at 0 => temperature=1
+        self.temperature_min = float(getattr(config, "pool_temperature_min", 0.1))
+        self.temperature_max = float(getattr(config, "pool_temperature_max", 10.0))
+
+        # MLP head on pooled embedding
+        eps = float(getattr(config, "layer_norm_eps", 1e-12))
+        drop_p = float(getattr(config, "classification_dropout_rate", 0.1))
+        hidden_size = int(self.config.hidden_size)
+        mlp_hidden = int(getattr(config, "classifier_mlp_hidden_size", max(1, hidden_size // 2)))
+
+        self.mlp_ln = nn.LayerNorm(hidden_size, eps=eps)
+        self.mlp_dropout = nn.Dropout(drop_p)
+        self.mlp_fc1 = nn.Linear(hidden_size, mlp_hidden)
+        self.mlp_act = nn.GELU()
+        self.mlp_fc2 = nn.Linear(mlp_hidden, int(self.config.num_class_labels))
+
+        # Loss
+        if int(self.config.num_class_labels) == 1:
+            self.loss_fct = nn.MSELoss()
+        else:
+            self.loss_fct = nn.CrossEntropyLoss()
+
+        # HF init
+        self.post_init()
+
+        # --- Custom init for "neutral" pooling + slightly conservative output layer ---
+        self._init_ext_head()
+
+    def _init_ext_head(self):
+        # Make pooling start neutral: scores = 0 => uniform softmax over non-masked tokens
+        with torch.no_grad():
+            nn.init.zeros_(self.weighting_layer.weight)
+            nn.init.zeros_(self.weighting_layer.bias)
+
+        # Optional: make final classifier layer a bit smaller (reduces early overconfidence)
+        init_range = float(getattr(self.config, "initializer_range", 0.02))
+        with torch.no_grad():
+            nn.init.normal_(self.mlp_fc2.weight, mean=0.0, std=init_range * 0.1)
+            nn.init.zeros_(self.mlp_fc2.bias)
+
+    def _get_temperature(self, device: torch.device) -> torch.Tensor:
+        # Keep temperature positive and within a reasonable range
+        t = torch.exp(self.log_temperature.to(device=device))
+        return torch.clamp(t, min=self.temperature_min, max=self.temperature_max)
+
+    @staticmethod
+    def _normalize_attention_mask(attention_mask: torch.Tensor) -> torch.Tensor:
+        """
+        Convert attention_mask to shape (B, L) boolean mask where True means "keep token".
+        Handles common shapes: (B, L), (B, 1, 1, L), (B, 1, L).
+        """
+        if attention_mask is None:
+            return None
+
+        mask = attention_mask
+        # Common HF forms
+        if mask.dim() == 4:
+            # (B, 1, 1, L) -> (B, L)
+            mask = mask.squeeze(1).squeeze(1)
+        elif mask.dim() == 3:
+            # (B, 1, L) -> (B, L)
+            mask = mask.squeeze(1)
+
+        # Convert to bool: treat >0 as keep
+        mask = mask > 0
+        return mask
+
+    def forward(
+        self,
+        input_ids: Optional[torch.LongTensor] = None,
+        attention_mask: Optional[torch.Tensor] = None,
+        token_type_ids: Optional[torch.LongTensor] = None,
+        position_ids: Optional[torch.LongTensor] = None,
+        head_mask: Optional[torch.Tensor] = None,
+        inputs_embeds: Optional[torch.Tensor] = None,
+        labels: Optional[torch.LongTensor] = None,
+        output_attentions: Optional[bool] = None,
+        output_hidden_states: Optional[bool] = None,
+        return_dict: Optional[bool] = None,
+    ) -> Union[Tuple, SequenceClassifierOutput]:
+
+        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+
+        outputs = self.bert(
+            input_ids,
+            attention_mask=attention_mask,
+            token_type_ids=token_type_ids,
+            position_ids=position_ids,
+            head_mask=head_mask,
+            inputs_embeds=inputs_embeds,
+            output_attentions=output_attentions,
+            output_hidden_states=output_hidden_states,
+            return_dict=return_dict,
+        )
+
+        sequence_output = outputs[0]  # (B, L, H)
+
+        # --- Temperature-controlled attention pooling with PAD-masking ---
+        scores = self.weighting_layer(sequence_output)  # (B, L, 1)
+
+        # Apply temperature (smooth if temperature > 1, sharper if < 1)
+        temperature = self._get_temperature(device=scores.device)
+        scores = scores / temperature
+
+        # Mask out padding tokens (pooling bug fix)
+        keep_mask = self._normalize_attention_mask(attention_mask)  # (B, L) bool or None
+        if keep_mask is not None:
+            # Guard: if an example is fully masked (shouldn't happen), keep first token to avoid NaNs
+            if (keep_mask.sum(dim=1) == 0).any():
+                keep_mask = keep_mask.clone()
+                keep_mask[(keep_mask.sum(dim=1) == 0), 0] = True
+
+            scores = scores.masked_fill(~keep_mask.unsqueeze(-1), float("-inf"))
+
+        # Softmax in fp32 for stability, then cast back
+        weights = torch.softmax(scores.float(), dim=1).to(dtype=sequence_output.dtype)  # (B, L, 1)
+
+        pooled_output = torch.sum(weights * sequence_output, dim=1)  # (B, H)
+
+        # --- LN + MLP head ---
+        x = self.mlp_ln(pooled_output)
+        x = self.mlp_dropout(x)
+        x = self.mlp_fc1(x)
+        x = self.mlp_act(x)
+        x = self.mlp_dropout(x)
+        logits = self.mlp_fc2(x)
+
+        loss = None
+        if labels is not None:
+            if int(self.config.num_class_labels) == 1:
+                loss = self.loss_fct(logits.view(-1), labels.view(-1).float())
+            else:
+                loss = self.loss_fct(logits.view(-1, int(self.config.num_class_labels)), labels.view(-1))
+
+        if not return_dict:
+            # outputs: (last_hidden_state, pooled_output, hidden_states, attentions) in most BERT-like models
+            out = (logits,) + outputs[2:]
+            return ((loss,) + out) if loss is not None else out
+
+        return SequenceClassifierOutput(
+            loss=loss,
+            logits=logits,
+            hidden_states=getattr(outputs, "hidden_states", None),
+            attentions=getattr(outputs, "attentions", None),
+        )
+                
