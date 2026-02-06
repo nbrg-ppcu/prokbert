@@ -1,16 +1,15 @@
-# Config utils
+import os
+import re
 import yaml
 import pathlib
-from os.path import join
-import os
-import numpy as np
-import torch
 import argparse
-from multiprocessing import cpu_count
-from transformers import TrainingArguments
 from copy import deepcopy
-import re
-import sys
+from multiprocessing import cpu_count
+
+import torch
+import numpy as np
+from transformers import TrainingArguments
+
 
 def add_hf_args_to_parser(parser):
     # Create a temporary TrainingArguments to access default values and descriptions
@@ -75,7 +74,7 @@ class BaseConfig:
             else:
                 raise ValueError(f"Failed to cast value '{value}' to boolean for parameter '{parameter_name}' in class '{parameter_class}'.")
         elif expected_type == "type":
-            # For this type, we will simply return the value without casting. 
+            # For this type, we will simply return the value without casting.
             # It assumes the configuration provides valid Python types.
             return value
         elif expected_type == "list":
@@ -116,9 +115,9 @@ class BaseConfig:
         """
         default_value = self.parameters[parameter_class][parameter_name]['default']
         return self.cast_to_expected_type(parameter_class, parameter_name, default_value)
-    
 
-    
+
+
     def validate_type(self, parameter_class: str, parameter_name: str, value: any) -> bool:
         """
         Validate the type of a given value against the expected type.
@@ -142,7 +141,7 @@ class BaseConfig:
             return False
         else:
             return True
-    
+
     def validate_value(self, parameter_class: str, parameter_name: str, value: any) -> bool:
         """
         Validate the value of a parameter against its constraints.
@@ -157,7 +156,7 @@ class BaseConfig:
         :rtype: bool
         """
         constraints = self.parameters[parameter_class][parameter_name].get('constraints', {})
-        
+
         if 'options' in constraints and value not in constraints['options']:
             return False
         if 'min' in constraints and value < constraints['min']:
@@ -165,7 +164,7 @@ class BaseConfig:
         if 'max' in constraints and value > constraints['max']:
             return False
         return True
-    
+
 
     def validate(self, parameter_class: str, parameter_name: str, value: any):
         """
@@ -182,7 +181,7 @@ class BaseConfig:
         """
         if not self.validate_type(parameter_class, parameter_name, value):
             raise TypeError(f"Invalid type for {parameter_name} for parameter class '{parameter_class}'. Expected {self.parameters[parameter_class][parameter_name]['type']}.")
-        
+
         if not self.validate_value(parameter_class, parameter_name, value):
             raise ValueError(f"Invalid value for {parameter_name}  for parameter class '{parameter_class}'. Constraints: {self.parameters[parameter_class][parameter_name].get('constraints', {})}.")
 
@@ -242,7 +241,7 @@ class BaseConfig:
         renamed_config = {}
         for group_name, parameters in config.items():
             renamed_group = {}
-            for param_name, param_info in parameters.items():        
+            for param_name, param_info in parameters.items():
 
                 new_param_name = f"{group_name}_{param_name}" if param_name in non_unique_params else param_name
                 cmd_argument2group_param[new_param_name] = [group_name, param_name]
@@ -257,11 +256,11 @@ class BaseConfig:
         """
         Create and configure an argparse parser based on the given configuration.
 
-        This method sets up a command-line argument parser with arguments defined in the configuration. 
+        This method sets up a command-line argument parser with arguments defined in the configuration.
         Each top-level key in the configuration represents a group of related arguments.
 
         :param config: A dictionary where each key is a group name and each value is a dict
-                       of parameters for that group. Each parameter's information should include 
+                       of parameters for that group. Each parameter's information should include
                        its type, default value, and help description.
         :type config: dict
 
@@ -278,7 +277,7 @@ class BaseConfig:
             'int': int,
             'float': float,
             'string': str,
-            'str': str, 
+            'str': str,
             'bool': bool,
             'boolean': bool,
             'list': list
@@ -306,27 +305,14 @@ class BaseConfig:
                 else:
                     param_type = type_mapping[param_type_str]
 
-                #print(f'The current type is: {param_type}')
-                default_param = param_info['default']
                 description = param_info['description']
                 kwargs = {
                     'type': param_type,
                     'default': param_info['default'],
                     'help': escaped_description
-                }            # Add constraints if they exist
-                """
-                if 'constraints' in param_info:
-                    constraints = param_info['constraints']
-                    if 'min' in constraints:
-                        kwargs['type'] = lambda x: eval(param_type_str)(x) if eval(param_type_str)(x) >= constraints['min'] else sys.exit(f"Value for {param_name} must be at least {constraints['min']}")
-                    if 'max' in constraints:
-                        kwargs['type'] = lambda x: eval(param_type_str)(x) if eval(param_type_str)(x) <= constraints['max'] else sys.exit(f"Value for {param_name} must be at most {constraints['max']}")
-                    if 'options' in constraints:
-                        kwargs['choices'] = constraints['options']
-                """
+                }
                 # Add argument to the group
                 group.add_argument(f'--{param_name}', **kwargs)
-        #parser = add_hf_args_to_parser(parser)
 
         return parser
 
@@ -343,7 +329,7 @@ class SeqConfig(BaseConfig):
 
         # Some postprocessing steps
         self.parameters['tokenization']['shift']['constraints']['max'] = self.parameters['tokenization']['kmer']['default']-1
-        # Ha valaki update-li a k-mer paramter-t, akkor triggerelni kellene, hogy mi legyen. 
+        # TODO Ha valaki update-li a k-mer paramter-t, akkor triggerelni kellene, hogy mi legyen.
 
         self.get_and_set_segmentation_parameters()
         self.get_and_set_tokenization_parameters()
@@ -357,7 +343,7 @@ class SeqConfig(BaseConfig):
         :rtype: str
         """
         current_path = pathlib.Path(__file__).parent
-        prokbert_seq_config_file = join(current_path, 'configs', 'sequence_processing.yaml')
+        prokbert_seq_config_file = os.path.join(current_path, 'configs', 'sequence_processing.yaml')
         self.current_path = current_path
 
         try:
@@ -366,10 +352,9 @@ class SeqConfig(BaseConfig):
         except KeyError:
             # Handle the case when the environment variable is not found
             pass
-            # print("SEQ_CONFIG_FILE environment variable has not been set. Using default value: {0}".format(prokbert_seq_config_file))
         return prokbert_seq_config_file
 
-    
+
     def get_and_set_segmentation_parameters(self, parameters: dict = {}) -> dict:
         """
         Retrieve and validate the provided parameters for segmentation.
@@ -407,7 +392,7 @@ class SeqConfig(BaseConfig):
         vocabfile=tokenization_params['vocabfile']
         act_kmer = tokenization_params['kmer']
         if vocabfile=='auto':
-            vocabfile_path = join(self.current_path, 'data/prokbert_vocabs/', f'prokbert-base-dna{act_kmer}', 'vocab.txt')
+            vocabfile_path = os.path.join(self.current_path, 'data/prokbert_vocabs/', f'prokbert-base-dna{act_kmer}', 'vocab.txt')
             tokenization_params['vocabfile'] = vocabfile_path
         else:
             vocabfile_path = vocabfile
@@ -417,7 +402,7 @@ class SeqConfig(BaseConfig):
 
         # Loading the vocab
         self.tokenization_params = tokenization_params
-        return tokenization_params    
+        return tokenization_params
 
     def get_and_set_computational_parameters(self, parameters: dict = {}) -> dict:
         """ Reading and validating the computational paramters
@@ -431,8 +416,6 @@ class SeqConfig(BaseConfig):
 
         if computational_params['cpu_cores_for_tokenization'] == -1:
             computational_params['cpu_cores_for_tokenization'] = core_count
-
-        
 
         for param, param_value in parameters.items():
             if param not in computational_params:
@@ -459,24 +442,24 @@ class SeqConfig(BaseConfig):
 
         max_segment_length = self.tokenization_params['max_segment_length']
         shift = self.tokenization_params['shift']
-        kmer = self.tokenization_params['kmer']          
+        kmer = self.tokenization_params['kmer']
         max_token_count = self.get_maximum_token_count_from_max_length(max_segment_length, shift, kmer)
 
         return max_token_count
-    
+
     def get_cmd_arg_parser(self) -> tuple[argparse.ArgumentParser, dict, dict]:
         """
-        Create and return a command-line argument parser for ProkBERT configurations, along with mappings 
+        Create and return a command-line argument parser for ProkBERT configurations, along with mappings
         between command-line arguments and configuration parameters.
 
-        This method combines sequence configuration parameters with training configuration parameters 
+        This method combines sequence configuration parameters with training configuration parameters
         and sets up a command-line argument parser using these combined settings. It ensures that parameter
         names are unique across different groups by renaming any non-unique parameters.
 
         :return: A tuple containing:
                  - Configured argparse.ArgumentParser instance for handling ProkBERT configurations.
                  - A dictionary mapping new command-line arguments to their original group and parameter name.
-                 - A dictionary mapping each group to a dict that maps the original parameter names 
+                 - A dictionary mapping each group to a dict that maps the original parameter names
                    to the new command-line argument names.
         :rtype: tuple[argparse.ArgumentParser, dict, dict]
 
@@ -494,10 +477,10 @@ class SeqConfig(BaseConfig):
 
 
         combined_params, cmd_argument2group_param, group2param2cmdarg = BaseConfig.rename_non_unique_parameters(combined_params)
-        
+
         parser = BaseConfig.create_parser(combined_params)
         return parser,cmd_argument2group_param, group2param2cmdarg
-    
+
 
     @staticmethod
     def get_maximum_segment_length_from_token_count(max_token_counts, shift, kmer):
@@ -528,7 +511,7 @@ class ProkBERTConfig(BaseConfig):
         self.default_pretrain_config_file = self._get_default_pretrain_config_file()
         with open(self.default_pretrain_config_file, 'r') as file:
             self.parameters = yaml.safe_load(file)
-            
+
         # Load and validate each parameter set
         self.data_collator_params = self.get_set_parameters('data_collator')
         self.model_params = self.get_set_parameters('model')
@@ -556,17 +539,16 @@ class ProkBERTConfig(BaseConfig):
         :rtype: str
         """
         current_path = pathlib.Path(__file__).parent
-        pretrain_config_file = join(current_path, 'configs', 'pretraining.yaml')
+        pretrain_config_file = os.path.join(current_path, 'configs', 'pretraining.yaml')
 
         try:
             # Attempt to read the environment variable
             pretrain_config_file = os.environ['PRETRAIN_CONFIG_FILE']
-        except KeyError:
+        except KeyError: # TODO require an alternative solution, when env var not found
             # Handle the case when the environment variable is not found
             pass
-            # print(f"PRETRAIN_CONFIG_FILE environment variable has not been set. Using default value: {pretrain_config_file}")
         return pretrain_config_file
-    
+
     def get_set_parameters(self, parameter_class: str, parameters: dict = {}) -> dict:
         """
         Retrieve and validate the provided parameters for a given parameter class.
@@ -604,7 +586,7 @@ class ProkBERTConfig(BaseConfig):
                     class_params[param] = param_value
 
         return class_params
-    
+
     def get_and_set_model_parameters(self, parameters: dict = {}) -> dict:
         """ Setting the model parameters """
 
@@ -625,31 +607,28 @@ class ProkBERTConfig(BaseConfig):
         """ Setting the model parameters """
         self.pretraining_params = self.get_set_parameters('pretraining', parameters)
 
-        return self.pretraining_params       
-    
-    
+        return self.pretraining_params
+
+
     def get_and_set_datacollator_parameters(self, parameters: dict = {}) -> dict:
         """ Setting the model parameters """
         self.data_collator_params = self.get_set_parameters('data_collator', parameters)
         return self.data_collator_params
-    
+
     def get_and_set_segmentation_parameters(self, parameters: dict = {}) -> dict:
         self.segmentation_params = self.def_seq_config.get_and_set_segmentation_parameters(parameters)
 
-        return self.segmentation_params 
+        return self.segmentation_params
     def get_and_set_tokenization_parameters(self, parameters: dict = {}) -> dict:
         self.tokenization_params = self.def_seq_config.get_and_set_tokenization_parameters(parameters)
-        
-        return self.tokenization_params 
+
+        return self.tokenization_params
     def get_and_set_computation_params(self, parameters: dict = {}) -> dict:
         self.computation_params = self.def_seq_config.get_and_set_computational_parameters(parameters)
-        return self.computation_params    
+        return self.computation_params
 
     def get_and_set_finetuning_parameters(self, parameters: dict = {}) -> dict:
         """ Setting the finetuning parameters """
-
-        # Here we include the additional training arguments available for the trainer
-
         self.finetuning_params = self.get_set_parameters('finetuning', parameters)
 
         return self.finetuning_params
@@ -702,17 +681,17 @@ class ProkBERTConfig(BaseConfig):
 
     def get_cmd_arg_parser(self, keyset=[]) -> tuple[argparse.ArgumentParser, dict, dict]:
         """
-        Create and return a command-line argument parser for ProkBERT configurations, along with mappings 
+        Create and return a command-line argument parser for ProkBERT configurations, along with mappings
         between command-line arguments and configuration parameters.
 
-        This method combines sequence configuration parameters with training configuration parameters 
+        This method combines sequence configuration parameters with training configuration parameters
         and sets up a command-line argument parser using these combined settings. It ensures that parameter
         names are unique across different groups by renaming any non-unique parameters.
 
         :return: A tuple containing:
                  - Configured argparse.ArgumentParser instance for handling ProkBERT configurations.
                  - A dictionary mapping new command-line arguments to their original group and parameter name.
-                 - A dictionary mapping each group to a dict that maps the original parameter names 
+                 - A dictionary mapping each group to a dict that maps the original parameter names
                    to the new command-line argument names.
         :rtype: tuple[argparse.ArgumentParser, dict, dict]
 
@@ -750,7 +729,7 @@ def get_user_provided_args(args, parser):
     Returns:
         dict: A dictionary of user-provided arguments and their values.
     """
-        
+
     user_provided_args = {}
     for action in parser._actions:
         arg_name = action.dest
@@ -761,7 +740,7 @@ def get_user_provided_args(args, parser):
 
     return user_provided_args
 
-            
+
 
 
 

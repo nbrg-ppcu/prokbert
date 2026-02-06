@@ -1,17 +1,16 @@
-import collections
+from typing import List, Optional, Tuple, Dict, Set
+
 import os
 import json
+import collections
 from copy import deepcopy
-from typing import List, Optional, Tuple, Dict, Set
+from itertools import product
+
 from transformers import PreTrainedTokenizer
 from transformers.utils import logging
-from itertools import product
+
 logger = logging.get_logger(__name__)
 
-
-
-#from .config_utils import SeqConfig
-#from .sequtils import generate_kmers, lca_kmer_tokenize_segment
 
 # Define the names of the vocabulary files
 VOCAB_FILES_NAMES = {"vocab_file": "vocab.txt"}
@@ -88,7 +87,6 @@ def resolve_vocab_file(vocab_file: Optional[str], kmer) -> str:
         vocab_path = os.path.join(package_dir, 'data/prokbert_vocabs/', f'prokbert-base-dna{kmer}', 'vocab.txt')
 
         print(vocab_path)
-        #vocabfile_path = join(self.current_path, 'data/prokbert_vocabs/', f'prokbert-base-dna{act_kmer}', 'vocab.txt')
 
 
         if os.path.exists(vocab_path):
@@ -114,7 +112,7 @@ def resolve_vocab_file(vocab_file: Optional[str], kmer) -> str:
             "Could not find or download vocab.txt. Ensure prokbert is installed or "
             "provide a valid vocab file path. Error: {e}"
         ) from e
-    
+
 
 class LCATokenizer(PreTrainedTokenizer):
     """
@@ -132,7 +130,7 @@ class LCATokenizer(PreTrainedTokenizer):
     pretrained_vocab_files_map = PRETRAINED_VOCAB_FILES_MAP
     pretrained_init_configuration = PRETRAINED_INIT_CONFIGURATION
     max_model_input_sizes = PRETRAINED_POSITIONAL_EMBEDDINGS_SIZES
-    
+
     nucleotide_abc = {"A", "T", "C", "G"}
     extended_nucleotide_abc = {"A", "T", "C", "G", "*"}
     sequence_unk_token = 'N'
@@ -146,7 +144,7 @@ class LCATokenizer(PreTrainedTokenizer):
     vocab_files_names = {"vocab_file": "vocab.txt"}
 
 
-    
+
     def __init__(
         self,
         vocab_file: Optional[str] = None,
@@ -193,7 +191,7 @@ class LCATokenizer(PreTrainedTokenizer):
             self.extended_vocab = deepcopy(self.vocab)
             for token in token_extension:
                 self.extended_vocab[token] = 4
-                            
+
             self.unk_token = LCATokenizer.sequence_unk_token * self.config['shift']
             self.mask_token = '*'
             self.extended_vocab[self.mask_token] = self.vocab['[MASK]']
@@ -204,7 +202,7 @@ class LCATokenizer(PreTrainedTokenizer):
             self.full_unk_token = full_unk
 
         else:
-            self.extended_vocab = self.vocab 
+            self.extended_vocab = self.vocab
             self.unk_token = '[UNK]'
 
         self.unkown_tokenid = self.vocab['[UNK]']
@@ -212,13 +210,13 @@ class LCATokenizer(PreTrainedTokenizer):
         self.cls_token = '[CLS]'
         self.pad_token = '[PAD]'
         self.mask_token = '[MASK]'
-        self.special_tokens = list(self.special_tokens_map.values()) 
+        self.special_tokens = list(self.special_tokens_map.values())
 
 
     def get_vocab(self) -> Dict[str, int]:
         return self.vocab
 
-    
+
     def _tokenize(self, text, **kwargs):
         """
         Tokenizes the input text using LCA tokenization with an optional offset.
@@ -232,8 +230,6 @@ class LCATokenizer(PreTrainedTokenizer):
             List[str]: A list of tokens generated from the input text.
         """
         offset = kwargs.get("offset", 0)
-        #if offset < 0 or offset >= self.config.get("shift", 1):
-        #    raise ValueError(f"Invalid offset: {offset}. Must be between 0 and {self.config['shift'] - 1}.")
 
         return self.lca_kmer_tokenize_segment(text, offset)
 
@@ -262,7 +258,7 @@ class LCATokenizer(PreTrainedTokenizer):
 
 
         return self.id2token.get(index, self.unk_token)
-    
+
     def __len__(self) -> int:
         """
         Returns the length of the tokenizer's vocabulary.
@@ -279,15 +275,7 @@ class LCATokenizer(PreTrainedTokenizer):
         # calculate the tokenization for one offset value
         shift = self.shift
         kmer = self.kmer
-        #max_segment_length = params['max_segment_length']
-        #max_unknown_token_proportion = params['max_unknown_token_proportion']
-        #kmer = params['kmer']
-        #token_limit = params['token_limit']
-        #vocabmap = params['vocabmap']
-        #add_special_token = params['add_special_token']
-        #if len(segment) > max_segment_length:
-        #    raise(ValueError(f'The segment is longer {len(segment)} then the maximum allowed segment length ({max_segment_length}). '))
-                
+
         kmers = [segment[i:i + kmer] for i in range(offset, len(segment) - kmer + 1, shift)]
 
         return kmers
@@ -318,7 +306,6 @@ class LCATokenizer(PreTrainedTokenizer):
         Returns:
             List[int]: Encoded token IDs.
         """
-        # Inject the offset into kwargs for the tokenizer
         offset = kwargs.get("offset", 0)
         kwargs["offset"] = offset
         return super().encode(text, **kwargs)
@@ -338,11 +325,10 @@ class LCATokenizer(PreTrainedTokenizer):
         """
         if token_ids_1 is None:
             return [self.cls_token_id] + token_ids_0 + [self.sep_token_id]
-        
+
         input_ids = [self.cls_token_id] + token_ids_0 + [self.sep_token_id] + token_ids_1 + [self.sep_token_id]
-        #token_type_ids = [0 for i in range(len(input_ids))]
         return input_ids
-    
+
     def create_token_type_ids_from_sequences(
         self, token_ids_0: List[int], token_ids_1: Optional[List[int]] = None
     ) -> List[int]:
@@ -362,7 +348,7 @@ class LCATokenizer(PreTrainedTokenizer):
         if token_ids_1 is None:
             return (len(token_ids_0)+2) * [0]
         return [0] * len(token_ids_0) + [1] * len(token_ids_1)
-    
+
     def batch_encode_plus(self, *args, **kwargs):
         """
         Extends the base `batch_encode_plus` method to add custom functionality if needed.
@@ -374,8 +360,6 @@ class LCATokenizer(PreTrainedTokenizer):
         Returns:
             dict: A dictionary containing the results of batch encoding.
         """
-        # Call the parent method to handle the batch encoding
-        #print('Running batch encoding with ids')
         act_outputs = super().batch_encode_plus(*args, **kwargs)
         return act_outputs
 
@@ -421,26 +405,16 @@ class LCATokenizer(PreTrainedTokenizer):
         if not os.path.exists(save_directory):
             os.makedirs(save_directory)
 
-        # Save the base tokenizer configuration
         super().save_pretrained(save_directory, **kwargs)
 
-        # Path to the tokenizer configuration file
         tokenizer_config_path = os.path.join(save_directory, "tokenizer_config.json")
 
-        # Load the existing configuration or create a new one
         if os.path.exists(tokenizer_config_path):
             with open(tokenizer_config_path, "r", encoding="utf-8") as f:
                 tokenizer_config = json.load(f)
         else:
             tokenizer_config = {}
 
-
-        # Add custom fields for AutoTokenizer and remote code
-        #tokenizer_config["auto_map"] = {
-        # "AutoTokenizer": "src.prokbert.tokenizer.LCATokenizer"
-        #}
-        #tokenizer_config["repository"] = "https://github.com/nbrg-ppcu/prokbert"
-        #tokenizer_config["trust_remote_code"] = True
         tokenizer_config["kmer"] = self.kmer
         tokenizer_config["shift"] = self.shift
         tokenizer_config["operation_space"] = self.operation_space

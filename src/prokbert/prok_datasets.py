@@ -1,19 +1,19 @@
-# module for datasets
+from typing import List, Tuple, Iterator, Union
+
 import logging
+
+import h5py
+import torch
+import numpy as np
+import torch.distributed as dist
+from torch.utils.data import Dataset, IterableDataset
+
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-import torch
-import numpy as np
-import h5py
-from typing import Dict, List, Type, Tuple, Iterator, Union
-from torch.utils.data import Dataset, IterableDataset
-import torch.distributed as dist
-
-#class IterableProkBERTPretrainingDataset(IterableDataset):
 
 class IterableProkBERTPretrainingDataset(IterableDataset):
-    def __init__(self, file_path: str, 
+    def __init__(self, file_path: str,
                  input_batch_size: int = 10000,
                  ds_offset: int = 0,
                  max_iteration_over_ds: int = 10,
@@ -57,7 +57,7 @@ class IterableProkBERTPretrainingDataset(IterableDataset):
         try:
             # Try accessing the 'mode' attribute to check if file is open
             _ = self.dataset_file.mode
-        except ValueError as e:
+        except ValueError:
             # If we catch a ValueError, it means the file might be closed. We confirm by checking the error message.
             self.dataset_file = h5py.File(self.file_path, 'r')
 
@@ -82,7 +82,7 @@ class IterableProkBERTPretrainingDataset(IterableDataset):
         self._ensure_file_open()
 
         new_fetch_start, new_fetch_end = self._get_fetch_interval()
-        
+
         self._current_data_batch = torch.tensor(self.dataset_file['training_data']['X'][new_fetch_start:new_fetch_end],
                                          dtype=self.default_dtype)
         if self.add_end_token:
@@ -112,7 +112,7 @@ class IterableProkBERTPretrainingDataset(IterableDataset):
             raise StopIteration
 
         return ds_item
-    
+
     def __getitem__(self, index) -> Union[torch.Tensor, List[torch.Tensor]]:
         """
         Get item or slice from the dataset.
@@ -128,7 +128,7 @@ class IterableProkBERTPretrainingDataset(IterableDataset):
             data = torch.tensor(self.dataset_file['training_data']['X'][index], dtype=self.default_dtype)
             if self.add_end_token:
                 threes_column = torch.tensor([3], dtype=self.default_dtype)
-                data =  torch.cat((data, threes_column), dim=0)                
+                data =  torch.cat((data, threes_column), dim=0)
             return data
         elif isinstance(index, slice):
             # Return slice
@@ -137,9 +137,8 @@ class IterableProkBERTPretrainingDataset(IterableDataset):
                 threes_column = torch.full((data.shape[0], 1), 3, dtype=self.default_dtype)
                 data = torch.cat((data, threes_column), dim=1)
             return data
-            #return [torch.tensor(item, dtype=torch.int) for item in self.dataset_file['training_data']['X'][index]]
 
-    
+
 class ProkBERTPretrainingDatasetPT(Dataset):
     def __init__(self, filepath):
         print(f'Loading: {filepath}')
@@ -148,8 +147,7 @@ class ProkBERTPretrainingDatasetPT(Dataset):
         return len(self.X)
 
     def __getitem__(self, index):
-        # 
-        return self.X[index]    
+        return self.X[index]
 
 class ProkBERTPretrainingDataset(Dataset):
     def __init__(self, X):
@@ -158,9 +156,8 @@ class ProkBERTPretrainingDataset(Dataset):
         return len(self.X)
 
     def __getitem__(self, index):
-        # 
         return torch.tensor(self.X[index], dtype=torch.long)
-    
+
 
 class ProkBERTPretrainingHDFDataset(Dataset):
     def __init__(self, hdf_file_path: str, default_dtype = torch.long):
@@ -180,7 +177,7 @@ class ProkBERTPretrainingHDFDataset(Dataset):
 
         else:
             self.dataset = torch.tensor(np.array(self.dataset_file['training_data']['X']), dtype = self.default_dtype)
-        logging.info(f'Loading finished!')
+        logging.info('Loading finished!')
 
     def _ensure_file_open(self):
         """
@@ -189,7 +186,7 @@ class ProkBERTPretrainingHDFDataset(Dataset):
         try:
             # Try accessing the 'mode' attribute to check if file is open
             _ = self.dataset_file.mode
-        except ValueError as e:
+        except ValueError:
             # If we catch a ValueError, it means the file might be closed. Reopen it.
             self.dataset_file = h5py.File(self.file_path, 'r')
             self.dataset = self.dataset_file['training_data']['X']
@@ -235,7 +232,7 @@ class TestDS(torch.utils.data.Dataset):
 
     def __getitem__(self, idx):
         return self.data[idx]
-    
+
 
 class ProkBERTTrainingDatasetPT(Dataset):
     def __init__(self, X, y, attention_masks=None, AddAttentionMask=False):
@@ -251,7 +248,7 @@ class ProkBERTTrainingDatasetPT(Dataset):
         sample = {
             'input_ids': self.input_ids[idx],  # input_ids for this sample
             'labels': self.labels[idx],  # label for this sample
-            
+
         }
         if self.AddAttentionMask:
             attention_mask = (self.input_ids[idx] > 3) |  (self.input_ids[idx] == 2) | (self.input_ids[idx] == 1)
@@ -262,7 +259,7 @@ class ProkBERTTrainingDatasetPT(Dataset):
         # Include attention_mask in the sample if it is provided
         if self.attention_masks is not None:
             sample['attention_mask'] = self.attention_masks[idx]
-        
+
         return sample
 
 
@@ -280,6 +277,5 @@ class ProkBERTTrainingDatasetPTa(torch.utils.data.Dataset):
 
         return x, y  # Return the sample and its label
 
-    
 
-      
+

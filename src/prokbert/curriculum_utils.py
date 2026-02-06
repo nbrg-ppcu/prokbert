@@ -1,15 +1,13 @@
-# Some helper function
-
 import os
 
+import umap
+import torch
 import numpy as np
 import pandas as pd
 import seaborn as sns
-import torch
-import umap
+from tqdm import tqdm
 from matplotlib import pyplot as plt
 from torch.utils.data import DataLoader
-from tqdm import tqdm
 
 
 
@@ -32,7 +30,7 @@ def get_model_embeddings_umap(grouped_means, labels, seq_ids, plot_path,
     g = sns.scatterplot(umap_df, x="umap_1", y="umap_2",hue="labels", palette="tab20", s=plot_point_size)
     plt.subplots_adjust(top=0.9)
     g.get_legend().set_visible(False)
-    plt.suptitle(f'Visualization of embeddings')
+    plt.suptitle('Visualization of embeddings')
     plt.savefig(os.path.join(plot_path, plot_name))
     return umap_df
 
@@ -48,13 +46,13 @@ def create_embeddings(model, dataloader, output_name,  plot_name):
             columns_to_keep = ['input_ids', 'attention_mask']
             labels.append(batch["labels"])
             seq_ids.append(batch["sequence_id"])
-            batch = {k: v.to(device) for k, v in batch.items() if k in columns_to_keep} 
+            batch = {k: v.to(device) for k, v in batch.items() if k in columns_to_keep}
             with torch.no_grad():
                 mean_pooled = model(**batch)
                 representations_batch = mean_pooled.detach().cpu().float().numpy()
                 representations.append(representations_batch)
             batch_ind += 1
-    model.train()    
+    model.train()
     embeddings = np.concatenate(representations)
     labels = np.concatenate(labels)
     seq_ids = np.concatenate(seq_ids)
@@ -62,11 +60,7 @@ def create_embeddings(model, dataloader, output_name,  plot_name):
     df = pd.DataFrame(embeddings)
     df['group'] = seq_ids
 
-    grouped_means = df.groupby('group').mean().values
-
     df['labels'] = labels
-    labels_pooled = df[['labels', 'group']].groupby('group').first().values[:, 0]
-    seq_ids_pooled = df.groupby('group')['group'].agg('first').values
     umap_df = get_model_embeddings_umap(embeddings, labels, seq_ids,
                                         plot_path = output_name,
                                         plot_point_size=50,

@@ -1,12 +1,14 @@
+from typing import Tuple, Dict
+
 import os
 import json
 import time
 from pathlib import Path
 from functools import lru_cache
-from typing import Tuple, Dict
 
 import numpy as np
 import pandas as pd
+
 
 class ShardedTokenStore:
     def __init__(self, root: str, dtype=np.uint16, max_open_shards: int = 32, seed: int = 1337, verbose: bool = True):
@@ -99,7 +101,7 @@ class ShardedTokenStore:
         accs = [self.acc_b[i].decode("ascii") for i in range(N)]
         off_tok = self.offsets_tok.astype(np.int64, copy=False)
         lens    = self.lengths_tok.astype(np.int64, copy=False)
-    
+
         df = pd.DataFrame({
             "cid":         np.arange(N, dtype=np.int64),
             "accession":   accs,
@@ -110,8 +112,8 @@ class ShardedTokenStore:
             "length_tok":  lens,
         })
         return df
-    
-    
+
+
     # ----------- core window fetch -----------
     def window_by_id(self, i: int, start: int, L: int, pad_id: int = 0) -> np.ndarray:
         i   = int(i)
@@ -122,9 +124,12 @@ class ShardedTokenStore:
         if L >= clen:
             s_eff, L_eff = 0, clen
         else:
-            if start < 0: s_eff = 0
-            elif start > clen - L: s_eff = clen - L
-            else: s_eff = int(start)
+            if start < 0:
+                s_eff = 0
+            elif start > clen - L:
+                s_eff = clen - L
+            else:
+                s_eff = int(start)
             L_eff = L
 
         out = np.full((L,), pad_id, dtype=self.dtype)
@@ -218,7 +223,7 @@ class ShardedTokenStore:
             print(f"[store] draw_batch_windows k={k} L={L} -> {out.shape}, {dt*1e3:.1f} ms")
 
         return out, cids, starts, L_eff
-    
+
 
 def build_segmentdb(store, cids: np.ndarray, starts: np.ndarray, L_req: int, L_eff: np.ndarray | None = None) -> pd.DataFrame:
     """

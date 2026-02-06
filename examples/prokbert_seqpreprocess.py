@@ -29,7 +29,7 @@ def prepare_input_arguments():
     """
     Prepare and validate input arguments for the data preprocessing pipeline.
 
-    This function initializes the command-line argument parser, parses the arguments, 
+    This function initializes the command-line argument parser, parses the arguments,
     and validates the presence of required non-optional parameters.
 
     Detailed descriptions of the segmentation and tokenization processes can be found at:
@@ -38,7 +38,7 @@ def prepare_input_arguments():
 
     Returns:
         tuple: A tuple containing the SeqConfig object and parsed arguments.
-    
+
     Raises:
         ValueError: If a required parameter is missing.
     """
@@ -52,7 +52,7 @@ def prepare_input_arguments():
         if non_optional not in input_args2check:
             print('The {non_optional} is required for the data preprocessing pipeline!')
             raise ValueError(f"Missing required parameters: {non_optional}")
-    
+
     parameter_group_names = list(def_seq_config.parameters.keys())
     parameter_group_names = ['segmentation', 'tokenization', 'computation']
     #print(parameter_group_names)
@@ -64,7 +64,7 @@ def prepare_input_arguments():
         param_group, param_name = cmd_argument2group_param[provided_input_argument]
         #print(f'It belongs to group: {param_group}. Maps to the parameter: {param_name}')
         act_value = getattr(args, provided_input_argument)
-        parameters[param_group][param_name]=act_value    
+        parameters[param_group][param_name]=act_value
 
     def_seq_config = SeqConfig()
     _ = def_seq_config.get_and_set_segmentation_parameters(parameters['segmentation'])
@@ -80,8 +80,8 @@ def main(seq_config, args):
     """
     Main function to run the dataset preprocessing pipeline.
 
-    This function handles the loading and processing of sequence data, 
-    including segmentation and tokenization, as described in the tokenization 
+    This function handles the loading and processing of sequence data,
+    including segmentation and tokenization, as described in the tokenization
     and segmentation notebooks.
 
     Notebook Links:
@@ -100,10 +100,6 @@ def main(seq_config, args):
     segmentation_params = seq_config.segmentation_params
     tokenization_params = seq_config.tokenization_params
     computational_params = seq_config.computational_params
-
-    #print(tokenization_params)
-    #print(segmentation_params)
-
 
 
     # Load and segment sequences
