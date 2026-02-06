@@ -1,6 +1,7 @@
+from typing import List
+
 import re
 import unicodedata
-from typing import List
 
 import pandas as pd
 

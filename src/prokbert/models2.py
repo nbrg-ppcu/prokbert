@@ -1,38 +1,20 @@
-# coding=utf-8
-import warnings
-import logging
-from typing import Optional, Tuple, Union
-import os
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-from torch.nn.parameter import Parameter
-from transformers import MegatronBertConfig, MegatronBertModel, MegatronBertForMaskedLM, MegatronBertPreTrainedModel, PreTrainedModel, AutoConfig
-from transformers.modeling_outputs import SequenceClassifierOutput
+from typing import Optional, Tuple, Union, Dict, Literal
 
 import math
 from contextlib import nullcontext
-from typing import Dict, Optional, Tuple, Union
 
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
-from torch import nn
-from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss
-
+from transformers import PreTrainedModel
+from transformers.utils import logging
 from transformers.activations import ACT2FN
-from transformers.modeling_attn_mask_utils import _prepare_4d_attention_mask
-from transformers.modeling_outputs import BaseModelOutput, MaskedLMOutput, SequenceClassifierOutput, TokenClassifierOutput
 from transformers.modeling_rope_utils import ROPE_INIT_FUNCTIONS
-from transformers.modeling_utils import PreTrainedModel
-from transformers.utils import (
-    add_code_sample_docstrings,
-    add_start_docstrings,
-    add_start_docstrings_to_model_forward,
-    is_flash_attn_2_available,
-    logging,
-)
-from transformers.utils.import_utils import is_triton_available
-#from .prokbert2_config import ProkBertConfig
+from transformers.configuration_utils import PretrainedConfig
+from transformers.modeling_attn_mask_utils import _prepare_4d_attention_mask
+from transformers.utils.doc import add_code_sample_docstrings, add_start_docstrings
+from transformers.utils.import_utils import is_triton_available, is_flash_attn_2_available
+from transformers.modeling_outputs import SequenceClassifierOutput, BaseModelOutput, MaskedLMOutput
 
 if is_flash_attn_2_available():
     from flash_attn.flash_attn_interface import flash_attn_varlen_qkvpacked_func
@@ -42,16 +24,6 @@ else:
     RotaryEmbedding = object
 
 logger = logging.get_logger(__name__)
-
-#from flash_attn.flash_attn_interface import flash_attn_varlen_qkvpacked_func
-#from flash_attn.layers.rotary import RotaryEmbedding
-#from flash_attn.ops.triton.rotary import apply_rotary
-
-
-from typing import Literal
-from transformers.configuration_utils import PretrainedConfig
-
-
 
 
 VOCAB_FILES_NAMES = {"vocab_file": "vocab.txt"}
@@ -64,17 +36,21 @@ PRETRAINED_VOCAB_FILES_MAP = {
         "lca-mini-k1s1": "lca-base-dna1/vocab.txt",
     }
 }
+
+
 def l2_norm(input, axis=1, epsilon=1e-12):
     norm = torch.norm(input, 2, axis, True)
     norm = torch.clamp(norm, min=epsilon)  # Avoid zero division
     output = torch.div(input, norm)
     return output
 
+
 def initialize_linear_kaiming(layer: nn.Linear):
     if isinstance(layer, nn.Linear):
         nn.init.kaiming_uniform_(layer.weight, nonlinearity='linear')
         if layer.bias is not None:
             nn.init.zeros_(layer.bias)
+
 
 class ProkBertConfig(PretrainedConfig):
     r"""
@@ -283,9 +259,7 @@ PROK_BERT_START_DOCSTRING = r"""
             Model configuration class with all the parameters of the model.
             Initializing with a config file does not load the model weights; see [`PreTrainedModel.from_pretrained`] for weight loading.
 """
-#from prokbert2_config import *
 
-# add near imports
 class RMSNorm(nn.Module):
     def __init__(self, dim: int, eps: float = 1e-6, bias: bool = False):
         super().__init__()
@@ -1404,19 +1378,6 @@ class ProkBertForSequenceClassification(ProkBertPreTrainedModel):
         self.classifier = nn.Linear(self.config.hidden_size, self.config.num_labels)
         self.loss_fct = torch.nn.CrossEntropyLoss()
 
-        #print("fsgfgdfgfd")
-        #print(self.num_labels)
-        #print(self.config)
-        #print(self.config.problem_type)
-
-        # Base ProkBERT model
-        #self.model = ProkBertModel(config)
-        # Intermediate head for classification pooling
-        #self.head = ProkBertPredictionHead(config)
-        # Dropout and final classifier
-        #self.dropout = nn.Dropout(config.classifier_dropout)
-        #self.classifier = nn.Linear(config.hidden_size, config.num_labels, bias=config.classifier_bias)
-
         # Initialize weights and apply final processing
         self.post_init()
     def _init_weights(self, module: nn.Module):
@@ -1453,12 +1414,11 @@ class ProkBertForSequenceClassification(ProkBertPreTrainedModel):
         return_dict: bool = None,
         **kwargs,
     ) -> SequenceClassifierOutput:
-        # Determine return type
+
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+
         self._maybe_set_compile()
 
-        #print('Getting the input ids:')
-        #print(input_ids)
 
         outputs = self.model(
             input_ids=input_ids,
@@ -1485,9 +1445,6 @@ class ProkBertForSequenceClassification(ProkBertPreTrainedModel):
         # Classification head
         pooled_output = self.dropout(pooled_output)
         logits = self.classifier(pooled_output)
-
-        #print(logits)
-        #1/0
 
         loss = None
         if labels is not None:
@@ -1518,7 +1475,6 @@ class ProkBertForMaskedLM2(ProkBertPreTrainedModel):
         self.sparse_prediction       = config.sparse_prediction
         self.sparse_pred_ignore_index = config.sparse_pred_ignore_index
 
-        # finish init
         self.post_init()
 
     def get_output_embeddings(self):
@@ -1557,19 +1513,6 @@ class ProkBertForMaskedLM2(ProkBertPreTrainedModel):
         **kwargs,
     ) -> Union[Tuple[torch.Tensor], MaskedLMOutput]:
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
-
-        # debug inputs
-        '''
-        print("Input IDs:", input_ids.shape); print(input_ids); print("——")
-        if labels_dist is not None:
-            print("Labels dist:", labels_dist.shape); print(labels_dist); print("——")
-        if loss_mask is not None:
-            print("Loss mask:", loss_mask.shape); print(loss_mask); print("——")
-        '''
-        #print('___________')
-        #print('Labels:')
-        #print(labels)
-        #print('___________')
 
         # 1) Optional unpad for flash_attention_2
         if self.config._attn_implementation == "flash_attention_2" \
@@ -1619,12 +1562,9 @@ class ProkBertForMaskedLM2(ProkBertPreTrainedModel):
             return_dict=return_dict,
         )
         sequence_output = outputs[0]  # (B,L,H) or packed (N,H)
-        #print('outputs:')
-        #print(outputs)
 
         # 3) Legacy sparse integer mask
         if self.sparse_prediction and labels is not None:
-            #print('Sparse predictions..')
             flat_labels = labels.view(-1)
             flat_hidden = sequence_output.view(flat_labels.shape[0], -1)
             mask_tokens = flat_labels != self.sparse_pred_ignore_index
@@ -1637,17 +1577,14 @@ class ProkBertForMaskedLM2(ProkBertPreTrainedModel):
         else:
             hidden = self.head(sequence_output)
             logits = self.decoder(hidden)
-        #print("Raw logits shape:", logits.shape); print("——")
 
         loss = None
-        V    = self.config.vocab_size
+        V = self.config.vocab_size
 
         # 5a) Integer‐label MLM
         if labels is not None:
-            #print('Using the original stuff!')
             loss_fct = nn.CrossEntropyLoss()
             loss = loss_fct(logits.view(-1, V), labels.view(-1))
-            #print(f'Loss: {loss}')
 
         # 5b) Soft‐distribution MLM (no re‐pad)
         elif labels_dist is not None and loss_mask is not None:
@@ -1675,29 +1612,13 @@ class ProkBertForMaskedLM2(ProkBertPreTrainedModel):
                 pred        = flat_logits[flat_mask]       # (N_mask, V)
                 targ        = flat_dist[flat_mask]         # (N_mask, V)
 
-            #print("Packed pred.shape:", pred.shape)
-            #print("Packed targ.shape:", targ.shape)
-            #print("Sum targ rows:", targ.sum(dim=-1))
             eps  = 1e-8
             targ = targ.clamp_min(eps)
             targ = targ / targ.sum(dim=-1, keepdim=True)
             targ = targ.to(pred.dtype).detach()
 
-            #print('Tar')
-            #print(targ)
-            #print(targ.shape)
-            #print(targ[0,:])
-            #print(targ[0,:].sum())
             logp = F.log_softmax(pred, dim=-1)
             loss = F.kl_div(logp, targ, reduction="batchmean")
-
-            #print(loss)
-            #print('prevois loss: ')
-            #print( -(targ * logp).sum(dim=-1).mean())
-
-            #1/0
-            #logp = F.log_softmax(pred, dim=-1)
-            #loss = -(targ * logp).sum(dim=-1).mean()
 
         if self.config._attn_implementation == "flash_attention_2":
             with nullcontext() if self.config.repad_logits_with_grad or labels is None else torch.no_grad():
