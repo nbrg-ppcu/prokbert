@@ -3,8 +3,10 @@ from prokbert.sequtils import *
 from prokbert.training_utils import *
 from prokbert.models2 import ProkBertForCurricularClassification
 from prokbert.tokenizer import LCATokenizer
-from prokbert.curriculum_utils import compute_umap_for_dataset
+from prokbert.curriculum_utils import compute_umap_for_dataset, evaluate_embeddings
+from prokbert.curriculum_custom_trainier import CustomTrainer
 from datasets import Dataset, load_dataset, ClassLabel
+from transformers import EarlyStoppingCallback
 import seaborn as sns
 import matplotlib.pyplot as plt
 import pandas as pd
@@ -90,7 +92,6 @@ if __name__ == "__main__":
 
     num_cores = max(1, min(os.cpu_count() or 1, 16))  
 
-
     def _tokenize_fn(batch):
         tok = tokenizer(
             batch["segment"],
@@ -157,13 +158,15 @@ if __name__ == "__main__":
     umap_seed = 123
 
     umap_ds = tokenized_test_ds.shuffle(seed=umap_seed)#.select(range(min(umap_n, len(tokenized_train_ds))))
-    coords = compute_umap_for_dataset(
+    emb, coords = compute_umap_for_dataset(
         model=model,
         dataset=umap_ds,
         data_collator=data_collator,
         batch_size=128,
         seed=42,
     )
+    score_before = evaluate_embeddings(emb, umap_ds["labels"])
+    print(f"Silhouette score before training: {score_before:.4f}")
 
     #coords are aligned with umap_ds order
     plot_df = pd.DataFrame(coords, columns=["umap_1", "umap_2"])
@@ -209,43 +212,39 @@ if __name__ == "__main__":
     train_batch_size = 64
     eval_batch_size = 64
     num_train_epochs = 0.5
-
-    backbone_lr = 1e-5
-    head_lr = 5e-4
+    num_eval_steps = 40
     use_bf16 = False
-
-    backbone_params = [p for n, p in model.named_parameters() if n.startswith("bert.")]
-    head_params = [p for n, p in model.named_parameters() if not n.startswith("bert.")]
-
-    optimizer = AdamW(
-        [
-            {"params": backbone_params, "lr": backbone_lr},
-            {"params": head_params, "lr": head_lr},
-        ],
-    )
 
     training_args = TrainingArguments(
             output_dir=join(OUTPUT_PATH, "eskapee_example"),
             overwrite_output_dir=True,
             report_to="none",
             logging_steps=20,
+            evaluation_strategy="steps",
+            eval_steps = num_eval_steps,
             per_device_train_batch_size=train_batch_size,
             per_device_eval_batch_size=eval_batch_size,
             num_train_epochs=num_train_epochs,
+            metric_for_best_model="eval_silhouette_score",
+            greater_is_better=True,
             bf16=use_bf16,
             torch_compile=False,
         )
 
-    trainer = Trainer(
-        model=model,
-        args=training_args,
-        train_dataset=tokenized_train_ds,
-        eval_dataset=tokenized_test_ds,
-        tokenizer=tokenizer,
-        data_collator=data_collator,
-        compute_metrics=compute_metrics,
-        optimizers=(optimizer, None),
-    )
+    training_args.backbone_lr_rate = 1e-5
+    training_args.head_lr_rate = 5e-4
+    training_args.beta_1 = 0.5794
+    training_args.beta_2 = 0.6576
+
+    trainer = CustomTrainer(
+            model=model,
+            args=training_args,
+            train_dataset=tokenized_train_ds,
+            eval_dataset=tokenized_test_ds,
+            tokenizer=tokenizer,
+            data_collator=data_collator,
+        )
+
     trainer.train()
 
     trainer.save_model(join(OUTPUT_PATH, "curricular_finetuning_1_5_final_model"))
@@ -254,13 +253,15 @@ if __name__ == "__main__":
         join(OUTPUT_PATH, "curricular_finetuning_1_5_final_model"),
         torch_dtype=model_dtype,)
 
-    coords = compute_umap_for_dataset(
+    emb, coords = compute_umap_for_dataset(
         model=model,
         dataset=umap_ds,
         data_collator=data_collator,
         batch_size=128,
         seed=42,
     )
+    score_after = evaluate_embeddings(emb, umap_ds["labels"])
+    print(f"Silhouette score after training: {score_after:.4f}")
 
     # coords are aligned with umap_ds order
     plot_df = pd.DataFrame(coords, columns=["umap_1", "umap_2"])
