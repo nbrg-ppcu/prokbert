@@ -1,20 +1,38 @@
-from typing import Optional, Tuple, Union, Dict, Literal
-
-import math
-from contextlib import nullcontext
-
+# coding=utf-8
+import warnings
+import logging
+from typing import Optional, Tuple, Union
+import os
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from transformers import PreTrainedModel
-from transformers.utils import logging
+from torch.nn.parameter import Parameter
+from transformers import MegatronBertConfig, MegatronBertModel, MegatronBertForMaskedLM, MegatronBertPreTrainedModel, PreTrainedModel, AutoConfig
+from transformers.modeling_outputs import SequenceClassifierOutput
+
+import math
+from contextlib import nullcontext
+from typing import Dict, Optional, Tuple, Union
+
+import torch
+import torch.nn.functional as F
+from torch import nn
+from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss
+
 from transformers.activations import ACT2FN
-from transformers.modeling_rope_utils import ROPE_INIT_FUNCTIONS
-from transformers.configuration_utils import PretrainedConfig
 from transformers.modeling_attn_mask_utils import _prepare_4d_attention_mask
-from transformers.utils.doc import add_code_sample_docstrings, add_start_docstrings
-from transformers.utils.import_utils import is_triton_available, is_flash_attn_2_available
-from transformers.modeling_outputs import SequenceClassifierOutput, BaseModelOutput, MaskedLMOutput
+from transformers.modeling_outputs import BaseModelOutput, MaskedLMOutput, SequenceClassifierOutput, TokenClassifierOutput
+from transformers.modeling_rope_utils import ROPE_INIT_FUNCTIONS
+from transformers.modeling_utils import PreTrainedModel
+from transformers.utils import (
+    add_code_sample_docstrings,
+    add_start_docstrings,
+    add_start_docstrings_to_model_forward,
+    is_flash_attn_2_available,
+    logging,
+)
+from transformers.utils.import_utils import is_triton_available
+#from .prokbert2_config import ProkBertConfig
 
 if is_flash_attn_2_available():
     from flash_attn.flash_attn_interface import flash_attn_varlen_qkvpacked_func
@@ -24,6 +42,16 @@ else:
     RotaryEmbedding = object
 
 logger = logging.get_logger(__name__)
+
+#from flash_attn.flash_attn_interface import flash_attn_varlen_qkvpacked_func
+#from flash_attn.layers.rotary import RotaryEmbedding
+#from flash_attn.ops.triton.rotary import apply_rotary
+
+
+from typing import Literal
+from transformers.configuration_utils import PretrainedConfig
+
+
 
 
 VOCAB_FILES_NAMES = {"vocab_file": "vocab.txt"}
@@ -36,21 +64,17 @@ PRETRAINED_VOCAB_FILES_MAP = {
         "lca-mini-k1s1": "lca-base-dna1/vocab.txt",
     }
 }
-
-
 def l2_norm(input, axis=1, epsilon=1e-12):
     norm = torch.norm(input, 2, axis, True)
     norm = torch.clamp(norm, min=epsilon)  # Avoid zero division
     output = torch.div(input, norm)
     return output
 
-
 def initialize_linear_kaiming(layer: nn.Linear):
     if isinstance(layer, nn.Linear):
         nn.init.kaiming_uniform_(layer.weight, nonlinearity='linear')
         if layer.bias is not None:
             nn.init.zeros_(layer.bias)
-
 
 class ProkBertConfig(PretrainedConfig):
     r"""
@@ -259,7 +283,9 @@ PROK_BERT_START_DOCSTRING = r"""
             Model configuration class with all the parameters of the model.
             Initializing with a config file does not load the model weights; see [`PreTrainedModel.from_pretrained`] for weight loading.
 """
+#from prokbert2_config import *
 
+# add near imports
 class RMSNorm(nn.Module):
     def __init__(self, dim: int, eps: float = 1e-6, bias: bool = False):
         super().__init__()
@@ -1360,6 +1386,187 @@ class ProkBertForMaskedLM(ProkBertPreTrainedModel):
             attentions=outputs.attentions,
         )
 
+class CurricularFace(nn.Module):
+    def __init__(self, in_features, out_features, m=0.5, s=64.):
+        super(CurricularFace, self).__init__()
+        self.in_features = in_features
+        self.out_features = out_features
+        self.m = m
+        self.s = s
+        self.cos_m = math.cos(m)
+        self.sin_m = math.sin(m)
+        self.threshold = math.cos(math.pi - m)
+        self.mm = math.sin(math.pi - m) * m
+        self.kernel = Parameter(torch.Tensor(in_features, out_features))
+        self.register_buffer('t', torch.zeros(1))
+
+    def forward(self, embeddings, label):
+        # Normalize embeddings and the classifier kernel
+        embeddings = l2_norm(embeddings, axis=1)
+        kernel_norm = l2_norm(self.kernel, axis=0)
+        # Compute cosine similarity between embeddings and kernel columns
+        cos_theta = torch.mm(embeddings, kernel_norm)
+        cos_theta = cos_theta.clamp(-1, 1)  # for numerical stability
+        
+        # Clone original cosine values (used later for analysis if needed)
+        with torch.no_grad():
+            origin_cos = cos_theta.clone()
+        
+        # Get the cosine values corresponding to the ground-truth classes
+        target_logit = cos_theta[torch.arange(0, embeddings.size(0)), label].view(-1, 1)
+        sin_theta = torch.sqrt(1.0 - torch.pow(target_logit, 2))
+        cos_theta_m = target_logit * self.cos_m - sin_theta * self.sin_m  # cos(target + margin)
+        
+        # Create a mask for positions where the cosine similarity exceeds the modified value
+        mask = (cos_theta > cos_theta_m) #.to(dtype=torch.uint8)
+        
+        # Apply the margin condition: for values greater than threshold, use cosine with margin;
+        # otherwise subtract a fixed term.
+        final_target_logit = torch.where(target_logit > self.threshold, 
+                                         cos_theta_m, 
+                                         target_logit - self.mm)
+        
+        # Update the buffer 't' (used to control the weight of hard examples)
+        with torch.no_grad():
+            self.t = target_logit.mean() * 0.01 + (1 - 0.01) * self.t
+        
+        # For the positions in the mask, re-scale the logits
+        try:
+            hard_example = cos_theta[mask]
+        except Exception as e:
+            print("Label max")
+            print(torch.max(label))
+            print("Shapes:")
+            print(embeddings.shape)
+            print(label.shape)
+            hard_example = cos_theta[mask]
+            
+        cos_theta[mask] = hard_example * (self.t + hard_example)
+        
+        # Replace the logits of the target classes with the modified target logit
+        final_target_logit = final_target_logit.to(cos_theta.dtype)
+        cos_theta.scatter_(1, label.view(-1, 1).long(), final_target_logit)
+        output = cos_theta * self.s
+        return output, origin_cos * self.s
+        
+class ProkBertForCurricularClassification(ProkBertPreTrainedModel):
+    config_class = ProkBertConfigCurr
+    base_model_prefix = "model"
+
+    def __init__(self, config):
+        super().__init__(config)
+        self.config = config
+        self.model = ProkBertModel(config)
+
+        
+        # A weighting layer for pooling the sequence output
+        self.weighting_layer = nn.Linear(self.config.hidden_size, 1)
+        self.dropout = nn.Dropout(self.config.classification_dropout_rate)
+
+        if config.curriculum_hidden_size != -1:
+            self.linear = nn.Linear(self.config.hidden_size, config.curriculum_hidden_size)
+            
+            # Replace the simple classifier with the CurricularFace head.
+            # Defaults m=0.5 and s=64 are used, but these can be adjusted if needed.
+            self.curricular_face = CurricularFace(config.curriculum_hidden_size, 
+                                                self.config.curricular_num_labels,
+                                                m=self.config.curricular_face_m,
+                                                s=self.config.curricular_face_s)
+        else:
+            self.linear = nn.Identity()
+            self.curricular_face = CurricularFace(self.config.hidden_size, 
+                                                self.config.curricular_num_labels,
+                                                m=self.config.curricular_face_m,
+                                                s=self.config.curricular_face_s)
+        
+
+        self.loss_fct = torch.nn.CrossEntropyLoss()
+        self.post_init()
+
+    def _init_weights(self, module: nn.Module):
+        # first let the base class init everything else
+        super()._init_weights(module)
+
+        # then catch our pooling head and zero it
+        if module is getattr(self, "weighting_layer", None):
+            nn.init.xavier_uniform_(module.weight)
+            nn.init.zeros_(module.bias)
+
+        if module is getattr(self, "linear", None):
+            initialize_linear_kaiming(self.linear)
+        
+        if module is getattr(self, "curricular_face", None):
+            nn.init.kaiming_uniform_(module.kernel, a=math.sqrt(self.config.curricular_num_labels))
+
+        
+    def forward(
+        self,
+        input_ids: Optional[torch.LongTensor] = None,
+        attention_mask: Optional[torch.FloatTensor] = None,
+        position_ids: Optional[torch.LongTensor] = None,
+        inputs_embeds: Optional[torch.FloatTensor] = None,
+        labels: Optional[torch.LongTensor] = None,
+        output_attentions: Optional[bool] = None,
+        output_hidden_states: Optional[bool] = None,
+        return_dict: Optional[bool] = None,
+    ) -> Union[Tuple, SequenceClassifierOutput]:
+        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+        
+        # Get the outputs from the base ProkBert model
+        outputs = self.model(
+            input_ids,
+            attention_mask=attention_mask,
+            position_ids=position_ids,
+            inputs_embeds=inputs_embeds,
+            output_attentions=output_attentions,
+            output_hidden_states=output_hidden_states,
+            return_dict=return_dict,
+        )
+        sequence_output = outputs[0]  # (batch_size, seq_length, hidden_size)
+        
+        # Pool the sequence output using a learned weighting (attention-like)
+        # Compute raw weights
+        weights = self.weighting_layer(sequence_output)  # (batch_size, seq_length, 1)
+
+        # Ensure mask shape matches
+        if attention_mask.dim() == 2:
+            mask = attention_mask
+        elif attention_mask.dim() == 4:
+            mask = attention_mask.squeeze(1).squeeze(1)  # (batch_size, seq_length)
+        else:
+            raise ValueError(f"Unexpected attention_mask shape {attention_mask.shape}")
+
+        # Apply mask (masked positions -> -inf before softmax)
+        weights = weights.masked_fill(mask.unsqueeze(-1) == 0, float('-inf'))
+
+        # Normalize
+        weights = torch.nn.functional.softmax(weights, dim=1)  # (batch_size, seq_length)
+
+        # Weighted pooling
+        #weights = weights.unsqueeze(-1)                        # (batch_size, seq_length, 1)        
+        pooled_output = torch.sum(weights * sequence_output, dim=1)  # (batch_size, hidden_size)
+        # Classifier head
+        pooled_output = self.dropout(pooled_output)
+        pooled_output = self.linear(pooled_output)
+
+        # CurricularFace requires the embeddings and the corresponding labels.
+        # Note: During inference (labels is None), we just return l2 norm of bert part of the model
+        loss = None
+        if labels is None:
+            return l2_norm(pooled_output, axis = 1) 
+        else:
+            logits, origin_cos = self.curricular_face(pooled_output, labels)
+        
+        loss = None
+        if labels is not None:
+            loss = self.loss_fct(logits, labels.view(-1))
+        
+        return SequenceClassifierOutput(
+            loss=loss,
+            logits=logits,
+            hidden_states=outputs.hidden_states,
+            attentions=outputs.attentions,
+        )
 
 class ProkBertForSequenceClassification(ProkBertPreTrainedModel):
     """
@@ -1377,6 +1584,19 @@ class ProkBertForSequenceClassification(ProkBertPreTrainedModel):
         self.dropout = nn.Dropout(self.config.classifier_dropout)
         self.classifier = nn.Linear(self.config.hidden_size, self.config.num_labels)
         self.loss_fct = torch.nn.CrossEntropyLoss()
+
+        #print("fsgfgdfgfd")
+        #print(self.num_labels)
+        #print(self.config)
+        #print(self.config.problem_type)
+
+        # Base ProkBERT model
+        #self.model = ProkBertModel(config)
+        # Intermediate head for classification pooling
+        #self.head = ProkBertPredictionHead(config)
+        # Dropout and final classifier
+        #self.dropout = nn.Dropout(config.classifier_dropout)
+        #self.classifier = nn.Linear(config.hidden_size, config.num_labels, bias=config.classifier_bias)
 
         # Initialize weights and apply final processing
         self.post_init()
@@ -1414,11 +1634,12 @@ class ProkBertForSequenceClassification(ProkBertPreTrainedModel):
         return_dict: bool = None,
         **kwargs,
     ) -> SequenceClassifierOutput:
-
+        # Determine return type
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
-
         self._maybe_set_compile()
 
+        #print('Getting the input ids:')
+        #print(input_ids)
 
         outputs = self.model(
             input_ids=input_ids,
@@ -1445,6 +1666,9 @@ class ProkBertForSequenceClassification(ProkBertPreTrainedModel):
         # Classification head
         pooled_output = self.dropout(pooled_output)
         logits = self.classifier(pooled_output)
+
+        #print(logits)
+        #1/0
 
         loss = None
         if labels is not None:
@@ -1475,6 +1699,7 @@ class ProkBertForMaskedLM2(ProkBertPreTrainedModel):
         self.sparse_prediction       = config.sparse_prediction
         self.sparse_pred_ignore_index = config.sparse_pred_ignore_index
 
+        # finish init
         self.post_init()
 
     def get_output_embeddings(self):
@@ -1513,6 +1738,19 @@ class ProkBertForMaskedLM2(ProkBertPreTrainedModel):
         **kwargs,
     ) -> Union[Tuple[torch.Tensor], MaskedLMOutput]:
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+
+        # debug inputs
+        '''
+        print("Input IDs:", input_ids.shape); print(input_ids); print("——")
+        if labels_dist is not None:
+            print("Labels dist:", labels_dist.shape); print(labels_dist); print("——")
+        if loss_mask is not None:
+            print("Loss mask:", loss_mask.shape); print(loss_mask); print("——")
+        '''
+        #print('___________')
+        #print('Labels:')
+        #print(labels)
+        #print('___________')
 
         # 1) Optional unpad for flash_attention_2
         if self.config._attn_implementation == "flash_attention_2" \
@@ -1562,9 +1800,12 @@ class ProkBertForMaskedLM2(ProkBertPreTrainedModel):
             return_dict=return_dict,
         )
         sequence_output = outputs[0]  # (B,L,H) or packed (N,H)
+        #print('outputs:')
+        #print(outputs)
 
         # 3) Legacy sparse integer mask
         if self.sparse_prediction and labels is not None:
+            #print('Sparse predictions..')
             flat_labels = labels.view(-1)
             flat_hidden = sequence_output.view(flat_labels.shape[0], -1)
             mask_tokens = flat_labels != self.sparse_pred_ignore_index
@@ -1577,14 +1818,17 @@ class ProkBertForMaskedLM2(ProkBertPreTrainedModel):
         else:
             hidden = self.head(sequence_output)
             logits = self.decoder(hidden)
+        #print("Raw logits shape:", logits.shape); print("——")
 
         loss = None
-        V = self.config.vocab_size
+        V    = self.config.vocab_size
 
         # 5a) Integer‐label MLM
         if labels is not None:
+            #print('Using the original stuff!')
             loss_fct = nn.CrossEntropyLoss()
             loss = loss_fct(logits.view(-1, V), labels.view(-1))
+            #print(f'Loss: {loss}')
 
         # 5b) Soft‐distribution MLM (no re‐pad)
         elif labels_dist is not None and loss_mask is not None:
@@ -1612,13 +1856,29 @@ class ProkBertForMaskedLM2(ProkBertPreTrainedModel):
                 pred        = flat_logits[flat_mask]       # (N_mask, V)
                 targ        = flat_dist[flat_mask]         # (N_mask, V)
 
+            #print("Packed pred.shape:", pred.shape)
+            #print("Packed targ.shape:", targ.shape)
+            #print("Sum targ rows:", targ.sum(dim=-1))
             eps  = 1e-8
             targ = targ.clamp_min(eps)
             targ = targ / targ.sum(dim=-1, keepdim=True)
             targ = targ.to(pred.dtype).detach()
 
+            #print('Tar')
+            #print(targ)
+            #print(targ.shape)
+            #print(targ[0,:])
+            #print(targ[0,:].sum())
             logp = F.log_softmax(pred, dim=-1)
             loss = F.kl_div(logp, targ, reduction="batchmean")
+
+            #print(loss)
+            #print('prevois loss: ')
+            #print( -(targ * logp).sum(dim=-1).mean())
+
+            #1/0
+            #logp = F.log_softmax(pred, dim=-1)
+            #loss = -(targ * logp).sum(dim=-1).mean()
 
         if self.config._attn_implementation == "flash_attention_2":
             with nullcontext() if self.config.repad_logits_with_grad or labels is None else torch.no_grad():
