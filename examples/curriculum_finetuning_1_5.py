@@ -4,7 +4,7 @@ from prokbert.training_utils import *
 from prokbert.models2 import ProkBertForCurricularClassification
 from prokbert.tokenizer import LCATokenizer
 from prokbert.curriculum_utils import compute_umap_for_dataset, evaluate_embeddings
-from prokbert.curriculum_custom_trainier import CustomTrainer
+from prokbert.trainers.curriculum_trainer import CustomTrainer
 from datasets import Dataset, load_dataset, ClassLabel
 from transformers import EarlyStoppingCallback
 import seaborn as sns
@@ -12,6 +12,7 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import torch
 import numpy as np
+import inspect
 from os.path import join
 import os
 
@@ -20,6 +21,18 @@ MODEL_NAME = "neuralbioinfo/mini2-c"
 OUTPUT_PATH = "./"
 
 if __name__ == "__main__":
+
+
+
+    train_batch_size = 32
+    eval_batch_size = 32
+    num_train_epochs = 0.5
+    num_eval_steps = 400
+    use_bf16 = True
+    seed = 42
+    test_size = 0.10
+    max_length = 1000
+
     if not torch.cuda.is_available():
         raise SystemError('GPU device not found')
     else:
@@ -42,11 +55,9 @@ if __name__ == "__main__":
     print(f"Number of assembly labels: {len(id2label)}")
 
     # Converting the dataset into a pandas dataframe for further dataprocessing
-    seed = 42
-    test_size = 0.10
+
 
     sequences = ds.to_pandas()
-    max_length = 512
     lut_cols = ["sequence_id", "label_id"]
 
 
@@ -137,9 +148,17 @@ if __name__ == "__main__":
     classification_dropout_rate = 0.1
     curriculum_hidden_size = 128     # embedding/projection size used by the curricular head (often 128)
 
+    # Flash Attention 2 can be unstable with bf16 on some builds.
+    # Prefer fp16 when using flash-attn to avoid illegal memory access.
+    attn_impl = os.environ.get("PROKBERT_ATTN_IMPL", "flash_attention_2")
     use_bf16 = True
-    model_dtype = torch.bfloat16 if use_bf16 else torch.float32
-
+    if attn_impl == "flash_attention_2":
+        model_dtype = torch.float16
+    else:
+        model_dtype = torch.bfloat16 if use_bf16 else torch.float32
+    model_dtype = torch.bfloat16
+    print('attn_impl')
+    print(attn_impl)
 
     model = ProkBertForCurricularClassification.from_pretrained(
         MODEL_NAME,
@@ -152,7 +171,14 @@ if __name__ == "__main__":
         id2label=id2label,
         label2id=label2id,
         reference_compile=False,
+        attn_implementation=attn_impl,
     )
+    model = model.to("cuda")
+    if max_length > getattr(model.config, "max_position_embeddings", max_length):
+        raise ValueError(
+            f"max_length ({max_length}) exceeds model.config.max_position_embeddings "
+            f"({model.config.max_position_embeddings}). Reduce max_length or use a model with a larger context."
+        )
 
     umap_n = 2000
     umap_seed = 123
@@ -162,7 +188,7 @@ if __name__ == "__main__":
         model=model,
         dataset=umap_ds,
         data_collator=data_collator,
-        batch_size=128,
+        batch_size=eval_batch_size,
         seed=42,
     )
     score_before = evaluate_embeddings(emb, umap_ds["labels"])
@@ -208,42 +234,46 @@ if __name__ == "__main__":
     plt.savefig(join(OUTPUT_PATH, "curricular_finetuning_1_5_umap_before.png"), dpi=300)
     plt.close()
 
+    training_args_kwargs = {
+        "output_dir": join(OUTPUT_PATH, "eskapee_example"),
+        "overwrite_output_dir": True,
+        "report_to": "none",
+        "logging_steps": 20,
+        "eval_steps": num_eval_steps,
+        "per_device_train_batch_size": train_batch_size,
+        "per_device_eval_batch_size": eval_batch_size,
+        "num_train_epochs": num_train_epochs,
+        "metric_for_best_model": "eval_silhouette_score",
+        "greater_is_better": True,
+        "bf16": use_bf16,
+        "torch_compile": False,
+    }
+    if "eval_strategy" in inspect.signature(TrainingArguments.__init__).parameters:
+        training_args_kwargs["eval_strategy"] = "steps"
+    else:
+        training_args_kwargs["evaluation_strategy"] = "steps"
 
-    train_batch_size = 64
-    eval_batch_size = 64
-    num_train_epochs = 0.5
-    num_eval_steps = 40
-    use_bf16 = False
-
-    training_args = TrainingArguments(
-            output_dir=join(OUTPUT_PATH, "eskapee_example"),
-            overwrite_output_dir=True,
-            report_to="none",
-            logging_steps=20,
-            evaluation_strategy="steps",
-            eval_steps = num_eval_steps,
-            per_device_train_batch_size=train_batch_size,
-            per_device_eval_batch_size=eval_batch_size,
-            num_train_epochs=num_train_epochs,
-            metric_for_best_model="eval_silhouette_score",
-            greater_is_better=True,
-            bf16=use_bf16,
-            torch_compile=False,
-        )
+    training_args = TrainingArguments(**training_args_kwargs)
 
     training_args.backbone_lr_rate = 1e-5
     training_args.head_lr_rate = 5e-4
     training_args.beta_1 = 0.5794
     training_args.beta_2 = 0.6576
 
-    trainer = CustomTrainer(
-            model=model,
-            args=training_args,
-            train_dataset=tokenized_train_ds,
-            eval_dataset=tokenized_test_ds,
-            tokenizer=tokenizer,
-            data_collator=data_collator,
-        )
+    trainer_kwargs = {
+        "model": model,
+        "args": training_args,
+        "train_dataset": tokenized_train_ds,
+        "eval_dataset": tokenized_test_ds,
+        "data_collator": data_collator,
+    }
+    # `tokenizer` is deprecated in Trainer; prefer `processing_class` when available.
+    if "processing_class" in inspect.signature(CustomTrainer.__init__).parameters:
+        trainer_kwargs["processing_class"] = tokenizer
+    else:
+        trainer_kwargs["tokenizer"] = tokenizer
+
+    trainer = CustomTrainer(**trainer_kwargs)
 
     trainer.train()
 
@@ -251,13 +281,15 @@ if __name__ == "__main__":
 
     model = ProkBertForCurricularClassification.from_pretrained(
         join(OUTPUT_PATH, "curricular_finetuning_1_5_final_model"),
-        torch_dtype=model_dtype,)
+        torch_dtype=model_dtype,
+        attn_implementation=attn_impl,
+    ).to("cuda")
 
     emb, coords = compute_umap_for_dataset(
         model=model,
         dataset=umap_ds,
         data_collator=data_collator,
-        batch_size=128,
+        batch_size=eval_batch_size,
         seed=42,
     )
     score_after = evaluate_embeddings(emb, umap_ds["labels"])
@@ -312,5 +344,3 @@ if __name__ == "__main__":
 
 
     
-
-

@@ -4,6 +4,7 @@
 from dataclasses import dataclass
 import os
 from typing import Dict, Tuple
+import inspect
 
 import numpy as np
 import torch
@@ -193,33 +194,45 @@ def main():
 
 
 
-    training_args = TrainingArguments(
-        output_dir=cfg.output_dir,
-        overwrite_output_dir=False,
-        report_to="none",
-        evaluation_strategy="epoch",
-        save_strategy="epoch",
-        logging_steps=cfg.logging_steps,
-        per_device_train_batch_size=cfg.train_batch_size,
-        per_device_eval_batch_size=cfg.eval_batch_size,
-        gradient_accumulation_steps=cfg.gradient_accumulation_steps,
-        num_train_epochs=cfg.num_train_epochs,
-        load_best_model_at_end=True,
-        metric_for_best_model="accuracy",
-        greater_is_better=True,
-        bf16=use_bf16,
-    )
+    training_args_kwargs = {
+        "output_dir": cfg.output_dir,
+        "overwrite_output_dir": False,
+        "report_to": "none",
+        "save_strategy": "epoch",
+        "logging_steps": cfg.logging_steps,
+        "per_device_train_batch_size": cfg.train_batch_size,
+        "per_device_eval_batch_size": cfg.eval_batch_size,
+        "gradient_accumulation_steps": cfg.gradient_accumulation_steps,
+        "num_train_epochs": cfg.num_train_epochs,
+        "load_best_model_at_end": True,
+        "metric_for_best_model": "accuracy",
+        "greater_is_better": True,
+        "bf16": use_bf16,
+    }
+    # Transformers >=4.45 deprecates `evaluation_strategy` in favor of `eval_strategy`.
+    if "eval_strategy" in inspect.signature(TrainingArguments.__init__).parameters:
+        training_args_kwargs["eval_strategy"] = "epoch"
+    else:
+        training_args_kwargs["evaluation_strategy"] = "epoch"
 
-    trainer = Trainer(
-        model=model,
-        args=training_args,
-        train_dataset=train_ds,
-        eval_dataset=eval_ds,
-        tokenizer=tokenizer,
-        data_collator=data_collator,
-        compute_metrics=compute_metrics,
-        optimizers=(optimizer, None),
-    )
+    training_args = TrainingArguments(**training_args_kwargs)
+
+    trainer_kwargs = {
+        "model": model,
+        "args": training_args,
+        "train_dataset": train_ds,
+        "eval_dataset": eval_ds,
+        "data_collator": data_collator,
+        "compute_metrics": compute_metrics,
+        "optimizers": (optimizer, None),
+    }
+    # `tokenizer` is deprecated in Trainer; prefer `processing_class` when available.
+    if "processing_class" in inspect.signature(Trainer.__init__).parameters:
+        trainer_kwargs["processing_class"] = tokenizer
+    else:
+        trainer_kwargs["tokenizer"] = tokenizer
+
+    trainer = Trainer(**trainer_kwargs)
 
     trainer.train()
     plot_umap_embeddings(
