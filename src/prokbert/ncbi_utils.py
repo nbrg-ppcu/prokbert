@@ -1,6 +1,7 @@
+from typing import List
+
 import re
 import unicodedata
-from typing import List
 
 import pandas as pd
 
@@ -167,3 +168,4 @@ def get_ascendants_including_self(
     if query_taxon_id not in asc:
         asc.append(query_taxon_id)
     return sorted(set(asc))
+

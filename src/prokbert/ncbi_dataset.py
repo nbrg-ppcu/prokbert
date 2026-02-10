@@ -1,11 +1,11 @@
 import os
-import pandas as pd
 import torch
 import numpy as np
-from torch.utils.data import Dataset
+import pandas as pd
 from torch.utils.data import IterableDataset
 
 from prokbert.streaming_utils import *
+
 
 class NCBI_dataset(IterableDataset):
     def __init__(self, basedir, batch_size,  tokenizer_type="k6s2", Ls=2048):
@@ -22,7 +22,7 @@ class NCBI_dataset(IterableDataset):
         self.mask_ids = {0, 1, 2, 3} #PAD,UNK,  BOS, EOS from LCA tokenizer
         self.Ls = Ls
         self.batch_size = batch_size
-        
+
 
     def __iter__(self):
         batch, cids, starts, L_eff = self.store.draw_batch_windows(L=self.Ls, k=self.batch_size, pad_id=0, group_by_shard=False)
