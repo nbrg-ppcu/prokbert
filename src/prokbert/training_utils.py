@@ -17,11 +17,11 @@ from transformers import Trainer, TrainingArguments, get_linear_schedule_with_wa
 
 from . import sequtils
 from . import prok_datasets
+from . import ProkBERTDataCollator
 
 # TODO remove star imports, import only the required functions and classes
 from .config_utils import *
 from .prokbert_tokenizer import ProkBERTTokenizer
-from .ProkBERTDataCollator import *
 from .general_utils import *
 
 
@@ -63,7 +63,7 @@ def get_data_collator_for_overlapping_sequences(tokenizer, prokbert_config):
     """
 
     logging.info('Loading the datacollator class!')
-    prokbert_dc = ProkBERTDataCollator(tokenizer,
+    prokbert_dc = ProkBERTDataCollator.ProkBERTDataCollator(tokenizer,
                                     mask_to_left=prokbert_config.data_collator_params['mask_to_left'],
                                     mask_to_right=prokbert_config.data_collator_params['mask_to_right'],
                                     mlm_probability =   prokbert_config.data_collator_params['mlm_probability'],
