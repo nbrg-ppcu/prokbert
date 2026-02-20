@@ -9,7 +9,7 @@ import importlib
 import torch
 import numpy as np
 import pandas as pd
-from scipy.special import expit
+from scipy import special
 from sklearn.metrics import balanced_accuracy_score
 from sklearn.metrics import roc_auc_score, accuracy_score, f1_score, matthews_corrcoef, confusion_matrix
 from transformers import MegatronBertConfig, MegatronBertForMaskedLM
@@ -23,8 +23,6 @@ from .config_utils import *
 from .prokbert_tokenizer import ProkBERTTokenizer
 from .ProkBERTDataCollator import *
 from .general_utils import *
-from .prok_datasets import *
-from .config_utils import *
 
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -293,7 +291,7 @@ def evaluate_binary_classification_bert(pred_results: np.ndarray) -> Tuple[Dict,
     logits = pred_results[:, 2:]  # Logits for both classes
 
     # Compute probabilities using the sigmoid function on the logits for the positive class (index 1)
-    probabilities = expit(logits[:, 1])
+    probabilities = special.expit(logits[:, 1])
 
     # Calculate Cross-Entropy Loss
     cross_entropy_loss = -np.mean(y_true * np.log(probabilities) + (1 - y_true) * np.log(1 - probabilities))
@@ -346,70 +344,6 @@ def evaluate_binary_classification_bert(pred_results: np.ndarray) -> Tuple[Dict,
     eval_results_ls = [cross_entropy_loss, auc_class1, auc_class2,acc,bal_acc,mcc, f1, tn, fp, fn, tp, Np, Nn]
 
     return eval_results, eval_results_ls
-
-
-
-def oldevaluate_binary_classification_bert(pred_results: np.ndarray) -> Tuple[Dict, List]:
-    """
-    Calculate various metrics for binary classification based on the prediction results.
-
-    Parameters:
-        pred_results (np.ndarray): An array containing labels, predictions, and logits for each class.
-
-    Returns:
-        Tuple[Dict, List]:
-            - Dict: A dictionary containing various evaluation metrics.
-            - List: A list containing some of the metrics for further analysis.
-    """
-
-    y_true = pred_results[:, 0]
-    y_pred = pred_results[:, 1]
-    class_0_scores = pred_results[:, 2]
-    class_1_scores = pred_results[:, 3]
-
-    try:
-        auc_class1 = roc_auc_score(y_true, class_0_scores)
-    except ValueError:
-        auc_class1 = -1
-
-    try:
-        auc_class2 = roc_auc_score(y_true, class_1_scores)
-    except ValueError:
-        auc_class2 = -1
-
-    acc = accuracy_score(y_true, y_pred)
-    f1 = f1_score(y_true, y_pred)
-    mcc = matthews_corrcoef(y_true, y_pred)
-    bal_acc = balanced_accuracy_score(y_true, y_pred)
-
-    tn, fp, fn, tp = confusion_matrix(y_true, y_pred).ravel()
-    recall = tp / (tp + fn)
-    specificity = tn / (tn + fp)
-    Np = tp + fn
-    Nn = tn + fp
-
-    eval_results = {
-        'auc_class0': auc_class1,
-        'auc_class1': auc_class2,
-        'acc': acc,
-        'bal_acc': bal_acc,
-        'f1': f1,
-        'mcc': mcc,
-        'recall': recall,
-        'sensitivity': recall,
-        'specificity': specificity,
-        'tn': tn,
-        'fp': fp,
-        'fn': fn,
-        'tp': tp,
-        'Np': Np,
-        'Nn': Nn
-    }
-
-    eval_results_ls = [auc_class1, auc_class2, f1, tn, fp, fn, tp, Np, Nn]
-    return eval_results, eval_results_ls
-
-
 
 
 def compute_metrics_eval_prediction(eval_preds: EvalPrediction) -> Dict:
