@@ -40,9 +40,6 @@ def get_training_tokenizer(prokbert_config: ProkBERTConfig) -> ProkBERTTokenizer
                               segmentation_params=prokbert_config.segmentation_params,
                               comp_params=prokbert_config.computation_params,
                               operation_space='sequence')
-
-
-
     return tokenizer
 
 
@@ -117,7 +114,7 @@ def check_model_existance_and_checkpoint(model_name: str, output_path: str) -> T
     return path_exists, largest_checkpoint_dir, largest_checkpoint, chekcpoint_nr
 
 
-def check_hdf_dataset_file(prokbert_config):
+def check_hdf_dataset_file(prokbert_config) -> None:
     """
     Verify the validity of an HDF5 dataset file.
 
@@ -138,12 +135,12 @@ def check_hdf_dataset_file(prokbert_config):
     if dataset_class== 'IterableProkBERTPretrainingDataset':
         logging.info('Loading and creating a IterableProkBERTPretrainingDataset')
 
-        ds = prok_datasets.IterableProkBERTPretrainingDataset(hdf_file_path)
-        ds_size = len(ds)
+        ds_iter = prok_datasets.IterableProkBERTPretrainingDataset(hdf_file_path)
+        ds_size = len(ds_iter)
     elif dataset_class== 'ProkBERTPretrainingHDFDataset':
         logging.info('Loading and creating a ProkBERTPretrainingHDFDataset')
-        ds = prok_datasets.ProkBERTPretrainingHDFDataset(hdf_file_path)
-        ds_size = len(ds)
+        ds_hdf = prok_datasets.ProkBERTPretrainingHDFDataset(hdf_file_path)
+        ds_size = len(ds_hdf)
     elif dataset_class== 'ProkBERTPretrainingDataset':
         logging.info('Checking the input data ...')
         ds_size = len(prokbert_config.dataset_params['pretraining_dataset_data'])
@@ -242,10 +239,9 @@ def oevaluate_binary_classification_bert_build_pred_results(logits: torch.Tensor
     predictions = torch.argmax(logits, dim=-1)
     p = predictions.detach().cpu().numpy()
     y = labels.detach().cpu().numpy()
-    logits = logits.detach().cpu().numpy()
+    logits_np = logits.detach().cpu().numpy()
     pred = np.stack((y, p)).T
-    pred_results = np.concatenate((pred, logits), axis=1)
-
+    pred_results = np.concatenate((pred, logits_np), axis=1)
     return pred_results
 
 def evaluate_binary_classification_bert_build_pred_results(logits, labels):
@@ -381,6 +377,7 @@ def compute_metrics(eval_preds: Tuple) -> Dict:
 
 class ProkBERTTrainer(Trainer):
     def create_optimizer_and_scheduler(self, num_training_steps: int):
+        assert self.model is not None, "Model must be set before creating optimizer and scheduler."
         optimizer = torch.optim.AdamW(
             self.model.parameters(),
             lr=self.args.learning_rate,
@@ -415,10 +412,9 @@ def get_torch_data_from_segmentdb_classification(tokenizer, segmentdb, L=None, r
                                                 numpy_dtype = np.int32)
 
     torchdb_annot = torchdb.merge(segmentdb[['segment_id', 'y', 'label']], how='left', left_on = 'segment_id', right_on = 'segment_id')
-    y=torch.tensor(torchdb_annot['y'], dtype=torch.long)
-    X = torch.tensor(X, dtype=torch.long)
-
-    return X, y, torchdb
+    y = torch.tensor(torchdb_annot['y'], dtype=torch.long)
+    x = torch.tensor(X, dtype=torch.long)
+    return x, y, torchdb
 
 def get_default_pretrained_model_parameters(model_name: str, model_class: str, output_hidden_states: bool = False,
                                             output_attentions: bool = False, move_to_gpu: bool = True):
@@ -479,8 +475,6 @@ def get_default_pretrained_model_parameters(model_name: str, model_class: str, o
     )
 
     return model, tokenizer
-
-
 
 
 def load_pretrained_model(model_path, model_class, device, output_hidden_states=False, output_attentions=False, move_to_gpu=False):
@@ -759,7 +753,7 @@ def inference_binary_sequence_predictions(predictions, segment_dataset):
 def compute_metrics_masked(p: EvalPrediction):
     # p.predictions: np.ndarray of shape (batch, seq_len, vocab_size)
     # p.label_ids:   np.ndarray of shape (batch, seq_len)
-    return evaluate_masked_lm(p.predictions, p.label_ids)
+    return evaluate_masked_lm(p.predictions, p.label_ids) # type: ignore[arg-type]
 
 
 def evaluate_masked_lm(logits: np.ndarray,
