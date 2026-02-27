@@ -216,8 +216,8 @@ def segment_sequence_contiguous(
 
 
 def segment_sequences_random(
-    sequences: Union[pd.DataFrame, List[str]],
-    params: Dict[str, Union[int, float, str, Dict, List, Tuple]]
+    sequences: pd.DataFrame,
+    params: Dict[str, Any]
 ) -> List[Dict[str, Union[int, str]]]:
     """
     Randomly segments the input sequences.
@@ -286,7 +286,7 @@ def segment_sequences_random(
     return segmentdb
 
 def segment_sequences(
-    sequences: Union[List[str], pd.DataFrame],
+    sequences: pd.DataFrame,
     params: Dict[str, Union[int, float, str, ]],
     AsDataFrame: bool = False
 ) -> Union[List[str], pd.DataFrame]:
@@ -377,10 +377,10 @@ def segment_sequences(
         segment_db = [seg['segment'] for seg in segments]
     return segment_db
 
-def lca_kmer_tokenize_segment(segment: str, offset: int, params: Dict[str, Dict[str, int] | int | float]):
+def lca_kmer_tokenize_segment(segment: str, offset: int, params: Dict[str, Any]) -> List[str]:
     # calculate the tokenization for one offset value
     shift = params['shift']
-    max_segment_length = params['max_segment_length']
+    max_segment_length: int = params['max_segment_length']
     kmer = params['kmer']
     if len(segment) > max_segment_length:
         raise(ValueError(f'The segment is longer {len(segment)} then the maximum allowed segment length ({max_segment_length}). '))
@@ -393,7 +393,7 @@ def lca_kmer_tokenize_segment(segment: str, offset: int, params: Dict[str, Dict[
 
 
 
-def lca_tokenize_segment(segment: str, params: Dict[str, Dict[str, int] | int | float]) -> Tuple[List[List[int]], List[List[str]]]:
+def lca_tokenize_segment(segment: str, params: Dict[str, Any]) -> Tuple[List[List[int]], List[List[str]]]:
     """
     Tokenizes a single segment using Local Context Aware (LCA) tokenization.
     The segment is first split into k-mers with specified shifts and then tokenized into token vectors.
@@ -560,8 +560,8 @@ def process_batch_tokenize_segments_with_ids(
             raise ValueError(f'The segment is longer ({len(segment)}) than the maximum allowed segment length ({max_segment_length}).')
 
         tokenized_segment, _ = lca_tokenize_segment(segment, tokenization_params)
-        tokenized_segment = [np.array(act_segment, dtype=np_token_type) for act_segment in tokenized_segment]
-        tokenized_segments_with_ids[act_id] = tokenized_segment
+        tokenized_segment_lst = [np.array(act_segment, dtype=np_token_type) for act_segment in tokenized_segment]
+        tokenized_segments_with_ids[act_id] = tokenized_segment_lst
     return tokenized_segments_with_ids
 
 def batch_tokenize_segments_with_ids(
@@ -720,8 +720,8 @@ def pretty_print_overlapping_sequence(segment, segment_kmers, tokenizer_params):
         line_mers = [k_mer for j, k_mer in enumerate(segment_kmers) if j%nr_lines== line_id]
         act_line = str(line_id) + '.  ' + ' '*(line_id*shift)  + (' '*(sep_c)).join(line_mers)
         lines.append(act_line)
-    lines = '\n'.join(lines)
-    return lines
+    lines_str = '\n'.join(lines)
+    return lines_str
 
 
 def generate_kmers(abc: Set[str], k: int) -> List[str]:
@@ -926,7 +926,7 @@ def split_seqrecords_to_fasta_chunks(
     chunk_id = 1  # Identifier for chunks/files
     for record in seq_records:
         # Approximate size of the record in bytes
-        record_size = len(str(record.seq)) + len(record.id) + 2  # Adding buffer for '>' and '\n'
+        record_size = len(str(record.seq)) + (len(record.id) if record.id else 0) + 2  # Adding buffer for '>' and '\n'
 
         # Check if adding this record exceeds the chunk size
         if current_chunk_size + record_size > chunk_size_mb * 1024 * 1024:
@@ -972,7 +972,7 @@ def filter_short_sequences(
         >>> filtered_records[0].id
         'seq1'
     """
-    filtered_records = [record for record in seq_records if len(record.seq) >= length_threshold]
+    filtered_records = [record for record in seq_records if (len(record.seq) if record.seq else 0) >= length_threshold]
     return filtered_records
 
 
