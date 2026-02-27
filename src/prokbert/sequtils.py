@@ -97,22 +97,22 @@ def load_contigs(
 
             if IsAddHeader:
                 # Include sequence ID (if applicable), fasta ID, description, source file, sequence, and orientation in the output
-                entry = [sequence_id] if is_add_sequence_id else []
-                entry.extend([act_header, act_description, act_assembly, act_seq, 'forward'])
-                sequences.append(entry)
+                entry_forward: List[Union[str, int]] = [sequence_id] if is_add_sequence_id else []
+                entry_forward.extend([act_header, act_description, act_assembly, act_seq, 'forward'])
+                sequences.append(entry_forward)
                 if adding_reverse_complement:
-                    entry = [sequence_id + 1] if is_add_sequence_id else []
-                    entry.extend([act_header, act_description, act_assembly, act_reverse_complement, 'reverse'])
-                    sequences.append(entry)
+                    entry_reverse: List[Union[str, int]] = [sequence_id + 1] if is_add_sequence_id else []
+                    entry_reverse.extend([act_header, act_description, act_assembly, act_reverse_complement, 'reverse'])
+                    sequences.append(entry_reverse)
                     if is_add_sequence_id:
                         sequence_id += 2
                 else:
-                    sequence_id+=1
+                    sequence_id += 1
             else:
                 # Only include the sequence in the output
-                sequences.append(act_seq)
+                sequences.append(act_seq) # type: ignore[arg-type]
                 if adding_reverse_complement:
-                    sequences.append(act_reverse_complement)
+                    sequences.append(act_reverse_complement) # type: ignore[arg-type]
 
     if AsDataFrame:
         # Convert the sequences to a DataFrame
@@ -201,8 +201,6 @@ def segment_sequence_contiguous(
         act_end_pos = min(i + max_segment_len, L)
         act_segment = sequence[act_start_pos:act_end_pos]
 
-
-
         # Add segment to the list if it's longer than the minimum length
         if len(act_segment) >= min_segment_len:
             new_record = {
@@ -261,12 +259,6 @@ def segment_sequences_random(
 
         cum_sum = sequences['lenght_cum_sum']
         i = np.searchsorted(cum_sum, act_sampling_coord, side='right')
-
-        #diff = act_sampling_coord - sequences['lenght_cum_sum']
-        # Find the sequence in which the current segment starts
-#        for i in range(len(sequences['lenght_cum_sum'])):
-#            if diff[i] < 0:
-#                break
 
         act_sequence_id = sequences['sequence_id'].iloc[i]
         rel_coord = act_sampling_coord - sequences['lenght_cum_sum'].iloc[i] + sequences['seq_lengths'].iloc[i]
