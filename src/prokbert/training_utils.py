@@ -1,26 +1,25 @@
 from typing import List, Tuple, Dict, Optional
 
 import os
+import re
 import logging
 import pathlib
-from importlib import import_module
+import importlib
 
 import torch
 import numpy as np
 import pandas as pd
-from scipy.special import expit
+from scipy import special
 from sklearn.metrics import balanced_accuracy_score
 from sklearn.metrics import roc_auc_score, accuracy_score, f1_score, matthews_corrcoef, confusion_matrix
-from transformers import Trainer,  get_linear_schedule_with_warmup, EvalPrediction
+from transformers import MegatronBertConfig, MegatronBertForMaskedLM
+from transformers import Trainer, TrainingArguments, get_linear_schedule_with_warmup, EvalPrediction
 
-# TODO remove star imports, import only the required functions and classes
-from .config_utils import *
-from .sequtils import *
+from . import sequtils
+from . import prok_datasets
+from . import ProkBERTDataCollator
+from .config_utils import ProkBERTConfig
 from .prokbert_tokenizer import ProkBERTTokenizer
-from .ProkBERTDataCollator import *
-from .general_utils import *
-from .prok_datasets import *
-from .config_utils import *
 
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -41,9 +40,6 @@ def get_training_tokenizer(prokbert_config: ProkBERTConfig) -> ProkBERTTokenizer
                               segmentation_params=prokbert_config.segmentation_params,
                               comp_params=prokbert_config.computation_params,
                               operation_space='sequence')
-
-
-
     return tokenizer
 
 
@@ -61,7 +57,7 @@ def get_data_collator_for_overlapping_sequences(tokenizer, prokbert_config):
     """
 
     logging.info('Loading the datacollator class!')
-    prokbert_dc = ProkBERTDataCollator(tokenizer,
+    prokbert_dc = ProkBERTDataCollator.ProkBERTDataCollator(tokenizer,
                                     mask_to_left=prokbert_config.data_collator_params['mask_to_left'],
                                     mask_to_right=prokbert_config.data_collator_params['mask_to_right'],
                                     mlm_probability =   prokbert_config.data_collator_params['mlm_probability'],
@@ -90,8 +86,7 @@ def check_model_existance_and_checkpoint(model_name: str, output_path: str) -> T
         - A list of available checkpoint numbers.
     """
 
-
-    model_path = join(output_path,model_name)
+    model_path = os.path.join(output_path, model_name)
     logging.info( 'model_path:  ' +  str(model_path))
     path_exists = pathlib.Path.exists(pathlib.Path(model_path))
     largest_checkpoint_dir = None
@@ -107,7 +102,7 @@ def check_model_existance_and_checkpoint(model_name: str, output_path: str) -> T
                 logging.info('   The 0 is the largest checkpoint!')
                 largest_checkpoint = 0
 
-            largest_checkpoint_dir = join(model_path, 'checkpoint-' + str(largest_checkpoint))
+            largest_checkpoint_dir = os.path.join(model_path, 'checkpoint-' + str(largest_checkpoint))
 
         except IndexError:
             logging.info('   Something is wrong, set default valies')
@@ -119,7 +114,7 @@ def check_model_existance_and_checkpoint(model_name: str, output_path: str) -> T
     return path_exists, largest_checkpoint_dir, largest_checkpoint, chekcpoint_nr
 
 
-def check_hdf_dataset_file(prokbert_config):
+def check_hdf_dataset_file(prokbert_config) -> None:
     """
     Verify the validity of an HDF5 dataset file.
 
@@ -132,32 +127,28 @@ def check_hdf_dataset_file(prokbert_config):
     hdf_file_path = prokbert_config.dataset_params['dataset_path']
     dataset_class = prokbert_config.dataset_params['dataset_class']
 
-
     if len(hdf_file_path) == 0:
-        raise(ValueError('There is no provided dataset file!'))
+        raise ValueError('There is no provided dataset file!')
 
     logging.info('Checking whether the file exists or not!')
-    hdf_file_exists = check_file_exists(hdf_file_path)
+    assert os.path.exists(hdf_file_path), f"The provided file path '{hdf_file_path}' does not exist."
     if dataset_class== 'IterableProkBERTPretrainingDataset':
         logging.info('Loading and creating a IterableProkBERTPretrainingDataset')
 
-        ds = IterableProkBERTPretrainingDataset(hdf_file_path)
-        ds_size = len(ds)
+        ds_iter = prok_datasets.IterableProkBERTPretrainingDataset(hdf_file_path)
+        ds_size = len(ds_iter)
     elif dataset_class== 'ProkBERTPretrainingHDFDataset':
-        logging.info('Loading and creating a IterableProkBERTPretrainingDataset')
-        ds = ProkBERTPretrainingHDFDataset(hdf_file_path)
-        ds_size = len(ds)
+        logging.info('Loading and creating a ProkBERTPretrainingHDFDataset')
+        ds_hdf = prok_datasets.ProkBERTPretrainingHDFDataset(hdf_file_path)
+        ds_size = len(ds_hdf)
     elif dataset_class== 'ProkBERTPretrainingDataset':
         logging.info('Checking the input data ...')
         ds_size = len(prokbert_config.dataset_params['pretraining_dataset_data'])
         if ds_size == 0:
-            raise(ValueError('The provided data is empty, plase check the provided input.'))
+            raise ValueError('The provided data is empty, please check the provided input.')
     else:
-        raise(ValueError(f'The rquired class={dataset_class} in not available'))
+        raise ValueError(f'The required class={dataset_class} is not available')
 
-
-
-    return hdf_file_exists, ds_size
 
 def get_the_iteration_offset(batch_size, training_steps, dataset_size,
                              nr_gpus=1, radient_accumulation_steps=1):
@@ -183,14 +174,8 @@ def get_the_iteration_offset(batch_size, training_steps, dataset_size,
 
 
 def get_pretrained_model(prokbert_config):
-    from transformers import MegatronBertConfig, MegatronBertForMaskedLM, BertForMaskedLM, BertConfig
-
-    #new_model_args = MegatronBertConfig(**prokbert_config.model_params)
-    #model = MegatronBertForMaskedLM(new_model_args)
 
     new_model_args = MegatronBertConfig(**prokbert_config.model_params)
-    #model = BertForMaskedLM(new_model_args)
-    #return model
 
 
     [m_exists, cp_dir, cp, cps] = check_model_existance_and_checkpoint(prokbert_config.model_params['model_outputpath'],
@@ -216,7 +201,6 @@ def get_pretrained_model(prokbert_config):
 
 
 def run_pretraining(model,tokenizer, data_collator,training_dataset, prokbert_config):
-    from transformers import Trainer, TrainingArguments
 
     training_args = TrainingArguments(**prokbert_config.pretraining_params)
     is_resume_training = prokbert_config.model_params['ResumeTraining']
@@ -232,12 +216,11 @@ def run_pretraining(model,tokenizer, data_collator,training_dataset, prokbert_co
         )
 
     if is_resume_training and m_exists:
-        #trainer.train()
         trainer.train(resume_from_checkpoint = cp_dir)
 
     else:
         trainer.train()
-    final_model_output = join(prokbert_config.model_params['model_outputpath'], prokbert_config.model_params['model_name'])
+    final_model_output = os.path.join(prokbert_config.model_params['model_outputpath'], prokbert_config.model_params['model_name'])
     model.save_pretrained(final_model_output)
 
 
@@ -256,10 +239,9 @@ def oevaluate_binary_classification_bert_build_pred_results(logits: torch.Tensor
     predictions = torch.argmax(logits, dim=-1)
     p = predictions.detach().cpu().numpy()
     y = labels.detach().cpu().numpy()
-    logits = logits.detach().cpu().numpy()
+    logits_np = logits.detach().cpu().numpy()
     pred = np.stack((y, p)).T
-    pred_results = np.concatenate((pred, logits), axis=1)
-
+    pred_results = np.concatenate((pred, logits_np), axis=1)
     return pred_results
 
 def evaluate_binary_classification_bert_build_pred_results(logits, labels):
@@ -302,7 +284,7 @@ def evaluate_binary_classification_bert(pred_results: np.ndarray) -> Tuple[Dict,
     logits = pred_results[:, 2:]  # Logits for both classes
 
     # Compute probabilities using the sigmoid function on the logits for the positive class (index 1)
-    probabilities = expit(logits[:, 1])
+    probabilities = special.expit(logits[:, 1])
 
     # Calculate Cross-Entropy Loss
     cross_entropy_loss = -np.mean(y_true * np.log(probabilities) + (1 - y_true) * np.log(1 - probabilities))
@@ -357,70 +339,6 @@ def evaluate_binary_classification_bert(pred_results: np.ndarray) -> Tuple[Dict,
     return eval_results, eval_results_ls
 
 
-
-def oldevaluate_binary_classification_bert(pred_results: np.ndarray) -> Tuple[Dict, List]:
-    """
-    Calculate various metrics for binary classification based on the prediction results.
-
-    Parameters:
-        pred_results (np.ndarray): An array containing labels, predictions, and logits for each class.
-
-    Returns:
-        Tuple[Dict, List]:
-            - Dict: A dictionary containing various evaluation metrics.
-            - List: A list containing some of the metrics for further analysis.
-    """
-
-    y_true = pred_results[:, 0]
-    y_pred = pred_results[:, 1]
-    class_0_scores = pred_results[:, 2]
-    class_1_scores = pred_results[:, 3]
-
-    try:
-        auc_class1 = roc_auc_score(y_true, class_0_scores)
-    except ValueError:
-        auc_class1 = -1
-
-    try:
-        auc_class2 = roc_auc_score(y_true, class_1_scores)
-    except ValueError:
-        auc_class2 = -1
-
-    acc = accuracy_score(y_true, y_pred)
-    f1 = f1_score(y_true, y_pred)
-    mcc = matthews_corrcoef(y_true, y_pred)
-    bal_acc = balanced_accuracy_score(y_true, y_pred)
-
-    tn, fp, fn, tp = confusion_matrix(y_true, y_pred).ravel()
-    recall = tp / (tp + fn)
-    specificity = tn / (tn + fp)
-    Np = tp + fn
-    Nn = tn + fp
-
-    eval_results = {
-        'auc_class0': auc_class1,
-        'auc_class1': auc_class2,
-        'acc': acc,
-        'bal_acc': bal_acc,
-        'f1': f1,
-        'mcc': mcc,
-        'recall': recall,
-        'sensitivity': recall,
-        'specificity': specificity,
-        'tn': tn,
-        'fp': fp,
-        'fn': fn,
-        'tp': tp,
-        'Np': Np,
-        'Nn': Nn
-    }
-
-    eval_results_ls = [auc_class1, auc_class2, f1, tn, fp, fn, tp, Np, Nn]
-    return eval_results, eval_results_ls
-
-
-
-
 def compute_metrics_eval_prediction(eval_preds: EvalPrediction) -> Dict:
     eval_preds_tuple = eval_preds.predictions, eval_preds.label_ids
     eval_results = compute_metrics(eval_preds_tuple)
@@ -459,19 +377,18 @@ def compute_metrics(eval_preds: Tuple) -> Dict:
 
 class ProkBERTTrainer(Trainer):
     def create_optimizer_and_scheduler(self, num_training_steps: int):
-        # Create AdamW optimizer with the largest learning rate
+        assert self.model is not None, "Model must be set before creating optimizer and scheduler."
         optimizer = torch.optim.AdamW(
             self.model.parameters(),
-            lr=self.args.learning_rate,  # Largest learning rate
+            lr=self.args.learning_rate,
             eps=self.args.adam_epsilon,
             weight_decay=self.args.weight_decay,
         )
 
-        #optimizer = AdamW(self.model.parameters(), lr=self.learning_rate)
         scheduler = get_linear_schedule_with_warmup(
             optimizer,
-            num_warmup_steps=0,  # Default to 0, but you can specify a different number
-            num_training_steps=num_training_steps  # This is typically the number of epochs * number of batches per epoch
+            num_warmup_steps=0,
+            num_training_steps=num_training_steps
         )
         self.optimizer = optimizer
         self.lr_scheduler = scheduler
@@ -482,12 +399,12 @@ def get_torch_data_from_segmentdb_classification(tokenizer, segmentdb, L=None, r
     if L is None:
         L = tokenizer.tokenization_params['token_limit']-2
 
-    tokenized_sets = batch_tokenize_segments_with_ids(segmentdb, tokenizer.tokenization_params,
+    tokenized_sets = sequtils.batch_tokenize_segments_with_ids(segmentdb, tokenizer.tokenization_params,
                                                     batch_size=50000,
                                                     num_cores=tokenizer.comp_params['cpu_cores_for_tokenization'],
                                                     np_token_type= np.int32)
 
-    X, torchdb = get_rectangular_array_from_tokenized_dataset(tokenized_sets,
+    X, torchdb = sequtils.get_rectangular_array_from_tokenized_dataset(tokenized_sets,
                                                 shift=tokenizer.tokenization_params['shift'],
                                                 max_token_count=L+2,
                                                 randomize=randomize,
@@ -495,10 +412,9 @@ def get_torch_data_from_segmentdb_classification(tokenizer, segmentdb, L=None, r
                                                 numpy_dtype = np.int32)
 
     torchdb_annot = torchdb.merge(segmentdb[['segment_id', 'y', 'label']], how='left', left_on = 'segment_id', right_on = 'segment_id')
-    y=torch.tensor(torchdb_annot['y'], dtype=torch.long)
-    X = torch.tensor(X, dtype=torch.long)
-
-    return X, y, torchdb
+    y = torch.tensor(torchdb_annot['y'], dtype=torch.long)
+    x = torch.tensor(X, dtype=torch.long)
+    return x, y, torchdb
 
 def get_default_pretrained_model_parameters(model_name: str, model_class: str, output_hidden_states: bool = False,
                                             output_attentions: bool = False, move_to_gpu: bool = True):
@@ -561,8 +477,6 @@ def get_default_pretrained_model_parameters(model_name: str, model_class: str, o
     return model, tokenizer
 
 
-
-
 def load_pretrained_model(model_path, model_class, device, output_hidden_states=False, output_attentions=False, move_to_gpu=False):
     """
     Load Megatron BERT model and prepare for evaluation.
@@ -575,9 +489,8 @@ def load_pretrained_model(model_path, model_class, device, output_hidden_states=
     MegatronBertForMaskedLM: Loaded model.
     """
     torch.cuda.empty_cache()
-    ModelClass = getattr(import_module('transformers'), model_class)
+    ModelClass = getattr(importlib.import_module('transformers'), model_class)
     model = ModelClass.from_pretrained(model_path, output_attentions=output_attentions,output_hidden_states=output_hidden_states)
-    #model = torch.compile(model)
 
     if move_to_gpu:
         model.to(device)
@@ -707,7 +620,7 @@ def logits_to_sequence_predictions(df):
     # Convert the mean logits to a numpy array for softmax computation
     logits_array = mean_logits[['logit_y0', 'logit_y1']].to_numpy()
     # Apply softmax to the mean logits to get probabilities
-    probabilities = softmax(logits_array, axis=1)
+    probabilities = torch.nn.functional.softmax(logits_array, dim=1)
 
     # Get the sequence-level label (y_true) by taking the first occurrence since it should be the same for all segments of a sequence
     y_true = df.groupby('sequence_id')['y'].first().reset_index()['y']
@@ -738,13 +651,9 @@ def evaluate_binary_sequence_predictions(predictions, segment_dataset):
     if labels is None:
         labels = [0] * len(logits)
 
-
     # Convert logits and labels to tensors
     logits_tensor = torch.tensor(logits)
     labels_tensor = torch.tensor(labels)
-
-
-
 
     print('Building predictions...')
     pred_results = evaluate_binary_classification_bert_build_pred_results(logits_tensor, labels_tensor)
@@ -769,14 +678,8 @@ def evaluate_binary_sequence_predictions(predictions, segment_dataset):
     logits = np.log(probabilities)
     seq_pred_results[:,2:]=logits
     seq_eval_results, seq_eval_results_ls = evaluate_binary_classification_bert(seq_pred_results)
-    #print('Sequence level performance: ')
-    #print(seq_eval_results)
-    #print('_________________')
 
     final_table = sequence_predictions[final_cols]
-
-    #print('Evaluating the other results')
-    #eval_results, eval_results_ls = evaluate_binary_classification_bert(pred_results)
 
     return final_table, seq_eval_results
 
@@ -850,7 +753,7 @@ def inference_binary_sequence_predictions(predictions, segment_dataset):
 def compute_metrics_masked(p: EvalPrediction):
     # p.predictions: np.ndarray of shape (batch, seq_len, vocab_size)
     # p.label_ids:   np.ndarray of shape (batch, seq_len)
-    return evaluate_masked_lm(p.predictions, p.label_ids)
+    return evaluate_masked_lm(p.predictions, p.label_ids) # type: ignore[arg-type]
 
 
 def evaluate_masked_lm(logits: np.ndarray,
@@ -912,7 +815,7 @@ def evaluate_masked_lm(logits: np.ndarray,
 
 def get_token_position(seq_position, tokenizer, Ls, shift=0):
 
-    token_start_pos, token_end_pos = get_token_coordinates(seq_position,
+    token_start_pos, token_end_pos = sequtils.get_token_coordinates(seq_position,
                                                            tokenizer.kmer,
                                                            tokenizer.shift,
                                                            shift,

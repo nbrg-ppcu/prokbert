@@ -71,7 +71,7 @@ def is_valid_primary_key(df: pd.DataFrame, column_name: str) -> bool:
     return True
 
 
-def get_non_empty_files(start_path: str, extensions: tuple = ('.fasta', '.fna')) -> str:
+def get_non_empty_files(start_path: str, extensions: tuple = ('.fasta', '.fna')):
     """Generator that yields non-empty files from a specified directory and its subdirectories based on the given extensions.
 
     :param start_path: The path to the directory from which to start the search.

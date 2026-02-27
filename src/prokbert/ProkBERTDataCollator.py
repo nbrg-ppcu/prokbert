@@ -20,7 +20,7 @@ class VarLenDataCollatorWithPadding:
         distribution: str = "uniform",
         seed: int = 42,
         distribution_kwargs: Optional[Dict] = None,
-        special_token_ids_to_mask: Set[int] = None,
+        special_token_ids_to_mask: Optional[Set[int]] = None,
         truncation_probability: float = 0.8,
     ):
         self.tokenizer = tokenizer

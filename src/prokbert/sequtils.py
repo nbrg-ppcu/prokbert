@@ -17,7 +17,7 @@ from Bio.Seq import Seq
 from Bio.SeqRecord import SeqRecord
 from scipy.ndimage import convolve1d
 
-from .general_utils import *
+from . import general_utils
 
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -97,22 +97,22 @@ def load_contigs(
 
             if IsAddHeader:
                 # Include sequence ID (if applicable), fasta ID, description, source file, sequence, and orientation in the output
-                entry = [sequence_id] if is_add_sequence_id else []
-                entry.extend([act_header, act_description, act_assembly, act_seq, 'forward'])
-                sequences.append(entry)
+                entry_forward: List[Union[str, int]] = [sequence_id] if is_add_sequence_id else []
+                entry_forward.extend([act_header, act_description, act_assembly, act_seq, 'forward'])
+                sequences.append(entry_forward)
                 if adding_reverse_complement:
-                    entry = [sequence_id + 1] if is_add_sequence_id else []
-                    entry.extend([act_header, act_description, act_assembly, act_reverse_complement, 'reverse'])
-                    sequences.append(entry)
+                    entry_reverse: List[Union[str, int]] = [sequence_id + 1] if is_add_sequence_id else []
+                    entry_reverse.extend([act_header, act_description, act_assembly, act_reverse_complement, 'reverse'])
+                    sequences.append(entry_reverse)
                     if is_add_sequence_id:
                         sequence_id += 2
                 else:
-                    sequence_id+=1
+                    sequence_id += 1
             else:
                 # Only include the sequence in the output
-                sequences.append(act_seq)
+                sequences.append(act_seq) # type: ignore[arg-type]
                 if adding_reverse_complement:
-                    sequences.append(act_reverse_complement)
+                    sequences.append(act_reverse_complement) # type: ignore[arg-type]
 
     if AsDataFrame:
         # Convert the sequences to a DataFrame
@@ -201,8 +201,6 @@ def segment_sequence_contiguous(
         act_end_pos = min(i + max_segment_len, L)
         act_segment = sequence[act_start_pos:act_end_pos]
 
-
-
         # Add segment to the list if it's longer than the minimum length
         if len(act_segment) >= min_segment_len:
             new_record = {
@@ -218,8 +216,8 @@ def segment_sequence_contiguous(
 
 
 def segment_sequences_random(
-    sequences: Union[pd.DataFrame, List[str]],
-    params: Dict[str, Union[int, float, str, Dict, List, Tuple]]
+    sequences: pd.DataFrame,
+    params: Dict[str, Any]
 ) -> List[Dict[str, Union[int, str]]]:
     """
     Randomly segments the input sequences.
@@ -262,12 +260,6 @@ def segment_sequences_random(
         cum_sum = sequences['lenght_cum_sum']
         i = np.searchsorted(cum_sum, act_sampling_coord, side='right')
 
-        #diff = act_sampling_coord - sequences['lenght_cum_sum']
-        # Find the sequence in which the current segment starts
-#        for i in range(len(sequences['lenght_cum_sum'])):
-#            if diff[i] < 0:
-#                break
-
         act_sequence_id = sequences['sequence_id'].iloc[i]
         rel_coord = act_sampling_coord - sequences['lenght_cum_sum'].iloc[i] + sequences['seq_lengths'].iloc[i]
 
@@ -294,7 +286,7 @@ def segment_sequences_random(
     return segmentdb
 
 def segment_sequences(
-    sequences: Union[List[str], pd.DataFrame],
+    sequences: pd.DataFrame,
     params: Dict[str, Union[int, float, str, ]],
     AsDataFrame: bool = False
 ) -> Union[List[str], pd.DataFrame]:
@@ -339,9 +331,9 @@ def segment_sequences(
     elif isinstance(sequences, pd.DataFrame):
         #logging.info('Sequences is a list, therefore adding tracking information.')
         logging.info('Checking input DataFrame!')
-        check_expected_columns(sequences, expected_attributes)
+        general_utils.check_expected_columns(sequences, expected_attributes)
         logging.info('Checking input sequence_id is valid primary key in the DataFrame')
-        is_valid_primary_key(sequences, 'sequence_id')
+        general_utils.is_valid_primary_key(sequences, 'sequence_id')
         IsSequenceId = True
         IsSeqList=False
 
@@ -385,10 +377,10 @@ def segment_sequences(
         segment_db = [seg['segment'] for seg in segments]
     return segment_db
 
-def lca_kmer_tokenize_segment(segment: str, offset: int, params: Dict[str, Dict[str, int] | int | float]):
+def lca_kmer_tokenize_segment(segment: str, offset: int, params: Dict[str, Any]) -> List[str]:
     # calculate the tokenization for one offset value
     shift = params['shift']
-    max_segment_length = params['max_segment_length']
+    max_segment_length: int = params['max_segment_length']
     kmer = params['kmer']
     if len(segment) > max_segment_length:
         raise(ValueError(f'The segment is longer {len(segment)} then the maximum allowed segment length ({max_segment_length}). '))
@@ -401,7 +393,7 @@ def lca_kmer_tokenize_segment(segment: str, offset: int, params: Dict[str, Dict[
 
 
 
-def lca_tokenize_segment(segment: str, params: Dict[str, Dict[str, int] | int | float]) -> Tuple[List[List[int]], List[List[str]]]:
+def lca_tokenize_segment(segment: str, params: Dict[str, Any]) -> Tuple[List[List[int]], List[List[str]]]:
     """
     Tokenizes a single segment using Local Context Aware (LCA) tokenization.
     The segment is first split into k-mers with specified shifts and then tokenized into token vectors.
@@ -568,8 +560,8 @@ def process_batch_tokenize_segments_with_ids(
             raise ValueError(f'The segment is longer ({len(segment)}) than the maximum allowed segment length ({max_segment_length}).')
 
         tokenized_segment, _ = lca_tokenize_segment(segment, tokenization_params)
-        tokenized_segment = [np.array(act_segment, dtype=np_token_type) for act_segment in tokenized_segment]
-        tokenized_segments_with_ids[act_id] = tokenized_segment
+        tokenized_segment_lst = [np.array(act_segment, dtype=np_token_type) for act_segment in tokenized_segment]
+        tokenized_segments_with_ids[act_id] = tokenized_segment_lst
     return tokenized_segments_with_ids
 
 def batch_tokenize_segments_with_ids(
@@ -692,7 +684,7 @@ def get_rectangular_array_from_tokenized_dataset(tokenized_segments_data: Dict[i
 
     if truncate_zeros:
         logging.info('Tuncating all zeros column')
-    X = truncate_zero_columns(X)
+    X = general_utils.truncate_zero_columns(X)
     return X, torch_tokenized_segment_db
 
 
@@ -728,8 +720,8 @@ def pretty_print_overlapping_sequence(segment, segment_kmers, tokenizer_params):
         line_mers = [k_mer for j, k_mer in enumerate(segment_kmers) if j%nr_lines== line_id]
         act_line = str(line_id) + '.  ' + ' '*(line_id*shift)  + (' '*(sep_c)).join(line_mers)
         lines.append(act_line)
-    lines = '\n'.join(lines)
-    return lines
+    lines_str = '\n'.join(lines)
+    return lines_str
 
 
 def generate_kmers(abc: Set[str], k: int) -> List[str]:
@@ -782,7 +774,7 @@ def save_to_hdf(X: np.ndarray, hdf_file_path: str, database: pd.DataFrame = None
             raise OSError(f"Error removing existing HDF5 file {hdf_file_path}. Error: {e}")
 
     # Create directory structure for HDF5 file
-    create_directory_for_filepath(hdf_file_path)
+    general_utils.create_directory_for_filepath(hdf_file_path)
 
     # Save the numpy array to HDF5
     with h5py.File(hdf_file_path, 'w') as hdf:
@@ -934,7 +926,7 @@ def split_seqrecords_to_fasta_chunks(
     chunk_id = 1  # Identifier for chunks/files
     for record in seq_records:
         # Approximate size of the record in bytes
-        record_size = len(str(record.seq)) + len(record.id) + 2  # Adding buffer for '>' and '\n'
+        record_size = len(str(record.seq)) + (len(record.id) if record.id else 0) + 2  # Adding buffer for '>' and '\n'
 
         # Check if adding this record exceeds the chunk size
         if current_chunk_size + record_size > chunk_size_mb * 1024 * 1024:
@@ -980,7 +972,7 @@ def filter_short_sequences(
         >>> filtered_records[0].id
         'seq1'
     """
-    filtered_records = [record for record in seq_records if len(record.seq) >= length_threshold]
+    filtered_records = [record for record in seq_records if (len(record.seq) if record.seq else 0) >= length_threshold]
     return filtered_records
 
 

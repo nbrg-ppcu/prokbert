@@ -54,14 +54,14 @@ def create_embeddings(model, dataloader, output_name,  plot_name):
             batch_ind += 1
     model.train()
     embeddings = np.concatenate(representations)
-    labels = np.concatenate(labels)
-    seq_ids = np.concatenate(seq_ids)
+    labels_np = np.concatenate(labels)
+    seq_ids_np = np.concatenate(seq_ids)
 
     df = pd.DataFrame(embeddings)
-    df['group'] = seq_ids
+    df['group'] = seq_ids_np
 
-    df['labels'] = labels
-    umap_df = get_model_embeddings_umap(embeddings, labels, seq_ids,
+    df['labels'] = labels_np
+    umap_df = get_model_embeddings_umap(embeddings, labels_np, seq_ids_np,
                                         plot_path = output_name,
                                         plot_point_size=50,
                                         plot_name = plot_name)

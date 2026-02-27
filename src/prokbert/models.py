@@ -353,7 +353,7 @@ class CurricularFace(nn.Module):
         # For the positions in the mask, re-scale the logits
         try:
             hard_example = cos_theta[mask]
-        except Exception as e:
+        except Exception:
             print("Label max")
             print(torch.max(label))
             print("Shapes:")
