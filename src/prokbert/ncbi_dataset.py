@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 from torch.utils.data import IterableDataset
 
-from prokbert.streaming_utils import *
+from . import streaming_utils
 
 
 class NCBI_dataset(IterableDataset):
@@ -18,8 +18,8 @@ class NCBI_dataset(IterableDataset):
         self.unique_assembly = self.metadata['assembly_id'].unique()
         self.cat2id = {cat: i for i, cat in enumerate(self.unique_assembly)}
 
-        self.store = ShardedTokenStore(tokenized_dir, dtype=np.uint16, seed=1337, verbose=False)
-        self.mask_ids = {0, 1, 2, 3} #PAD,UNK,  BOS, EOS from LCA tokenizer
+        self.store = streaming_utils.ShardedTokenStore(tokenized_dir, dtype=np.uint16, seed=1337, verbose=False)
+        self.mask_ids = {0, 1, 2, 3} # PAD, UNK, BOS, EOS from LCA tokenizer
         self.Ls = Ls
         self.batch_size = batch_size
 
