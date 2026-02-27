@@ -18,11 +18,8 @@ from transformers import Trainer, TrainingArguments, get_linear_schedule_with_wa
 from . import sequtils
 from . import prok_datasets
 from . import ProkBERTDataCollator
-
-# TODO remove star imports, import only the required functions and classes
-from .config_utils import *
+from .config_utils import ProkBERTConfig
 from .prokbert_tokenizer import ProkBERTTokenizer
-from .general_utils import *
 
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')

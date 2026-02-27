@@ -17,7 +17,7 @@ from Bio.Seq import Seq
 from Bio.SeqRecord import SeqRecord
 from scipy.ndimage import convolve1d
 
-from .general_utils import *
+from . import general_utils
 
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -339,9 +339,9 @@ def segment_sequences(
     elif isinstance(sequences, pd.DataFrame):
         #logging.info('Sequences is a list, therefore adding tracking information.')
         logging.info('Checking input DataFrame!')
-        check_expected_columns(sequences, expected_attributes)
+        general_utils.check_expected_columns(sequences, expected_attributes)
         logging.info('Checking input sequence_id is valid primary key in the DataFrame')
-        is_valid_primary_key(sequences, 'sequence_id')
+        general_utils.is_valid_primary_key(sequences, 'sequence_id')
         IsSequenceId = True
         IsSeqList=False
 
@@ -692,7 +692,7 @@ def get_rectangular_array_from_tokenized_dataset(tokenized_segments_data: Dict[i
 
     if truncate_zeros:
         logging.info('Tuncating all zeros column')
-    X = truncate_zero_columns(X)
+    X = general_utils.truncate_zero_columns(X)
     return X, torch_tokenized_segment_db
 
 
@@ -782,7 +782,7 @@ def save_to_hdf(X: np.ndarray, hdf_file_path: str, database: pd.DataFrame = None
             raise OSError(f"Error removing existing HDF5 file {hdf_file_path}. Error: {e}")
 
     # Create directory structure for HDF5 file
-    create_directory_for_filepath(hdf_file_path)
+    general_utils.create_directory_for_filepath(hdf_file_path)
 
     # Save the numpy array to HDF5
     with h5py.File(hdf_file_path, 'w') as hdf:
