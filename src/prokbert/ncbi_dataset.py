@@ -7,6 +7,7 @@ from torch.utils.data import IterableDataset
 from . import streaming_utils
 
 
+
 class NCBI_dataset(IterableDataset):
     def __init__(self, basedir, batch_size,  tokenizer_type="k6s2", Ls=2048):
         tokenized_dir = os.path.join(basedir, tokenizer_type)
