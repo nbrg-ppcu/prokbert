@@ -1,3 +1,4 @@
+from typing import Any
 import os
 import re
 import yaml
@@ -36,7 +37,7 @@ class BaseConfig:
     def __init__(self):
         super().__init__()
 
-    def cast_to_expected_type(self, parameter_class: str, parameter_name: str, value: any) -> any:
+    def cast_to_expected_type(self, parameter_class: str, parameter_name: str, value: Any) -> Any:
         """
         Cast the given value to the expected type.
 
@@ -45,9 +46,9 @@ class BaseConfig:
         :param parameter_name: The name of the parameter.
         :type parameter_name: str
         :param value: The value to be casted.
-        :type value: any
+        :type value: Any
         :return: Value casted to the expected type.
-        :rtype: any
+        :rtype: Any
         :raises ValueError: If casting fails.
         """
         expected_type = self.parameters[parameter_class][parameter_name]['type']
@@ -102,7 +103,7 @@ class BaseConfig:
 
 
 
-    def get_parameter(self, parameter_class: str, parameter_name: str) -> any:
+    def get_parameter(self, parameter_class: str, parameter_name: str) -> Any:
         """
         Retrieve the default value of a specified parameter.
 
@@ -111,14 +112,14 @@ class BaseConfig:
         :param parameter_name: The name of the parameter.
         :type parameter_name: str
         :return: Default value of the parameter, casted to the expected type.
-        :rtype: any
+        :rtype: Any
         """
         default_value = self.parameters[parameter_class][parameter_name]['default']
         return self.cast_to_expected_type(parameter_class, parameter_name, default_value)
 
 
 
-    def validate_type(self, parameter_class: str, parameter_name: str, value: any) -> bool:
+    def validate_type(self, parameter_class: str, parameter_name: str, value: Any) -> bool:
         """
         Validate the type of a given value against the expected type.
 
@@ -127,7 +128,7 @@ class BaseConfig:
         :param parameter_name: The name of the parameter.
         :type parameter_name: str
         :param value: The value to be validated.
-        :type value: any
+        :type value: Any
         :return: True if the value is of the expected type, otherwise False.
         :rtype: bool
         """
@@ -142,7 +143,7 @@ class BaseConfig:
         else:
             return True
 
-    def validate_value(self, parameter_class: str, parameter_name: str, value: any) -> bool:
+    def validate_value(self, parameter_class: str, parameter_name: str, value: Any) -> bool:
         """
         Validate the value of a parameter against its constraints.
 
@@ -151,7 +152,7 @@ class BaseConfig:
         :param parameter_name: The name of the parameter.
         :type parameter_name: str
         :param value: The value to be validated.
-        :type value: any
+        :type value: Any
         :return: True if the value meets the constraints, otherwise False.
         :rtype: bool
         """
@@ -166,7 +167,7 @@ class BaseConfig:
         return True
 
 
-    def validate(self, parameter_class: str, parameter_name: str, value: any):
+    def validate(self, parameter_class: str, parameter_name: str, value: Any):
         """
         Validate both the type and value of a parameter.
 
@@ -175,7 +176,7 @@ class BaseConfig:
         :param parameter_name: The name of the parameter.
         :type parameter_name: str
         :param value: The value to be validated.
-        :type value: any
+        :type value: Any
         :raises TypeError: If the value is not of the expected type.
         :raises ValueError: If the value does not meet the parameter's constraints.
         """

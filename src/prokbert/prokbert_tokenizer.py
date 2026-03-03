@@ -11,8 +11,8 @@ import torch
 import numpy as np
 from transformers import PreTrainedTokenizer
 
-from .config_utils import *
-from .sequtils import *
+from . import config_utils
+from . import sequtils
 
 
 VOCAB_FILES_NAMES = {"vocab_file": "vocab.txt"}
@@ -151,7 +151,7 @@ class ProkBERTTokenizer(PreTrainedTokenizer):
 
 
 
-        self.defconfig = SeqConfig()
+        self.defconfig = config_utils.SeqConfig()
         self.tokenization_params = self.defconfig.get_and_set_tokenization_parameters(tokenization_params)
         self.segmentation_params = self.defconfig.get_and_set_segmentation_parameters(segmentation_params)
         self.comp_params = self.defconfig.get_and_set_computational_parameters(comp_params)
@@ -163,8 +163,8 @@ class ProkBERTTokenizer(PreTrainedTokenizer):
         super().__init__(cls_token=ProkBERTTokenizer.default_cls_token, **kwargs)
 
         if self.operation_space == 'sequence':
-            token_extension = sorted(list(set(generate_kmers(ProkBERTTokenizer.extended_nucleotide_abc, self.tokenization_params['kmer'])) - \
-                 set(generate_kmers(ProkBERTTokenizer.nucleotide_abc, self.tokenization_params['kmer'])) ))
+            token_extension = sorted(list(set(sequtils.generate_kmers(ProkBERTTokenizer.extended_nucleotide_abc, self.tokenization_params['kmer'])) - \
+                 set(sequtils.generate_kmers(ProkBERTTokenizer.nucleotide_abc, self.tokenization_params['kmer'])) ))
             self.extended_vocab = deepcopy(self.vocab)
             for token in token_extension:
                 self.extended_vocab[token] = 4
@@ -227,7 +227,7 @@ class ProkBERTTokenizer(PreTrainedTokenizer):
             >>> print(tokens)
             ...
         """
-        tokenized_segments, kmerized_segments = lca_tokenize_segment(text.upper(), self.tokenization_params)
+        tokenized_segments, kmerized_segments = sequtils.lca_tokenize_segment(text.upper(), self.tokenization_params)
         if all:
             return tokenized_segments, kmerized_segments
         else:
@@ -387,7 +387,7 @@ class ProkBERTTokenizer(PreTrainedTokenizer):
             >>> print(encoded['input_ids'])
             ...
         """
-        tokenized_segments, kmerized_segments = lca_tokenize_segment(text, self.tokenization_params)
+        tokenized_segments, kmerized_segments = sequtils.lca_tokenize_segment(text, self.tokenization_params)
         input_ids = tokenized_segments[lca_shift]
 
         # Create attention mask with 1s
@@ -455,7 +455,7 @@ class ProkBERTTokenizer(PreTrainedTokenizer):
         to_tokenize_data = (sequences, sequence_ids)
 
         # Tokenize each sequence
-        tokenization_results = batch_tokenize_segments_with_ids(
+        tokenization_results = sequtils.batch_tokenize_segments_with_ids(
             to_tokenize_data,
             self.tokenization_params,
             self.comp_params['cpu_cores_for_tokenization'],
@@ -466,7 +466,7 @@ class ProkBERTTokenizer(PreTrainedTokenizer):
         expected_max_token = max(len(arr) for arrays in tokenization_results.values() for arr in arrays)
 
         if kwargs and 'return_tensors' in kwargs and kwargs['return_tensors']=='pt':
-            X, _ = get_rectangular_array_from_tokenized_dataset(tokenization_results,
+            X, _ = sequtils.get_rectangular_array_from_tokenized_dataset(tokenization_results,
                                                                     self.tokenization_params['shift'],
                                                                     randomize=False,
                                                                     numpy_dtype=np.int64,
@@ -544,7 +544,7 @@ class ProkBERTTokenizer(PreTrainedTokenizer):
         if lca_shift >= shift:
             raise ValueError(f'The required offset {lca_shift} is invalid. The maximum offset should be < {shift}')
 
-        tokenized_segments, _ = lca_tokenize_segment(segment, self.tokenization_params)
+        tokenized_segments, _ = sequtils.lca_tokenize_segment(segment, self.tokenization_params)
 
         new_tokenized_segments = []
         if kwargs and 'return_tensors' in kwargs:

@@ -38,7 +38,7 @@ class IterableProkBERTPretrainingDataset(IterableDataset):
         self.dataset_file = h5py.File(self.file_path, 'r')
         self.ds_size = self.dataset_file['training_data']['X'].shape[0]
         self.max_iteration_over_ds_steps = int(self.ds_size * max_iteration_over_ds)
-        self._global_iter_steps = 0,
+        self._global_iter_steps = 0
         self.default_dtype = default_dtype
         logging.info(f'Dataset size: {self.ds_size}')
         self.add_end_token = add_end_token
@@ -93,7 +93,7 @@ class IterableProkBERTPretrainingDataset(IterableDataset):
         self._current_ds_pointer = int(np.floor(self.ds_offset / self.input_batch_size))
         self._current_data_pointer = 0
         self._fetch_new_data()
-        self._global_iter_steps = 0
+        self._global_iter_steps = 0 # type: ignore[no-redef]
         return self
 
     def __next__(self) -> torch.Tensor:
@@ -137,6 +137,8 @@ class IterableProkBERTPretrainingDataset(IterableDataset):
                 threes_column = torch.full((data.shape[0], 1), 3, dtype=self.default_dtype)
                 data = torch.cat((data, threes_column), dim=1)
             return data
+        else:
+            raise TypeError("Index must be an integer or a slice.")
 
 
 class ProkBERTPretrainingDatasetPT(Dataset):
@@ -172,8 +174,8 @@ class ProkBERTPretrainingHDFDataset(Dataset):
         logging.info(f'Loading and converting file {hdf_file_path}')
         if self.dataset_file['training_data']['X'].dtype == 'uint16':
             #print('Its an uint dataset converting first')
-            self.dataset = np.array(self.dataset_file['training_data']['X']).astype(np.int32)
-            self.dataset = torch.tensor(self.dataset, dtype = self.default_dtype)
+            dataset = np.array(self.dataset_file['training_data']['X']).astype(np.int32)
+            self.dataset = torch.tensor(dataset, dtype = self.default_dtype)
 
         else:
             self.dataset = torch.tensor(np.array(self.dataset_file['training_data']['X']), dtype = self.default_dtype)

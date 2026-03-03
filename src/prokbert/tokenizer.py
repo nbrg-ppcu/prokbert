@@ -1,4 +1,4 @@
-from typing import List, Optional, Tuple, Dict, Set
+from typing import Any, List, Optional, Tuple, Dict, Set, Union
 
 import os
 import json
@@ -163,11 +163,10 @@ class LCATokenizer(PreTrainedTokenizer):
             operation_space (str): Defines operation mode ('kmer' or 'sequence').
             kwargs: Additional arguments for PreTrainedTokenizer.
         """
-        # Load vocabulary directly from the vocab file
-        self.config = {}
+        # load vocabulary directly from the vocab file
+        self.config: Dict[str, Any] = {}
         resolved_vocab_file = resolve_vocab_file(vocab_file, kmer)
         self.vocab = load_vocab(resolved_vocab_file)
-        #self.vocab = load_vocab(vocab_file)
         self.id2token = {v: k for k, v in self.vocab.items()}
         self.kmer = kmer
         self.shift = shift
@@ -177,7 +176,7 @@ class LCATokenizer(PreTrainedTokenizer):
         self.config["shift"] = shift
         self.config["operation_space"] = operation_space
 
-        # Special tokens
+        # special tokens
         kwargs.setdefault("cls_token", "[CLS]")
         kwargs.setdefault("sep_token", "[SEP]")
         kwargs.setdefault("pad_token", "[PAD]")
@@ -394,18 +393,21 @@ class LCATokenizer(PreTrainedTokenizer):
         """
         return len(self.vocab)
 
-    def save_pretrained(self, save_directory: str, **kwargs):
-        """
-        Save the tokenizer configuration and vocabulary to a directory.
+    def save_pretrained(
+            self,
+            save_directory: Union[str, os.PathLike],
+            legacy_format: Optional[bool] = None,
+            filename_prefix: Optional[str] = None,
+            push_to_hub: bool = False,
+            **kwargs,
+        ) -> tuple[str, ...]:
+        # overwrite the base `save_pretrained` method to ensure
+        # that custom tokenizer parameters are also saved.
 
-        Args:
-            save_directory (str): Directory to save the tokenizer files.
-            kwargs: Additional arguments for saving.
-        """
         if not os.path.exists(save_directory):
             os.makedirs(save_directory)
 
-        super().save_pretrained(save_directory, **kwargs)
+        save_files = super().save_pretrained(save_directory, legacy_format, filename_prefix, push_to_hub, **kwargs)
 
         tokenizer_config_path = os.path.join(save_directory, "tokenizer_config.json")
 
@@ -418,7 +420,8 @@ class LCATokenizer(PreTrainedTokenizer):
         tokenizer_config["kmer"] = self.kmer
         tokenizer_config["shift"] = self.shift
         tokenizer_config["operation_space"] = self.operation_space
-        # Save the updated configuration
+
         with open(tokenizer_config_path, "w", encoding="utf-8") as f:
             json.dump(tokenizer_config, f, indent=2)
 
+        return save_files
