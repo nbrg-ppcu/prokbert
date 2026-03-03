@@ -1372,7 +1372,7 @@ class CurricularFace(nn.Module):
         self.sin_m = math.sin(m)
         self.threshold = math.cos(math.pi - m)
         self.mm = math.sin(math.pi - m) * m
-        self.kernel = Parameter(torch.Tensor(in_features, out_features))
+        self.kernel = nn.Parameter(torch.Tensor(in_features, out_features))
         self.register_buffer('t', torch.zeros(1))
 
     def forward(self, embeddings, label):

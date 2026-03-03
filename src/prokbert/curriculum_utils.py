@@ -115,6 +115,39 @@ def plot_umap_embeddings(
 
     return embeddings
 
+def get_embedding(model, dataset, data_collator, device, batch_size=128):
+    """
+    """
+    print("Geting embeddings")
+    dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=False, collate_fn=data_collator)
+
+    embeddings = []
+    model.eval()
+    for batch in tqdm(dataloader):
+        batch = {k: v.to(device) for k, v in batch.items() if k in ("input_ids", "attention_mask")}
+        with torch.no_grad():
+            out = model(**batch)
+
+            # Robust extraction of [B, D] embeddings
+            if torch.is_tensor(out):
+                emb = out
+            elif isinstance(out, (tuple, list)) and len(out) > 0 and torch.is_tensor(out[0]):
+                emb = out[0]
+            elif hasattr(out, "pooler_output") and torch.is_tensor(out.pooler_output):
+                emb = out.pooler_output
+            elif hasattr(out, "last_hidden_state") and torch.is_tensor(out.last_hidden_state):
+                emb = out.last_hidden_state[:, 0, :]  # CLS token
+            else:
+                raise TypeError(
+                    "Model output type not supported for embedding extraction. "
+                    "Expected tensor / (tensor, ...) / pooler_output / last_hidden_state."
+                )
+
+            embedding_batch = emb.detach().cpu().float().numpy()
+        embeddings.append(embedding_batch)
+    embeddings = np.concatenate(embeddings, axis=0)
+    return embeddings
+
 def compute_umap_for_dataset(
     model,
     dataset,
