@@ -1,4 +1,4 @@
-from typing import Callable
+from typing import Callable, Optional, Dict, Union
 
 import os
 import re
@@ -130,7 +130,7 @@ class TrainingHelper:
     # Separator used for constructing model name strings.
     parameter_group_sep = '___'
 
-    def __init__(self, excel_path: str = None):
+    def __init__(self, excel_path: Optional[str] = None):
         """
         Initialize the helper by loading model and training defaults databases.
 
@@ -311,7 +311,7 @@ class TrainingHelper:
         if len(parts) < 3:
             raise ValueError("Model name must contain at least prefix, short name, and dataset.")
 
-        result = {
+        result: Dict[str, Union[str, int, float]] = {
             "prefix": parts[0],
             "base_model": parts[1],
             "task": parts[2],

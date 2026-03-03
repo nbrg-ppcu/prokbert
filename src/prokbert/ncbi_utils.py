@@ -1,4 +1,4 @@
-from typing import List
+from typing import List, Optional
 
 import re
 import unicodedata
@@ -6,7 +6,7 @@ import unicodedata
 import pandas as pd
 
 
-def _slugify(s: str, *, max_len: int = 40) -> str:
+def _slugify(s: Optional[str], *, max_len: int = 40) -> str:
     """
     Convert an arbitrary string into a safe, compact, ASCII identifier.
 
