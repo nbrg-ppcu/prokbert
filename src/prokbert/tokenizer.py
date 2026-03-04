@@ -83,7 +83,7 @@ def resolve_vocab_file(vocab_file: Optional[str], kmer) -> str:
     # Attempt 1: Check if prokbert is installed
     try:
         import prokbert
-        package_dir = os.path.dirname(os.path.dirname(os.path.dirname(prokbert.__file__)))
+        package_dir = os.path.dirname(prokbert.__file__)
         vocab_path = os.path.join(package_dir, 'data/prokbert_vocabs/', f'prokbert-base-dna{kmer}', 'vocab.txt')
 
         print(vocab_path)
