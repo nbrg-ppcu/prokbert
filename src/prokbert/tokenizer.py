@@ -53,7 +53,6 @@ def generate_kmers(abc: Set[str], k: int) -> List[str]:
     return [''.join(p) for p in product(abc, repeat=k)]
 
 
-# Utility function to load vocabulary from a file
 def load_vocab(vocab_file):
     """Loads a vocabulary file into a dictionary."""
     vocab = collections.OrderedDict()
@@ -83,9 +82,6 @@ def resolve_vocab_file(vocab_file: Optional[str], kmer) -> str:
 
     package_root_dir = pathlib.Path(__file__).parent
     vocab_file_path = package_root_dir / f'vocabs/prokbert-base-dna{kmer}' / 'vocab.txt'
-
-    print(f"Package dir: {package_root_dir}")
-    print("Vocabfile", vocab_file_path)
 
     if not vocab_file_path.exists():
         raise FileNotFoundError(
