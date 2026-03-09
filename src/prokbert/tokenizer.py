@@ -2,6 +2,7 @@ from typing import Any, List, Optional, Tuple, Dict, Set, Union
 
 import os
 import json
+import pathlib
 import collections
 from copy import deepcopy
 from itertools import product
@@ -52,7 +53,6 @@ def generate_kmers(abc: Set[str], k: int) -> List[str]:
     return [''.join(p) for p in product(abc, repeat=k)]
 
 
-# Utility function to load vocabulary from a file
 def load_vocab(vocab_file):
     """Loads a vocabulary file into a dictionary."""
     vocab = collections.OrderedDict()
@@ -80,38 +80,16 @@ def resolve_vocab_file(vocab_file: Optional[str], kmer) -> str:
     if vocab_file and os.path.exists(vocab_file):
         return vocab_file
 
-    # Attempt 1: Check if prokbert is installed
-    try:
-        import prokbert
-        package_dir = os.path.dirname(prokbert.__file__)
-        vocab_path = os.path.join(package_dir, 'data/prokbert_vocabs/', f'prokbert-base-dna{kmer}', 'vocab.txt')
+    package_root_dir = pathlib.Path(__file__).parent
+    vocab_file_path = package_root_dir / f'vocabs/prokbert-base-dna{kmer}' / 'vocab.txt'
 
-        print(vocab_path)
-
-
-        if os.path.exists(vocab_path):
-            logger.info(f"Loaded vocab file from installed prokbert package: {vocab_path}")
-            return vocab_path
-    except ImportError:
-        logger.info("Prokbert package not installed, proceeding to download vocab.txt.")
-
-    # Attempt 2: Download from GitHub repository
-    github_url = "https://raw.githubusercontent.com/username/prokbert/main/vocab.txt"
-    temp_vocab_path = os.path.join(os.getcwd(), "vocab.txt")
-    try:
-        import requests
-
-        response = requests.get(github_url, timeout=10)
-        response.raise_for_status()  # Raise an error for HTTP failures
-        with open(temp_vocab_path, "w", encoding="utf-8") as f:
-            f.write(response.text)
-        logger.info(f"Downloaded vocab.txt from GitHub to: {temp_vocab_path}")
-        return temp_vocab_path
-    except requests.RequestException as e:
+    if not vocab_file_path.exists():
         raise FileNotFoundError(
-            "Could not find or download vocab.txt. Ensure prokbert is installed or "
-            "provide a valid vocab file path. Error: {e}"
-        ) from e
+            f"Unable to find vocab file at: {vocab_file_path}. "
+            "Please ensure the prokbert package is correctly installed or "
+            "provide a valid vocab file path."
+        )
+    return str(vocab_file_path)
 
 
 class LCATokenizer(PreTrainedTokenizer):
@@ -140,10 +118,6 @@ class LCATokenizer(PreTrainedTokenizer):
     default_pad_token = "[PAD]"
     default_cls_token = "[CLS]"
     default_mask_token = "[MASK]"
-
-    vocab_files_names = {"vocab_file": "vocab.txt"}
-
-
 
     def __init__(
         self,

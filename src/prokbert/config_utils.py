@@ -393,7 +393,7 @@ class SeqConfig(BaseConfig):
         vocabfile=tokenization_params['vocabfile']
         act_kmer = tokenization_params['kmer']
         if vocabfile=='auto':
-            vocabfile_path = os.path.join(self.current_path, 'data/prokbert_vocabs/', f'prokbert-base-dna{act_kmer}', 'vocab.txt')
+            vocabfile_path = os.path.join(self.current_path, 'vocabs/', f'prokbert-base-dna{act_kmer}', 'vocab.txt')
             tokenization_params['vocabfile'] = vocabfile_path
         else:
             vocabfile_path = vocabfile
