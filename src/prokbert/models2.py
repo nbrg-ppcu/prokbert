@@ -26,18 +26,6 @@ else:
 logger = logging.get_logger(__name__)
 
 
-VOCAB_FILES_NAMES = {"vocab_file": "vocab.txt"}
-
-# Define the mapping for pretrained vocabulary files
-PRETRAINED_VOCAB_FILES_MAP = {
-    "vocab_file": {
-        "lca-mini-k6s1": "lca-base-dna6/vocab.txt",
-        "lca-mini-k6s2": "lca-base-dna6/vocab.txt",
-        "lca-mini-k1s1": "lca-base-dna1/vocab.txt",
-    }
-}
-
-
 def l2_norm(input, axis=1, epsilon=1e-12):
     norm = torch.norm(input, 2, axis, True)
     norm = torch.clamp(norm, min=epsilon)  # Avoid zero division
