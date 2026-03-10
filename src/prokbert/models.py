@@ -168,6 +168,73 @@ def find_pruneable_heads_and_indices(
 
 logger = logging.get_logger(__name__)
 
+def load_tf_weights_in_megatron_bert(model, config, tf_checkpoint_path):
+    """Load tf checkpoints in a pytorch model."""
+    try:
+        import re
+
+        import numpy as np
+        import tensorflow as tf
+    except ImportError:
+        logger.error(
+            "Loading a TensorFlow model in PyTorch, requires TensorFlow to be installed. Please see "
+            "https://www.tensorflow.org/install/ for installation instructions."
+        )
+        raise
+    tf_path = os.path.abspath(tf_checkpoint_path)
+    logger.info(f"Converting TensorFlow checkpoint from {tf_path}")
+    # Load weights from TF model
+    init_vars = tf.train.list_variables(tf_path)
+    names = []
+    arrays = []
+    for name, shape in init_vars:
+        logger.info(f"Loading TF weight {name} with shape {shape}")
+        array = tf.train.load_variable(tf_path, name)
+        names.append(name)
+        arrays.append(array)
+
+    for name, array in zip(names, arrays):
+        name = name.split("/")
+        # adam_v and adam_m are variables used in AdamWeightDecayOptimizer to calculated m and v
+        # which are not required for using pretrained model
+        if any(
+            n in ["adam_v", "adam_m", "AdamWeightDecayOptimizer", "AdamWeightDecayOptimizer_1", "global_step"]
+            for n in name
+        ):
+            logger.info(f"Skipping {'/'.join(name)}")
+            continue
+        pointer = model
+        for m_name in name:
+            if re.fullmatch(r"[A-Za-z]+_\d+", m_name):
+                scope_names = re.split(r"_(\d+)", m_name)
+            else:
+                scope_names = [m_name]
+            if scope_names[0] == "kernel" or scope_names[0] == "gamma":
+                pointer = getattr(pointer, "weight")
+            elif scope_names[0] == "output_bias" or scope_names[0] == "beta":
+                pointer = getattr(pointer, "bias")
+            elif scope_names[0] == "output_weights":
+                pointer = getattr(pointer, "weight")
+            elif scope_names[0] == "squad":
+                pointer = getattr(pointer, "classifier")
+            else:
+                try:
+                    pointer = getattr(pointer, scope_names[0])
+                except AttributeError:
+                    logger.info(f"Skipping {'/'.join(name)}")
+                    continue
+            if len(scope_names) >= 2:
+                num = int(scope_names[1])
+                pointer = pointer[num]
+        if m_name[-11:] == "_embeddings":
+            pointer = getattr(pointer, "weight")
+        elif m_name == "kernel":
+            array = np.transpose(array)
+        if pointer.shape != array.shape:
+            raise ValueError(f"Pointer shape {pointer.shape} and array shape {array.shape} mismatched")
+        logger.info(f"Initialize PyTorch weight {name}")
+        pointer.data = torch.from_numpy(array)
+    return model
 
 
 
@@ -256,6 +323,8 @@ class MegatronBertConfig(PretrainedConfig):
         pad_token_id=0,
         position_embedding_type="absolute",
         use_cache=True,
+        is_decoder=False,
+        add_cross_attention=False,
         **kwargs,
     ):
         super().__init__(pad_token_id=pad_token_id, **kwargs)
@@ -274,6 +343,8 @@ class MegatronBertConfig(PretrainedConfig):
         self.layer_norm_eps = layer_norm_eps
         self.position_embedding_type = position_embedding_type
         self.use_cache = use_cache
+        self.is_decoder = is_decoder
+        self.add_cross_attention = add_cross_attention
 
 
 
@@ -811,7 +882,7 @@ class MegatronBertOnlyMLMHead(nn.Module):
         prediction_scores = self.predictions(sequence_output)
         return prediction_scores
 
-@auto_docstring
+#@auto_docstring
 class MegatronBertPreTrainedModel(PreTrainedModel):
     config: MegatronBertConfig
     load_tf_weights = load_tf_weights_in_megatron_bert
@@ -832,7 +903,7 @@ class MegatronBertPreTrainedModel(PreTrainedModel):
         elif isinstance(module, MegatronBertLMPredictionHead):
             module.bias.data.zero_()
 
-@auto_docstring
+#@auto_docstring
 class MegatronBertModel(MegatronBertPreTrainedModel):
     """
 
@@ -876,7 +947,7 @@ class MegatronBertModel(MegatronBertPreTrainedModel):
         for layer, heads in heads_to_prune.items():
             self.encoder.layer[layer].attention.prune_heads(heads)
 
-    @auto_docstring
+    #@auto_docstring
     def forward(
         self,
         input_ids: Optional[torch.LongTensor] = None,
@@ -951,7 +1022,7 @@ class MegatronBertModel(MegatronBertPreTrainedModel):
         # attention_probs has shape bsz x n_heads x N x N
         # input head_mask has shape [num_heads] or [num_hidden_layers x num_heads]
         # and head_mask is converted to shape [num_hidden_layers x batch x num_heads x seq_length x seq_length]
-        head_mask = self.get_head_mask(head_mask, self.config.num_hidden_layers)
+        # head_mask = self.get_head_mask(head_mask, self.config.num_hidden_layers)
 
         embedding_output = self.embeddings(
             input_ids=input_ids,
@@ -963,7 +1034,7 @@ class MegatronBertModel(MegatronBertPreTrainedModel):
         encoder_outputs = self.encoder(
             embedding_output,
             attention_mask=extended_attention_mask,
-            head_mask=head_mask,
+            # head_mask=head_mask,
             encoder_hidden_states=encoder_hidden_states,
             encoder_attention_mask=encoder_extended_attention_mask,
             past_key_values=past_key_values,
@@ -996,7 +1067,7 @@ class MegatronBertModel(MegatronBertPreTrainedModel):
     """
 )
 
-@auto_docstring
+#@auto_docstring
 class MegatronBertForMaskedLM(MegatronBertPreTrainedModel):
     _tied_weights_keys = ["cls.predictions.decoder"]
 
@@ -1022,7 +1093,7 @@ class MegatronBertForMaskedLM(MegatronBertPreTrainedModel):
         self.cls.predictions.decoder = new_embeddings
         self.cls.predictions.bias = new_embeddings.bias
 
-    @auto_docstring
+    #@auto_docstring
     def forward(
         self,
         input_ids: Optional[torch.LongTensor] = None,
