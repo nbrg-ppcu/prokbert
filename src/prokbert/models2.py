@@ -1,4 +1,4 @@
-from typing import Optional, Tuple, Union, Dict, Literal
+from typing import Optional, Tuple, Union, Dict, Literal, Callable
 
 import math
 from contextlib import nullcontext
@@ -9,7 +9,7 @@ import torch.nn.functional as F
 from transformers import PreTrainedModel
 from transformers.utils import logging
 from transformers.activations import ACT2FN
-from transformers.modeling_rope_utils import ROPE_INIT_FUNCTIONS
+from transformers.modeling_rope_utils import ROPE_INIT_FUNCTIONS, RopeParameters
 from transformers.configuration_utils import PretrainedConfig
 from transformers.modeling_attn_mask_utils import _prepare_4d_attention_mask
 from transformers.utils.doc import add_code_sample_docstrings, add_start_docstrings
@@ -24,18 +24,6 @@ else:
     RotaryEmbedding = object
 
 logger = logging.get_logger(__name__)
-
-
-VOCAB_FILES_NAMES = {"vocab_file": "vocab.txt"}
-
-# Define the mapping for pretrained vocabulary files
-PRETRAINED_VOCAB_FILES_MAP = {
-    "vocab_file": {
-        "lca-mini-k6s1": "lca-base-dna6/vocab.txt",
-        "lca-mini-k6s2": "lca-base-dna6/vocab.txt",
-        "lca-mini-k1s1": "lca-base-dna1/vocab.txt",
-    }
-}
 
 
 def l2_norm(input, axis=1, epsilon=1e-12):
@@ -91,6 +79,9 @@ class ProkBertConfig(PretrainedConfig):
             Classification token id.
         sep_token_id (int, optional, defaults to 50282):
             Separation token id.
+        rope_parameters: (RopeParameters or dict, optional):
+            Parameters for the RoPE positional embeddings.
+            If not provided, default RoPE parameters will be computed based on the config.
         global_rope_theta (float, optional, defaults to 160000.0):
             Base period for the global rotary positional embeddings.
         attention_bias (bool, optional, defaults to False):
@@ -152,13 +143,13 @@ class ProkBertConfig(PretrainedConfig):
         bos_token_id: int = 2,
         cls_token_id: int = 2,
         sep_token_id: int = 3,
+        rope_parameters: RopeParameters | dict | None = None,
         global_rope_theta: float = 160000.0,
         attention_bias: bool = False,
         attention_dropout: float = 0.0,
         global_attn_every_n_layers: int = 1,  # Use global attention in every layer.
         local_attention: int = 256,
         local_rope_theta: float = 10000.0,
-        rope_theta: Optional[float] = None,  # will be defined later
         embedding_dropout: float = 0.0,
         mlp_bias: bool = False,
         mlp_dropout: float = 0.0,
@@ -194,6 +185,7 @@ class ProkBertConfig(PretrainedConfig):
         self.initializer_cutoff_factor = initializer_cutoff_factor
         self.norm_eps = norm_eps
         self.norm_bias = norm_bias
+        self.rope_parameters = rope_parameters
         self.global_rope_theta = global_rope_theta
         self.attention_bias = attention_bias
         self.attention_dropout = attention_dropout
@@ -216,12 +208,14 @@ class ProkBertConfig(PretrainedConfig):
         self.repad_logits_with_grad = repad_logits_with_grad
         self.norm_type = norm_type
         self.num_labels = num_labels
-        self.rope_theta = rope_theta
 
         if self.classifier_pooling not in ["cls", "mean"]:
             raise ValueError(
                 f'Invalid value for `classifier_pooling`, should be either "cls" or "mean", but is {self.classifier_pooling}.'
             )
+        if not self.rope_parameters:
+            self.rope_parameters = { "rope_type": "default", "rope_theta": global_rope_theta }
+
 
 class ProkBertConfigCurr(ProkBertConfig):
     model_type = "prokbert"
@@ -665,25 +659,52 @@ class ProkBertEmbeddings(nn.Module):
         return hidden_states
 
 
-
-
 class ProkBertRotaryEmbedding(nn.Module):
-    def __init__(self, config: ProkBertConfig, base: float, device: Optional[torch.device] = None):
+    def __init__(self, config: ProkBertConfig, device: Optional[torch.device] = None):
         super().__init__()
-        # BC: "rope_type" was originally "type"
-        if hasattr(config, "rope_scaling") and config.rope_scaling is not None:
-            self.rope_type = config.rope_scaling.get("rope_type", config.rope_scaling.get("type"))
-        else:
-            self.rope_type = "default"
+
         self.max_seq_len_cached = config.max_position_embeddings
         self.original_max_seq_len = config.max_position_embeddings
 
         self.config = config
-        config.rope_theta = base
-        self.rope_init_fn = ROPE_INIT_FUNCTIONS[self.rope_type]
+
+        self.rope_type = config.rope_parameters["rope_type"]
+        self.rope_init_fn: Callable = self.compute_default_rope_parameters
+        if self.rope_type != "default":
+            self.rope_init_fn = ROPE_INIT_FUNCTIONS[self.rope_type]
+
         inv_freq, self.attention_scaling = self.rope_init_fn(config, device)
+
         self.register_buffer("inv_freq", inv_freq, persistent=False)
-        self.original_inv_freq = self.inv_freq
+        self.register_buffer("original_inv_freq", inv_freq.clone(), persistent=False)
+
+    @staticmethod
+    def compute_default_rope_parameters(
+        config: ProkBertConfig,
+        device: Optional["torch.device"] = None,
+        seq_len: Optional[int] = None,
+    ) -> tuple["torch.Tensor", float]:
+        """
+        Computes the inverse frequencies according to the original RoPE implementation
+        Args:
+            config ([`~transformers.PretrainedConfig`]):
+                The model configuration.
+            device (`torch.device`):
+                The device to use for initialization of the inverse frequencies.
+            seq_len (`int`, *optional*):
+                The current sequence length. Unused for this type of RoPE.
+        Returns:
+            Tuple of (`torch.Tensor`, `float`), containing the inverse frequencies for the RoPE embeddings and the
+            post-processing scaling factor applied to the computed cos/sin (unused in this type of RoPE).
+        """
+        base = config.rope_parameters["rope_theta"]
+        dim = getattr(config, "head_dim", None) or config.hidden_size // config.num_attention_heads
+
+        attention_factor = 1.0  # Unused in this type of RoPE
+
+        # Compute the inverse frequencies
+        inv_freq = 1.0 / (base ** (torch.arange(0, dim, 2, dtype=torch.int64).to(device=device, dtype=torch.float) / dim))
+        return inv_freq, attention_factor
 
     def _dynamic_frequency_update(self, position_ids, device):
         """
@@ -779,6 +800,7 @@ class ProkBertAttention(nn.Module):
         if self.local_attention != (-1, -1):
             if config.local_rope_theta is not None:
                 rope_theta = config.local_rope_theta
+                config.rope_parameters["rope_theta"] = rope_theta
             max_position_embeddings = config.local_attention
 
         if config._attn_implementation == "flash_attention_2":
@@ -786,7 +808,7 @@ class ProkBertAttention(nn.Module):
                 dim=self.head_dim, max_seqlen=max_position_embeddings, base=rope_theta
             )
         else:
-            self.rotary_emb = ProkBertRotaryEmbedding(config=config, base=rope_theta)
+            self.rotary_emb = ProkBertRotaryEmbedding(config=config)
 
         self.Wo = nn.Linear(config.hidden_size, config.hidden_size, bias=config.attention_bias)
         self.out_drop = nn.Dropout(config.attention_dropout) if config.attention_dropout > 0.0 else nn.Identity()
