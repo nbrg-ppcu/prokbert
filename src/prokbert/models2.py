@@ -9,12 +9,18 @@ import torch.nn.functional as F
 from transformers import PreTrainedModel
 from transformers.utils import logging
 from transformers.activations import ACT2FN
-from transformers.modeling_rope_utils import ROPE_INIT_FUNCTIONS, RopeParameters
+from transformers.modeling_rope_utils import ROPE_INIT_FUNCTIONS
 from transformers.configuration_utils import PretrainedConfig
 from transformers.modeling_attn_mask_utils import _prepare_4d_attention_mask
 from transformers.utils.doc import add_code_sample_docstrings, add_start_docstrings
 from transformers.utils.import_utils import is_triton_available, is_flash_attn_2_available
 from transformers.modeling_outputs import SequenceClassifierOutput, BaseModelOutput, MaskedLMOutput
+
+try:
+    from transformers.modeling_rope_utils import RopeParameters
+except ImportError:
+    RopeParameters = object
+
 
 if is_flash_attn_2_available():
     from flash_attn.flash_attn_interface import flash_attn_varlen_qkvpacked_func
