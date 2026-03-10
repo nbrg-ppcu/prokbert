@@ -237,6 +237,23 @@ def load_tf_weights_in_megatron_bert(model, config, tf_checkpoint_path):
     return model
 
 
+def _read_state_dict(weights_path: str) -> dict[str, torch.Tensor]:
+    if weights_path.endswith(".safetensors"):
+        from safetensors.torch import load_file as safe_load_file
+        return safe_load_file(weights_path, device="cpu")
+
+    return torch.load(weights_path, map_location="cpu", weights_only=True)
+
+
+def _extract_base_model_state_dict(
+    state_dict: dict[str, torch.Tensor],
+    base_prefix: str = "bert",
+) -> dict[str, torch.Tensor]:
+    prefix = f"{base_prefix}."
+    if any(k.startswith(prefix) for k in state_dict.keys()):
+        return {k[len(prefix):]: v for k, v in state_dict.items() if k.startswith(prefix)}
+    return state_dict
+
 
 class MegatronBertConfig(PretrainedConfig):
     r"""
@@ -917,7 +934,7 @@ class MegatronBertModel(MegatronBertPreTrainedModel):
     `add_cross_attention` set to `True`; an `encoder_hidden_states` is then expected as an input to the forward pass.
     """
 
-    def __init__(self, config, add_pooling_layer=True):
+    def __init__(self, config, add_pooling_layer=False):
         r"""
         add_pooling_layer (bool, *optional*, defaults to `True`):
             Whether to add a pooling layer
@@ -1324,7 +1341,9 @@ class BertForBinaryClassificationWithPooling(nn.Module):
             base_model = MegatronBertModel(config=config)
             model = cls(base_model=base_model)
             model_path = os.path.join(pretrained_model_name_or_path, "pytorch_model.bin")
-            model.load_state_dict(torch.load(model_path, map_location=torch.device('cpu'), weights_only=True))
+            model.load_state_dict(torch.load(model_path, 
+                                             map_location=torch.device('cpu'),
+                                            weights_only=True))
         else:
             # Path is from Hugging Face Hub
             config = kwargs.pop('config', None)
@@ -1361,16 +1380,54 @@ class ProkBertPreTrainedModel(MegatronBertPreTrainedModel):
         if isinstance(module, nn.Linear) and module.bias is not None:
             module.bias.data.zero_()
 
+
 class ProkBertModel(MegatronBertModel):
     config_class = ProkBertConfig
 
     def __init__(self, config: ProkBertConfig, **kwargs):
         if not isinstance(config, ProkBertConfig):
-            raise ValueError(f"Expected `ProkBertConfig`, got {config.__class__.__module__}.{config.__class__.__name__}")
-
+            raise ValueError(
+                f"Expected `ProkBertConfig`, got {config.__class__.__module__}.{config.__class__.__name__}"
+            )
         super().__init__(config, **kwargs)
         self.config = config
-        # One should check if it is a prper prokbert config, if not crafting one.
+
+    @classmethod
+    def from_pretrained(cls, pretrained_model_name_or_path, *model_args, **kwargs):
+        config = kwargs.pop("config", None)
+        add_pooling_layer = kwargs.pop("add_pooling_layer", False)
+
+        # ignored here on purpose; this loader bypasses HF v5 from_pretrained internals
+        kwargs.pop("output_loading_info", None)
+        kwargs.pop("ignore_mismatched_sizes", None)
+        kwargs.pop("state_dict", None)
+
+        if config is None:
+            config = cls.config_class.from_pretrained(pretrained_model_name_or_path, **kwargs)
+
+        model = cls(config, add_pooling_layer=add_pooling_layer)
+
+        weights_path = _resolve_weights_file(pretrained_model_name_or_path)
+        raw_state_dict = _read_state_dict(weights_path)
+
+        # ProkBERT checkpoint is MLM-style; encoder lives under `bert.`
+        state_dict = _extract_base_model_state_dict(raw_state_dict, base_prefix="bert")
+
+        missing, unexpected = model.load_state_dict(state_dict, strict=False)
+
+        allowed_missing = set()
+        if add_pooling_layer:
+            allowed_missing.update({"pooler.dense.weight", "pooler.dense.bias"})
+
+        bad_missing = [k for k in missing if k not in allowed_missing]
+
+        if bad_missing or unexpected:
+            raise RuntimeError(
+                f"Checkpoint mismatch.\nMissing: {bad_missing}\nUnexpected: {unexpected}"
+            )
+
+        model.eval()
+        return model
 
 
 class ProkBertForMaskedLM(MegatronBertForMaskedLM):
