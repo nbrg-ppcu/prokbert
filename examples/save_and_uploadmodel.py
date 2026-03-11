@@ -41,6 +41,20 @@ def register_local_autoclasses():
     AutoModelForMaskedLM.register(ProkBertConfig, ProkBertForMaskedLM, exist_ok=True)
     AutoTokenizer.register(ProkBertConfig, tokenizer_class=LCATokenizer, exist_ok=True)
 
+
+def summarize_weights(model):
+    stats = {}
+    for name, param in model.named_parameters():
+        t = param.detach().cpu()
+        stats[name] = {
+            "shape": tuple(t.shape),
+            "mean": float(t.mean()),
+            "std": float(t.std()),
+            "sum": float(t.sum()),
+        }
+    return stats
+
+
 def main():
     print('Testing the EMBEDDING generation')
     register_local_autoclasses()

@@ -18,6 +18,7 @@ from transformers.modeling_outputs import (
 )
 from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss
 from transformers.modeling_utils import PreTrainedModel
+from transformers.generation import GenerationMixin
 
 try:
     from transformers.cache_utils import Cache, DynamicCache, EncoderDecoderCache
@@ -1270,7 +1271,7 @@ class MegatronBertModel(MegatronBertPreTrainedModel):
 )
 
 #@auto_docstring
-class MegatronBertForMaskedLM(MegatronBertPreTrainedModel):
+class MegatronBertForMaskedLM(MegatronBertPreTrainedModel, GenerationMixin):
     #_tied_weights_keys = ["cls.predictions.decoder"]
     _tied_weights_keys = {
         "cls.predictions.decoder.weight": "bert.embeddings.word_embeddings.weight",
