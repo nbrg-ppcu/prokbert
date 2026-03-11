@@ -16,6 +16,7 @@ from transformers.modeling_outputs import (
     MaskedLMOutput,
     SequenceClassifierOutput,
 )
+from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss
 from transformers.modeling_utils import PreTrainedModel
 
 try:
@@ -86,6 +87,56 @@ except ImportError:  # pragma: no cover - compatibility fallback
 
 
 logger = logging.get_logger(__name__)
+_HF_LOAD_KWARGS = {
+    "cache_dir", "force_download", "local_files_only",
+    "token", "revision", "subfolder", "use_safetensors",
+}
+
+
+def _split_loader_kwargs(kwargs):
+    load_kwargs = {k: kwargs.pop(k) for k in list(kwargs) if k in _HF_LOAD_KWARGS}
+    return load_kwargs, kwargs
+
+class _SafeFromPretrainedMixin:
+    @classmethod
+    def _adapt_state_dict(cls, state_dict):
+        return state_dict
+
+    @classmethod
+    def from_pretrained(cls, pretrained_model_name_or_path, *model_args, **kwargs):
+        output_loading_info = kwargs.pop("output_loading_info", False)
+        state_dict = kwargs.pop("state_dict", None)
+        config = kwargs.pop("config", None)
+
+        load_kwargs, init_kwargs = _split_loader_kwargs(kwargs)
+
+        if config is None:
+            config = cls.config_class.from_pretrained(
+                pretrained_model_name_or_path, **load_kwargs
+            )
+
+        model = cls(config, *model_args, **init_kwargs)
+
+        if state_dict is None:
+            weights_path = _resolve_weights_file(
+                pretrained_model_name_or_path, **load_kwargs
+            )
+            state_dict = _read_state_dict(weights_path)
+
+        state_dict = cls._adapt_state_dict(state_dict)
+        incompatible = model.load_state_dict(state_dict, strict=False)
+
+        if hasattr(model, "tie_weights"):
+            model.tie_weights()
+        model.eval()
+
+        info = {
+            "missing_keys": list(incompatible.missing_keys),
+            "unexpected_keys": list(incompatible.unexpected_keys),
+            "error_msgs": [],
+        }
+        return (model, info) if output_loading_info else model
+
 
 
 def l2_norm(input, axis=1, epsilon=1e-12):
@@ -236,6 +287,25 @@ def load_tf_weights_in_megatron_bert(model, config, tf_checkpoint_path):
         pointer.data = torch.from_numpy(array)
     return model
 
+def _resolve_weights_file(pretrained_model_name_or_path: str) -> str:
+    candidates = ("model.safetensors", "pytorch_model.bin")
+
+    if os.path.isdir(pretrained_model_name_or_path):
+        for name in candidates:
+            path = os.path.join(pretrained_model_name_or_path, name)
+            if os.path.exists(path):
+                return path
+
+    for name in candidates:
+        try:
+            path = cached_file(pretrained_model_name_or_path, name)
+            if path is not None:
+                return path
+        except Exception:
+            pass
+
+    raise FileNotFoundError(f"No checkpoint file found in {pretrained_model_name_or_path}")
+
 
 def _read_state_dict(weights_path: str) -> dict[str, torch.Tensor]:
     if weights_path.endswith(".safetensors"):
@@ -385,6 +455,8 @@ class MegatronBertEmbeddings(nn.Module):
         self.register_buffer(
             "position_ids", torch.arange(config.max_position_embeddings).expand((1, -1)), persistent=False
         )
+
+        
         self.position_embedding_type = getattr(config, "position_embedding_type", "absolute")
 
     def forward(
@@ -1086,7 +1158,11 @@ class MegatronBertModel(MegatronBertPreTrainedModel):
 
 #@auto_docstring
 class MegatronBertForMaskedLM(MegatronBertPreTrainedModel):
-    _tied_weights_keys = ["cls.predictions.decoder"]
+    #_tied_weights_keys = ["cls.predictions.decoder"]
+    _tied_weights_keys = {
+        "cls.predictions.decoder.weight": "bert.embeddings.word_embeddings.weight",
+        "cls.predictions.decoder.bias": "cls.predictions.bias",
+    }
 
     def __init__(self, config):
         super().__init__(config)
@@ -1189,6 +1265,67 @@ class MegatronBertForMaskedLM(MegatronBertPreTrainedModel):
 class ProkBertConfig(MegatronBertConfig):
     model_type = "prokbert"
 
+    # Backward-compatible aliases for old code paths
+    attribute_map = {
+        "num_class_labels": "num_labels",
+        "curricular_num_labels": "num_labels",
+        "classification_dropout_rate": "classifier_dropout",
+    }
+
+    def __init__(
+        self,
+        kmer: int = 6,
+        shift: int = 1,
+        num_labels: int = 2,
+        problem_type: str | None = None,
+        classifier_dropout: float | None = None,
+        classifier_pooling: str = "attention",   # cls | mean | attention
+        classifier_mlp_hidden_size: int | None = None,
+        classifier_head_type: str = "linear",    # linear | mlp | curricular
+        curricular_margin: float = 0.5,
+        curricular_scale: float = 64.0,
+        curricular_embedding_size: int | None = None,
+        **kwargs,
+    ):
+        # legacy aliases from old checkpoints/configs
+        legacy_num_class_labels = kwargs.pop("num_class_labels", None)
+        legacy_curricular_num_labels = kwargs.pop("curricular_num_labels", None)
+        legacy_dropout = kwargs.pop("classification_dropout_rate", None)
+        legacy_proj = kwargs.pop("curriculum_hidden_size", None)
+        kwargs.pop("bert_base_model", None)  # optional: drop as redundant metadata
+
+        if legacy_num_class_labels is not None:
+            num_labels = legacy_num_class_labels
+        if legacy_curricular_num_labels is not None:
+            num_labels = legacy_curricular_num_labels
+        if classifier_dropout is None and legacy_dropout is not None:
+            classifier_dropout = legacy_dropout
+        if curricular_embedding_size is None and legacy_proj not in (None, -1):
+            curricular_embedding_size = legacy_proj
+
+        super().__init__(num_labels=num_labels, problem_type=problem_type, **kwargs)
+
+        self.kmer = kmer
+        self.shift = shift
+
+        self.classifier_dropout = classifier_dropout
+        self.classifier_pooling = classifier_pooling
+        self.classifier_mlp_hidden_size = classifier_mlp_hidden_size
+        self.classifier_head_type = classifier_head_type
+
+        self.curricular_margin = curricular_margin
+        self.curricular_scale = curricular_scale
+        self.curricular_embedding_size = curricular_embedding_size
+
+        if self.classifier_pooling not in {"cls", "mean", "attention"}:
+            raise ValueError(f"Unsupported classifier_pooling={self.classifier_pooling}")
+        if self.classifier_head_type not in {"linear", "mlp", "curricular"}:
+            raise ValueError(f"Unsupported classifier_head_type={self.classifier_head_type}")
+        
+
+class DepredactedProkBertConfig(MegatronBertConfig):
+    model_type = "prokbert"
+
     def __init__(
         self,
         kmer: int = 6,
@@ -1203,7 +1340,7 @@ class ProkBertConfig(MegatronBertConfig):
         self.num_class_labels = num_class_labels
         self.classification_dropout_rate = classification_dropout_rate
 
-class ProkBertConfigCurr(ProkBertConfig):
+class DeprecatedProkBertConfigCurr(ProkBertConfig):
     model_type = "prokbert"
 
     def __init__(
@@ -1224,7 +1361,7 @@ class ProkBertConfigCurr(ProkBertConfig):
         self.curriculum_hidden_size = curriculum_hidden_size
         self.classification_dropout_rate = classification_dropout_rate
 
-class ProkBertClassificationConfig(ProkBertConfig):
+class DeprecatedProkBertClassificationConfig(ProkBertConfig):
     model_type = "prokbert"
     def __init__(
         self,
@@ -1381,7 +1518,7 @@ class ProkBertPreTrainedModel(MegatronBertPreTrainedModel):
             module.bias.data.zero_()
 
 
-class ProkBertModel(MegatronBertModel):
+class ProkBertModel(_SafeFromPretrainedMixin, MegatronBertModel):
     config_class = ProkBertConfig
 
     def __init__(self, config: ProkBertConfig, **kwargs):
@@ -1392,8 +1529,13 @@ class ProkBertModel(MegatronBertModel):
         super().__init__(config, **kwargs)
         self.config = config
 
+
     @classmethod
-    def from_pretrained(cls, pretrained_model_name_or_path, *model_args, **kwargs):
+    def _adapt_state_dict(cls, state_dict):
+        return _extract_base_model_state_dict(state_dict, base_prefix="bert")
+
+    @classmethod
+    def test_from_pretrained(cls, pretrained_model_name_or_path, *model_args, **kwargs):
         config = kwargs.pop("config", None)
         add_pooling_layer = kwargs.pop("add_pooling_layer", False)
 
@@ -1430,7 +1572,7 @@ class ProkBertModel(MegatronBertModel):
         return model
 
 
-class ProkBertForMaskedLM(MegatronBertForMaskedLM):
+class ProkBertForMaskedLM(_SafeFromPretrainedMixin, MegatronBertForMaskedLM):
     config_class = ProkBertConfig
 
     def __init__(self, config: ProkBertConfig, **kwargs):
@@ -1442,7 +1584,7 @@ class ProkBertForMaskedLM(MegatronBertForMaskedLM):
         # One should check if it is a prper prokbert config, if not crafting one.
 
 
-class ProkBertForSequenceClassification(ProkBertPreTrainedModel):
+class ProkBertForSequenceClassification(_SafeFromPretrainedMixin, ProkBertPreTrainedModel):
     config_class = ProkBertConfig
     base_model_prefix = "bert"
 
@@ -1455,7 +1597,6 @@ class ProkBertForSequenceClassification(ProkBertPreTrainedModel):
         self.dropout = nn.Dropout(self.config.classification_dropout_rate)
         self.classifier = nn.Linear(self.config.hidden_size, self.config.num_class_labels)
         self.loss_fct = torch.nn.CrossEntropyLoss()
-
         self.post_init()
 
     def forward(
@@ -1575,8 +1716,8 @@ class CurricularFace(nn.Module):
         output = cos_theta * self.s
         return output, origin_cos * self.s
 
-class ProkBertForCurricularClassification(ProkBertPreTrainedModel):
-    config_class = ProkBertConfigCurr
+class ProkBertForCurricularClassification(_SafeFromPretrainedMixin, ProkBertPreTrainedModel):
+    config_class = ProkBertConfig
     base_model_prefix = "bert"
 
     def __init__(self, config):
@@ -1696,7 +1837,7 @@ class ProkBertForCurricularClassification(ProkBertPreTrainedModel):
 
 
 
-class ProkBertForSequenceClassificationExt(ProkBertPreTrainedModel):
+class ProkBertForSequenceClassificationExt(_SafeFromPretrainedMixin, ProkBertPreTrainedModel):
     """
     Extensions vs. baseline ProkBertForSequenceClassification:
       - Fixes attention-pooling bug by masking PAD positions using attention_mask
