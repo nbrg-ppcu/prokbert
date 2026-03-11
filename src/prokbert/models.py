@@ -152,6 +152,70 @@ def initialize_linear_kaiming(layer: nn.Linear):
             nn.init.zeros_(layer.bias)
 
 
+def get_classifier_dropout(config) -> float:
+    classifier_dropout = getattr(config, "classifier_dropout", None)
+    if classifier_dropout is None:
+        classifier_dropout = getattr(config, "hidden_dropout_prob", 0.0)
+    return float(classifier_dropout)
+
+
+def normalize_pooling_attention_mask(
+    attention_mask: Optional[torch.Tensor],
+) -> Optional[torch.Tensor]:
+    """
+    Return a boolean keep-mask of shape (batch_size, seq_length).
+    Supports:
+      - (B, L) masks with 1/0 or bool
+      - (B, 1, L)
+      - (B, 1, 1, L)
+      - additive masks with 0 for keep and negative values for masked positions
+    """
+    if attention_mask is None:
+        return None
+
+    if attention_mask.dim() == 4:
+        if attention_mask.size(1) == 1 and attention_mask.size(2) == 1:
+            attention_mask = attention_mask[:, 0, 0, :]
+        else:
+            raise ValueError(f"Unexpected 4D attention_mask shape: {tuple(attention_mask.shape)}")
+    elif attention_mask.dim() == 3:
+        if attention_mask.size(1) == 1:
+            attention_mask = attention_mask[:, 0, :]
+        else:
+            raise ValueError(f"Unexpected 3D attention_mask shape: {tuple(attention_mask.shape)}")
+    elif attention_mask.dim() != 2:
+        raise ValueError(f"Unexpected attention_mask shape: {tuple(attention_mask.shape)}")
+
+    if attention_mask.dtype == torch.bool:
+        return attention_mask
+
+    if torch.is_floating_point(attention_mask) and (attention_mask < 0).any():
+        # HF additive masks: 0 means keep, negative means masked
+        return attention_mask == 0
+
+    return attention_mask != 0
+
+
+def masked_attention_pool(
+    sequence_output: torch.Tensor,
+    token_scores: torch.Tensor,
+    attention_mask: Optional[torch.Tensor] = None,
+) -> torch.Tensor:
+    keep_mask = normalize_pooling_attention_mask(attention_mask)
+
+    if keep_mask is not None:
+        empty_rows = keep_mask.sum(dim=1) == 0
+        if empty_rows.any():
+            keep_mask = keep_mask.clone()
+            keep_mask[empty_rows, 0] = True
+
+        token_scores = token_scores.masked_fill(~keep_mask.unsqueeze(-1), float("-inf"))
+
+    weights = torch.softmax(token_scores.float(), dim=1).to(dtype=sequence_output.dtype)
+    pooled_output = torch.sum(weights * sequence_output, dim=1)
+    return pooled_output
+
+
 def apply_chunking_to_forward(forward_fn, chunk_size: int, chunk_dim: int, *input_tensors) -> torch.Tensor:
     """Local copy of the HF utility to reduce cross-version import fragility."""
     if len(input_tensors) == 0:
@@ -1452,6 +1516,117 @@ class ProkBertForMaskedLM(_SafeFromPretrainedMixin, MegatronBertForMaskedLM):
 
 
 class ProkBertForSequenceClassification(_SafeFromPretrainedMixin, ProkBertPreTrainedModel):
+    """
+    Default ProkBERT sequence classifier:
+      - padding-safe masked attention pooling
+      - neutral pooling init (uniform over non-masked tokens at step 0)
+      - simple dropout + linear classifier head
+    """
+    config_class = ProkBertConfig
+    base_model_prefix = "bert"
+
+    def __init__(self, config: ProkBertConfig):
+        super().__init__(config)
+        self.config = config
+        self.num_labels = int(config.num_labels)
+
+        self.bert = ProkBertModel(config, add_pooling_layer=False)
+
+        # Keep the old module name for checkpoint compatibility.
+        self.weighting_layer = nn.Linear(self.config.hidden_size, 1)
+        self.dropout = nn.Dropout(get_classifier_dropout(self.config))
+        self.classifier = nn.Linear(self.config.hidden_size, self.num_labels)
+
+        self.post_init()
+
+        # Neutral pooling init: uniform over valid tokens at the beginning of training.
+        with torch.no_grad():
+            nn.init.zeros_(self.weighting_layer.weight)
+            if self.weighting_layer.bias is not None:
+                nn.init.zeros_(self.weighting_layer.bias)
+
+    def forward(
+        self,
+        input_ids: Optional[torch.LongTensor] = None,
+        attention_mask: Optional[torch.Tensor] = None,
+        token_type_ids: Optional[torch.LongTensor] = None,
+        position_ids: Optional[torch.LongTensor] = None,
+        inputs_embeds: Optional[torch.Tensor] = None,
+        labels: Optional[torch.Tensor] = None,
+        output_attentions: Optional[bool] = None,
+        output_hidden_states: Optional[bool] = None,
+        return_dict: Optional[bool] = None,
+    ) -> Union[Tuple, SequenceClassifierOutput]:
+        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+
+        outputs = self.bert(
+            input_ids,
+            attention_mask=attention_mask,
+            token_type_ids=token_type_ids,
+            position_ids=position_ids,
+            inputs_embeds=inputs_embeds,
+            output_attentions=output_attentions,
+            output_hidden_states=output_hidden_states,
+            return_dict=return_dict,
+        )
+
+        sequence_output = outputs[0]  # (B, L, H)
+
+        token_scores = self.weighting_layer(sequence_output)  # (B, L, 1)
+        pooled_output = masked_attention_pool(
+            sequence_output=sequence_output,
+            token_scores=token_scores,
+            attention_mask=attention_mask,
+        )
+
+        pooled_output = self.dropout(pooled_output)
+        logits = self.classifier(pooled_output)
+
+        loss = None
+        if labels is not None:
+            if self.config.problem_type is None:
+                if self.num_labels == 1:
+                    self.config.problem_type = "regression"
+                elif labels.dtype in (
+                    torch.int8,
+                    torch.int16,
+                    torch.int32,
+                    torch.int64,
+                    torch.long,
+                    torch.uint8,
+                ):
+                    self.config.problem_type = "single_label_classification"
+                else:
+                    self.config.problem_type = "multi_label_classification"
+
+            if self.config.problem_type == "regression":
+                loss_fct = nn.MSELoss()
+                if self.num_labels == 1:
+                    loss = loss_fct(logits.squeeze(), labels.squeeze())
+                else:
+                    loss = loss_fct(logits, labels)
+            elif self.config.problem_type == "single_label_classification":
+                loss_fct = nn.CrossEntropyLoss()
+                loss = loss_fct(logits.view(-1, self.num_labels), labels.view(-1))
+            elif self.config.problem_type == "multi_label_classification":
+                loss_fct = nn.BCEWithLogitsLoss()
+                loss = loss_fct(logits, labels.float())
+            else:
+                raise ValueError(f"Unsupported problem_type: {self.config.problem_type}")
+
+        if not return_dict:
+            output = (logits,) + outputs[2:]
+            return ((loss,) + output) if loss is not None else output
+
+        return SequenceClassifierOutput(
+            loss=loss,
+            logits=logits,
+            hidden_states=getattr(outputs, "hidden_states", None),
+            attentions=getattr(outputs, "attentions", None),
+        )
+    
+
+class DeprProkBertForSequenceClassification(_SafeFromPretrainedMixin, ProkBertPreTrainedModel):
     config_class = ProkBertConfig
     base_model_prefix = "bert"
 
