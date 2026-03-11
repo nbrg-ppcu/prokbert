@@ -127,12 +127,22 @@ class ProkBertConfig(PretrainedConfig):
             Index to ignore for sparse prediction.
         reference_compile (bool, optional):
             Whether to compile model layers for performance (if supported).
+            Argument is deprecated and will be removed in a future version.
         repad_logits_with_grad (bool, optional, defaults to False):
             If True, logits are repadded with gradient tracking.
     """
 
     model_type = "prokbert"
     keys_to_ignore_at_inference = ["past_key_values"]
+
+    def __setattr__(self, name, value):
+        if name == "reference_compile" and value is not None:
+            logger.warning_once(
+                "The `reference_compile` argument is deprecated and will be removed in `transformers v5.2.0`"
+                "Use `torch.compile()` directly on the model instead."
+            )
+            value = None
+        super().__setattr__(name, value)
 
     def __init__(
         self,
@@ -170,12 +180,13 @@ class ProkBertConfig(PretrainedConfig):
         deterministic_flash_attn: bool = False,
         sparse_prediction: bool = False,
         sparse_pred_ignore_index: int = -100,
-        reference_compile: bool = None,
+        reference_compile: bool = False,
         repad_logits_with_grad: bool = False,
         norm_type: str = "rms",
         num_labels: int = 2,
         **kwargs,
     ):
+
         super().__init__(
             pad_token_id=pad_token_id,
             bos_token_id=bos_token_id,
@@ -222,6 +233,12 @@ class ProkBertConfig(PretrainedConfig):
             raise ValueError(
                 f'Invalid value for `classifier_pooling`, should be either "cls" or "mean", but is {self.classifier_pooling}.'
             )
+
+    def to_dict(self):
+        output = super().to_dict()
+        output.pop("reference_compile", None)
+        return output
+
 
 class ProkBertConfigCurr(ProkBertConfig):
     model_type = "prokbert"
@@ -639,12 +656,8 @@ class ProkBertEmbeddings(nn.Module):
             self.norm = nn.LayerNorm(config.hidden_size, eps=config.norm_eps, bias=config.norm_bias)
         self.drop = nn.Dropout(config.embedding_dropout)
 
-    @torch.compile(dynamic=True)
-    def compiled_embeddings(self, input_ids: torch.LongTensor) -> torch.Tensor:
-        return self.drop(self.norm(self.tok_embeddings(input_ids)))
-
     def forward(
-        self, input_ids: torch.LongTensor = None, inputs_embeds: Optional[torch.Tensor] = None
+        self, input_ids: Optional[torch.LongTensor] = None, inputs_embeds: Optional[torch.Tensor] = None
     ) -> torch.Tensor:
         """
         Forward pass for the embeddings layer.
@@ -657,14 +670,8 @@ class ProkBertEmbeddings(nn.Module):
         if inputs_embeds is not None:
             hidden_states = self.drop(self.norm(inputs_embeds))
         else:
-            hidden_states = (
-                self.compiled_embeddings(input_ids)
-                if self.config.reference_compile
-                else self.drop(self.norm(self.tok_embeddings(input_ids)))
-            )
+            hidden_states = self.drop(self.norm(self.tok_embeddings(input_ids)))
         return hidden_states
-
-
 
 
 class ProkBertRotaryEmbedding(nn.Module):
@@ -820,26 +827,6 @@ class ProkBertAttention(nn.Module):
         return (hidden_states,) + attn_outputs[1:]
 
 
-
-class test__ProkBertEncoderLayer(nn.Module):
-    def __init__(self, config: ProkBertConfig, layer_id: Optional[int] = None):
-        super().__init__()
-        self.config = config
-        # For the first layer, use Identity; otherwise, apply LayerNorm.
-        if layer_id == 0:
-            self.attn_norm = nn.Identity()
-        else:
-            if config.norm_type == "rms":
-                self.attn_norm = RMSNorm(config.hidden_size, eps=config.norm_eps, bias=config.norm_bias)
-            else:
-                self.attn_norm = nn.LayerNorm(config.hidden_size, eps=config.norm_eps, bias=config.norm_bias)
-        self.attn = ProkBertAttention(config=config, layer_id=layer_id)
-        if config.norm_type == "rms":
-            self.mlp_norm  = RMSNorm(config.hidden_size, eps=config.norm_eps, bias=config.norm_bias)
-        else:
-            self.mlp_norm = nn.LayerNorm(config.hidden_size, eps=config.norm_eps, bias=config.norm_bias)
-        self.mlp = ProkBertMLP(config)  # Assume you have a ProkBertMLP defined similarly.
-
 class ProkBertEncoderLayer(nn.Module):
     def __init__(self, config: ProkBertConfig, layer_id: Optional[int] = None):
         super().__init__()
@@ -854,13 +841,7 @@ class ProkBertEncoderLayer(nn.Module):
 
         self.attn = ProkBertAttention(config=config, layer_id=layer_id)
 
-        # MLP must exist regardless of norm type
         self.mlp = ProkBertMLP(config)
-
-
-    @torch.compile(dynamic=True)
-    def compiled_mlp(self, hidden_states: torch.Tensor) -> torch.Tensor:
-        return self.mlp(self.mlp_norm(hidden_states))
 
     def forward(
         self,
@@ -883,12 +864,7 @@ class ProkBertEncoderLayer(nn.Module):
         )
         # Residual connection for attention.
         hidden_states = hidden_states + attn_outputs[0]
-        # Apply the MLP block.
-        mlp_output = (
-            self.compiled_mlp(hidden_states)
-            if self.config.reference_compile
-            else self.mlp(self.mlp_norm(hidden_states))
-        )
+        mlp_output = self.mlp(self.mlp_norm(hidden_states))
         hidden_states = hidden_states + mlp_output
 
         return (hidden_states,) + attn_outputs[1:]  # Return additional outputs (e.g. attentions) if provided.
@@ -988,44 +964,8 @@ class ProkBertPreTrainedModel(PreTrainedModel):
             check_device_map=check_device_map,
         )
 
-    def _maybe_set_compile(self):
-        if self.config.reference_compile is False:
-            return
-
-        if hasattr(self, "hf_device_map") and len(self.hf_device_map) > 1:
-            if self.config.reference_compile:
-                logger.warning_once(
-                    "If `accelerate` split the model across devices, `torch.compile` will not work. Falling back to non-compiled mode."
-                )
-            self.config.reference_compile = False
-
-        if self.device.type == "mps":
-            if self.config.reference_compile:
-                logger.warning_once(
-                    "Compiling the model with `torch.compile` and using a `torch.mps` device is not supported. Falling back to non-compiled mode."
-                )
-            self.config.reference_compile = False
-
-        if self.device.type == "cpu":
-            if self.config.reference_compile:
-                logger.warning_once(
-                    "Compiling the model with `torch.compile` and using a `torch.cpu` device is not supported. Falling back to non-compiled mode."
-                )
-            self.config.reference_compile = False
-
-        if self.config.reference_compile is None:
-            self.config.reference_compile = is_triton_available()
-
     def resize_token_embeddings(self, *args, **kwargs):
         model_embeds = super().resize_token_embeddings(*args, **kwargs)
-
-        if self.config.reference_compile in {True, None}:
-            if self.config.reference_compile:
-                logger.warning_once(
-                    "Resizing token embeddings with `torch.compile` is not supported. Falling back to non-compiled mode."
-                )
-            self.config.reference_compile = False
-
         return model_embeds
 
 @add_start_docstrings(
@@ -1088,8 +1028,6 @@ class ProkBertModel(ProkBertPreTrainedModel):
 
         all_hidden_states = () if output_hidden_states else None
         all_self_attentions = () if output_attentions else None
-
-        self._maybe_set_compile()
 
         if input_ids is not None:
             self.warn_if_padding_and_no_attention_mask(input_ids, attention_mask)
@@ -1259,7 +1197,6 @@ class ProkBertForMaskedLM(ProkBertPreTrainedModel):
     def compiled_head(self, output: torch.Tensor) -> torch.Tensor:
         return self.decoder(self.head(output))
 
-    #@add_start_docstrings_to_model_forward(PROK_BERT_INPUTS_DOCSTRING)
     @add_code_sample_docstrings(
         checkpoint=_CHECKPOINT_FOR_DOC,
         output_type=MaskedLMOutput,
@@ -1284,7 +1221,6 @@ class ProkBertForMaskedLM(ProkBertPreTrainedModel):
         **kwargs,
     ) -> Union[Tuple[torch.Tensor], MaskedLMOutput]:
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
-        self._maybe_set_compile()
 
         # For flash attention, unpad the inputs to avoid wasting compute on padding tokens.
         if self.config._attn_implementation == "flash_attention_2":
@@ -1334,11 +1270,7 @@ class ProkBertForMaskedLM(ProkBertPreTrainedModel):
             last_hidden_state = last_hidden_state[mask_tokens]
             labels = labels[mask_tokens]
 
-        logits = (
-            self.compiled_head(last_hidden_state)
-            if self.config.reference_compile
-            else self.decoder(self.head(last_hidden_state))
-        )
+        logits = self.decoder(self.head(last_hidden_state))
 
         loss = None
         if labels is not None:
@@ -1417,9 +1349,6 @@ class ProkBertForSequenceClassification(ProkBertPreTrainedModel):
 
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
-        self._maybe_set_compile()
-
-
         outputs = self.model(
             input_ids=input_ids,
             attention_mask=attention_mask,
@@ -1468,8 +1397,7 @@ class ProkBertForMaskedLM2(ProkBertPreTrainedModel):
         self.config = config
         self.model   = ProkBertModel(config)
         self.head    = ProkBertPredictionHead(config)
-        self.decoder = nn.Linear(config.hidden_size, config.vocab_size,
-                                 bias=config.decoder_bias)
+        self.decoder = nn.Linear(config.hidden_size, config.vocab_size, bias=config.decoder_bias)
 
         # for sparse‐integer masking (legacy)
         self.sparse_prediction       = config.sparse_prediction
@@ -1482,10 +1410,6 @@ class ProkBertForMaskedLM2(ProkBertPreTrainedModel):
 
     def set_output_embeddings(self, new_embeddings: nn.Linear):
         self.decoder = new_embeddings
-
-    @torch.compile(dynamic=True)
-    def compiled_head(self, hidden: torch.Tensor) -> torch.Tensor:
-        return self.decoder(self.head(hidden))
 
     @add_code_sample_docstrings(
         checkpoint=_CHECKPOINT_FOR_DOC,
@@ -1571,12 +1495,8 @@ class ProkBertForMaskedLM2(ProkBertPreTrainedModel):
             sequence_output = flat_hidden[mask_tokens]
             labels = flat_labels[mask_tokens]
 
-        # 4) Project to vocab
-        if self.config.reference_compile:
-            logits = self.compiled_head(sequence_output)
-        else:
-            hidden = self.head(sequence_output)
-            logits = self.decoder(hidden)
+        hidden = self.head(sequence_output)
+        logits = self.decoder(hidden)
 
         loss = None
         V = self.config.vocab_size
