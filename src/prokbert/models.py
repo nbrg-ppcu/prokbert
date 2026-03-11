@@ -351,18 +351,23 @@ def load_tf_weights_in_megatron_bert(model, config, tf_checkpoint_path):
         pointer.data = torch.from_numpy(array)
     return model
 
-def _resolve_weights_file(pretrained_model_name_or_path: str) -> str:
+def _resolve_weights_file(pretrained_model_name_or_path: str, **load_kwargs) -> str:
     candidates = ("model.safetensors", "pytorch_model.bin")
+    subfolder = load_kwargs.get("subfolder")
 
     if os.path.isdir(pretrained_model_name_or_path):
+        base_dir = (
+            os.path.join(pretrained_model_name_or_path, subfolder)
+            if subfolder else pretrained_model_name_or_path
+        )
         for name in candidates:
-            path = os.path.join(pretrained_model_name_or_path, name)
+            path = os.path.join(base_dir, name)
             if os.path.exists(path):
                 return path
 
     for name in candidates:
         try:
-            path = cached_file(pretrained_model_name_or_path, name)
+            path = cached_file(pretrained_model_name_or_path, name, **load_kwargs)
             if path is not None:
                 return path
         except Exception:
@@ -376,7 +381,11 @@ def _read_state_dict(weights_path: str) -> dict[str, torch.Tensor]:
         from safetensors.torch import load_file as safe_load_file
         return safe_load_file(weights_path, device="cpu")
 
-    return torch.load(weights_path, map_location="cpu", weights_only=True)
+    try:
+        return torch.load(weights_path, map_location="cpu", weights_only=True)
+    except TypeError:
+        return torch.load(weights_path, map_location="cpu")
+    
 
 
 def _extract_base_model_state_dict(
@@ -1093,7 +1102,7 @@ class MegatronBertOnlyMLMHead(nn.Module):
 
 #@auto_docstring
 class MegatronBertPreTrainedModel(PreTrainedModel):
-    config: MegatronBertConfig
+    config_class = MegatronBertConfig
     load_tf_weights = load_tf_weights_in_megatron_bert
     base_model_prefix = "bert"
     supports_gradient_checkpointing = True
