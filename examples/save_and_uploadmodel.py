@@ -35,11 +35,24 @@ from prokbert.tokenizer import LCATokenizer
 model_name = "neuralbioinfo/prokbert-mini"
 model_output_folder = '/project/c_evolm/huggingface/prokbert-mini'
 
-def register_local_autoclasses():
+models = [ {'model_name': 'neuralbioinfo/prokbert-mini', 'model_output_folder': '/project/c_evolm/huggingface/prokbert-mini'},
+           {'model_name': 'neuralbioinfo/prokbert-mini-c', 'model_output_folder': '/project/c_evolm/huggingface/prokbert-mini-c'},
+           {'model_name': 'neuralbioinfo/prokbert-mini-long', 'model_output_folder': '/project/c_evolm/huggingface/prokbert-mini-long'}
+]
+
+
+
+def register_local_autoclassesv5():
     AutoConfig.register("prokbert", ProkBertConfig, exist_ok=True)
     AutoModel.register(ProkBertConfig, ProkBertModel, exist_ok=True)
     AutoModelForMaskedLM.register(ProkBertConfig, ProkBertForMaskedLM, exist_ok=True)
     AutoTokenizer.register(ProkBertConfig, tokenizer_class=LCATokenizer, exist_ok=True)
+
+def register_local_autoclasses():
+    AutoConfig.register("prokbert", ProkBertConfig, exist_ok=True)
+    AutoModel.register(ProkBertConfig, ProkBertModel, exist_ok=True)
+    AutoModelForMaskedLM.register(ProkBertConfig, ProkBertForMaskedLM, exist_ok=True)
+    AutoTokenizer.register(ProkBertConfig, slow_tokenizer_class=LCATokenizer, exist_ok=True)
 
 
 def summarize_weights(model):
@@ -58,22 +71,19 @@ def summarize_weights(model):
 def main():
     print('Testing the EMBEDDING generation')
     register_local_autoclasses()
-    model = ProkBertForMaskedLM.from_pretrained(model_name)
-    model.save_pretrained(model_output_folder)
 
-    print(model.config)
+    for model_data in models:
+        model_name = model_data['model_name']
+        model_output_folder = model_data['model_output_folder']
 
-    tokenizer = LCATokenizer(kmer=model.config.kmer, shift=model.config.shift)
-    tokenizer.save_pretrained(model_output_folder)
-    model.config.save_pretrained(model_output_folder)
-
+        model = ProkBertForMaskedLM.from_pretrained(model_name)
+        model.save_pretrained(model_output_folder)
+        print(model.config)
+        tokenizer = LCATokenizer(kmer=model.config.kmer, shift=model.config.shift)
+        tokenizer.save_pretrained(model_output_folder)
+        model.config.save_pretrained(model_output_folder)
 
     #
-
-
-
-    
-
 
 
 

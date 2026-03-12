@@ -19,6 +19,8 @@ from transformers.modeling_outputs import (
 from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss
 from transformers.modeling_utils import PreTrainedModel
 from transformers.generation import GenerationMixin
+from dataclasses import dataclass
+from transformers.utils import ModelOutput
 
 try:
     from transformers.cache_utils import Cache, DynamicCache, EncoderDecoderCache
@@ -94,49 +96,15 @@ _HF_LOAD_KWARGS = {
 }
 
 
-def _split_loader_kwargs(kwargs):
-    load_kwargs = {k: kwargs.pop(k) for k in list(kwargs) if k in _HF_LOAD_KWARGS}
-    return load_kwargs, kwargs
+_HF_CONFIG_LOAD_KWARGS = {
+    "cache_dir",
+    "force_download",
+    "local_files_only",
+    "token",
+    "revision",
+    "subfolder",
+}
 
-class _SafeFromPretrainedMixin:
-    @classmethod
-    def _adapt_state_dict(cls, state_dict):
-        return state_dict
-
-    @classmethod
-    def from_pretrained(cls, pretrained_model_name_or_path, *model_args, **kwargs):
-        output_loading_info = kwargs.pop("output_loading_info", False)
-        state_dict = kwargs.pop("state_dict", None)
-        config = kwargs.pop("config", None)
-
-        load_kwargs, init_kwargs = _split_loader_kwargs(kwargs)
-
-        if config is None:
-            config = cls.config_class.from_pretrained(
-                pretrained_model_name_or_path, **load_kwargs
-            )
-
-        model = cls(config, *model_args, **init_kwargs)
-
-        if state_dict is None:
-            weights_path = _resolve_weights_file(
-                pretrained_model_name_or_path, **load_kwargs
-            )
-            state_dict = _read_state_dict(weights_path)
-
-        state_dict = cls._adapt_state_dict(state_dict)
-        incompatible = model.load_state_dict(state_dict, strict=False)
-
-        if hasattr(model, "tie_weights"):
-            model.tie_weights()
-        model.eval()
-
-        info = {
-            "missing_keys": list(incompatible.missing_keys),
-            "unexpected_keys": list(incompatible.unexpected_keys),
-            "error_msgs": [],
-        }
-        return (model, info) if output_loading_info else model
 
 
 
@@ -352,7 +320,7 @@ def load_tf_weights_in_megatron_bert(model, config, tf_checkpoint_path):
         pointer.data = torch.from_numpy(array)
     return model
 
-def _resolve_weights_file(pretrained_model_name_or_path: str, **load_kwargs) -> str:
+def deprecated_resolve_weights_file(pretrained_model_name_or_path: str, **load_kwargs) -> str:
     candidates = ("model.safetensors", "pytorch_model.bin")
     subfolder = load_kwargs.get("subfolder")
 
@@ -377,7 +345,7 @@ def _resolve_weights_file(pretrained_model_name_or_path: str, **load_kwargs) -> 
     raise FileNotFoundError(f"No checkpoint file found in {pretrained_model_name_or_path}")
 
 
-def _read_state_dict(weights_path: str) -> dict[str, torch.Tensor]:
+def deprecated_read_state_dict(weights_path: str) -> dict[str, torch.Tensor]:
     if weights_path.endswith(".safetensors"):
         from safetensors.torch import load_file as safe_load_file
         return safe_load_file(weights_path, device="cpu")
@@ -388,7 +356,6 @@ def _read_state_dict(weights_path: str) -> dict[str, torch.Tensor]:
         return torch.load(weights_path, map_location="cpu")
     
 
-
 def _extract_base_model_state_dict(
     state_dict: dict[str, torch.Tensor],
     base_prefix: str = "bert",
@@ -397,6 +364,335 @@ def _extract_base_model_state_dict(
     if any(k.startswith(prefix) for k in state_dict.keys()):
         return {k[len(prefix):]: v for k, v in state_dict.items() if k.startswith(prefix)}
     return state_dict
+
+
+def deprecated_split_loader_kwargs(kwargs):
+    load_kwargs = {k: kwargs.pop(k) for k in list(kwargs) if k in _HF_LOAD_KWARGS}
+    return load_kwargs, kwargs
+
+class deprecated_SafeFromPretrainedMixin:
+    @classmethod
+    def _adapt_state_dict(cls, state_dict):
+        return state_dict
+
+    @classmethod
+    def from_pretrained(cls, pretrained_model_name_or_path, *model_args, **kwargs):
+        output_loading_info = kwargs.pop("output_loading_info", False)
+        state_dict = kwargs.pop("state_dict", None)
+        config = kwargs.pop("config", None)
+
+        load_kwargs, init_kwargs = _split_loader_kwargs(kwargs)
+
+        if config is None:
+            config = cls.config_class.from_pretrained(
+                pretrained_model_name_or_path, **load_kwargs
+            )
+
+        model = cls(config, *model_args, **init_kwargs)
+
+        if state_dict is None:
+            weights_path = _resolve_weights_file(
+                pretrained_model_name_or_path, **load_kwargs
+            )
+            state_dict = _read_state_dict(weights_path)
+
+        state_dict = cls._adapt_state_dict(state_dict)
+        incompatible = model.load_state_dict(state_dict, strict=False)
+
+        if hasattr(model, "tie_weights"):
+            model.tie_weights()
+        model.eval()
+
+        info = {
+            "missing_keys": list(incompatible.missing_keys),
+            "unexpected_keys": list(incompatible.unexpected_keys),
+            "error_msgs": [],
+        }
+        return (model, info) if output_loading_info else model
+
+
+
+
+
+def _split_pretrained_kwargs(kwargs):
+    """
+    Split kwargs into:
+      - config/hub loading kwargs
+      - weight file preference kwargs
+      - state-dict reading kwargs
+      - remaining kwargs (config overrides or model __init__ kwargs)
+    """
+    kwargs = dict(kwargs)
+
+    config_load_kwargs = {
+        k: kwargs.pop(k) for k in list(kwargs) if k in _HF_CONFIG_LOAD_KWARGS
+    }
+
+    use_safetensors = kwargs.pop("use_safetensors", None)
+    weights_only = kwargs.pop("weights_only", True)
+
+    return config_load_kwargs, use_safetensors, weights_only, kwargs
+
+
+def _resolve_weights_file(
+    pretrained_model_name_or_path,
+    use_safetensors=None,
+    **load_kwargs,
+) -> str:
+    """
+    Resolve a single weight file path from either a local directory or the Hub.
+
+    use_safetensors:
+      - True  -> require model.safetensors
+      - False -> require pytorch_model.bin
+      - None  -> prefer safetensors, then fall back to bin
+    """
+    pretrained_model_name_or_path = os.fspath(pretrained_model_name_or_path)
+
+    if use_safetensors is True:
+        candidates = ("model.safetensors",)
+    elif use_safetensors is False:
+        candidates = ("pytorch_model.bin",)
+    else:
+        candidates = ("model.safetensors", "pytorch_model.bin")
+
+    subfolder = load_kwargs.get("subfolder")
+
+    if os.path.isdir(pretrained_model_name_or_path):
+        base_dir = (
+            os.path.join(pretrained_model_name_or_path, subfolder)
+            if subfolder
+            else pretrained_model_name_or_path
+        )
+        for name in candidates:
+            path = os.path.join(base_dir, name)
+            if os.path.exists(path):
+                return path
+
+    for name in candidates:
+        try:
+            path = cached_file(pretrained_model_name_or_path, name, **load_kwargs)
+            if path is not None:
+                return path
+        except Exception:
+            pass
+
+    raise FileNotFoundError(
+        f"No checkpoint file found in {pretrained_model_name_or_path!r} "
+        f"(candidates: {', '.join(candidates)})"
+    )
+
+
+def _read_state_dict(weights_path, weights_only: bool = True) -> dict[str, torch.Tensor]:
+    weights_path = os.fspath(weights_path)
+
+    if weights_path.endswith(".safetensors"):
+        from safetensors.torch import load_file as safe_load_file
+        return safe_load_file(weights_path, device="cpu")
+
+    try:
+        return torch.load(weights_path, map_location="cpu", weights_only=weights_only)
+    except TypeError:
+        # Older torch versions do not support weights_only
+        return torch.load(weights_path, map_location="cpu")
+
+
+class _SafeFromPretrainedMixin:
+    """
+    Simplified custom-model loader that preserves the useful HF behavior:
+
+      - if config is None or a path/string:
+          kwargs matching config fields update the config via
+          config_class.from_pretrained(..., return_unused_kwargs=True)
+
+      - remaining kwargs are passed to model __init__
+
+      - supports:
+          output_loading_info
+          state_dict
+          ignore_mismatched_sizes
+          use_safetensors
+          weights_only
+
+    This is still intentionally much simpler than the full HF loader:
+      - no sharded checkpoints
+      - no device_map / offload / low_cpu_mem_usage
+      - no quantized loaders
+      - no tensor parallel / dispatch logic
+    """
+
+    @classmethod
+    def _adapt_state_dict(cls, state_dict):
+        """
+        Hook for subclasses that need to rewrite checkpoint keys before loading.
+        Example: stripping a leading 'bert.' prefix for base-model-only loads.
+        """
+        return state_dict
+
+    @staticmethod
+    def _filter_keys_with_patterns(keys, patterns):
+        if not patterns:
+            return list(keys)
+
+        import re
+
+        compiled = [re.compile(p) if isinstance(p, str) else p for p in patterns]
+        return [k for k in keys if not any(p.search(k) for p in compiled)]
+
+    @classmethod
+    def _resolve_config_and_init_kwargs(
+        cls,
+        pretrained_model_name_or_path,
+        config,
+        config_load_kwargs,
+        other_kwargs,
+    ):
+        """
+        Mirror HF behavior:
+          - config instance: use it directly, pass remaining kwargs to __init__
+          - config path / no config: load config and split overrides via return_unused_kwargs=True
+        """
+        if isinstance(config, PretrainedConfig):
+            return config, other_kwargs
+
+        if config is None:
+            config_source = pretrained_model_name_or_path
+        elif isinstance(config, (str, os.PathLike)):
+            config_source = config
+        else:
+            raise TypeError(
+                "`config` must be None, a path-like object, or an instance of PretrainedConfig"
+            )
+
+        if config_source is None:
+            raise ValueError(
+                "You must provide either `pretrained_model_name_or_path` or `config` "
+                "to load a configuration."
+            )
+
+        config, init_kwargs = cls.config_class.from_pretrained(
+            config_source,
+            return_unused_kwargs=True,
+            **config_load_kwargs,
+            **other_kwargs,
+        )
+        return config, init_kwargs
+
+    @staticmethod
+    def _remove_mismatched_keys(model, state_dict):
+        """
+        Remove keys whose tensor shapes do not match the current model.
+        Returns:
+          filtered_state_dict, mismatched_keys
+        where mismatched_keys is a list of:
+          (key, checkpoint_shape, model_shape)
+        """
+        state_dict = dict(state_dict)
+        model_state = model.state_dict()
+        mismatched_keys = []
+
+        for key in list(state_dict.keys()):
+            if key not in model_state:
+                continue
+
+            loaded_value = state_dict[key]
+            model_value = model_state[key]
+
+            if not isinstance(loaded_value, torch.Tensor):
+                continue
+            if not isinstance(model_value, torch.Tensor):
+                continue
+
+            if tuple(loaded_value.shape) != tuple(model_value.shape):
+                mismatched_keys.append(
+                    (key, tuple(loaded_value.shape), tuple(model_value.shape))
+                )
+                state_dict.pop(key)
+
+        return state_dict, mismatched_keys
+
+    @classmethod
+    def from_pretrained(cls, pretrained_model_name_or_path, *model_args, **kwargs):
+        output_loading_info = kwargs.pop("output_loading_info", False)
+        state_dict = kwargs.pop("state_dict", None)
+        config = kwargs.pop("config", None)
+        ignore_mismatched_sizes = kwargs.pop("ignore_mismatched_sizes", False)
+        strict = kwargs.pop("strict", False)
+
+        config_load_kwargs, use_safetensors, weights_only, other_kwargs = _split_pretrained_kwargs(kwargs)
+
+        # 1) Resolve config and route config overrides correctly
+        config, init_kwargs = cls._resolve_config_and_init_kwargs(
+            pretrained_model_name_or_path=pretrained_model_name_or_path,
+            config=config,
+            config_load_kwargs=config_load_kwargs,
+            other_kwargs=other_kwargs,
+        )
+
+        # 2) Build model
+        model = cls(config, *model_args, **init_kwargs)
+
+        # 3) Read checkpoint if state_dict was not supplied explicitly
+        if state_dict is None:
+            if pretrained_model_name_or_path is None:
+                raise ValueError(
+                    "`pretrained_model_name_or_path` cannot be None when `state_dict` is not provided."
+                )
+
+            weights_path = _resolve_weights_file(
+                pretrained_model_name_or_path,
+                use_safetensors=use_safetensors,
+                **config_load_kwargs,
+            )
+            state_dict = _read_state_dict(
+                weights_path,
+                weights_only=True if weights_only is None else bool(weights_only),
+            )
+
+        if not isinstance(state_dict, dict):
+            raise TypeError(
+                f"`state_dict` must be a dict-like mapping of parameter names to tensors, got {type(state_dict).__name__}"
+            )
+
+        # 4) Allow subclasses to rewrite checkpoint keys
+        state_dict = cls._adapt_state_dict(dict(state_dict))
+
+        # 5) Optionally drop shape-mismatched tensors
+        mismatched_keys = []
+        if ignore_mismatched_sizes:
+            state_dict, mismatched_keys = cls._remove_mismatched_keys(model, state_dict)
+
+        # 6) Load
+        incompatible = model.load_state_dict(state_dict, strict=strict)
+
+        # 7) Re-tie if the model defines tied weights
+        if hasattr(model, "tie_weights"):
+            model.tie_weights()
+
+        model.eval()
+
+        missing_keys = list(incompatible.missing_keys)
+        unexpected_keys = list(incompatible.unexpected_keys)
+
+        # Honor standard HF ignore patterns if the class defines them
+        missing_keys = cls._filter_keys_with_patterns(
+            missing_keys,
+            getattr(model, "_keys_to_ignore_on_load_missing", None),
+        )
+        unexpected_keys = cls._filter_keys_with_patterns(
+            unexpected_keys,
+            getattr(model, "_keys_to_ignore_on_load_unexpected", None),
+        )
+
+        info = {
+            "missing_keys": missing_keys,
+            "unexpected_keys": unexpected_keys,
+            "mismatched_keys": mismatched_keys,
+            "error_msgs": [],
+        }
+
+        return (model, info) if output_loading_info else model
+
 
 
 class MegatronBertConfig(PretrainedConfig):
@@ -1775,6 +2071,15 @@ class DeprProkBertForSequenceClassification(_SafeFromPretrainedMixin, ProkBertPr
             )
             return classification_output
 
+@dataclass
+class CurricularSequenceClassifierOutput(ModelOutput):
+    loss: Optional[torch.FloatTensor] = None
+    logits: Optional[torch.FloatTensor] = None
+    embeddings: Optional[torch.FloatTensor] = None
+    hidden_states: Optional[Tuple[torch.FloatTensor, ...]] = None
+    attentions: Optional[Tuple[torch.FloatTensor, ...]] = None
+
+
 class CurricularFace(nn.Module):
     def __init__(self, in_features, out_features, m=0.5, s=64.0):
         super().__init__()
@@ -1952,6 +2257,8 @@ class ProkBertForCurricularClassification(_SafeFromPretrainedMixin, ProkBertPreT
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
+        return_embeddings: bool = False,
+        normalize_embeddings: bool = True,
     ) -> Union[Tuple, SequenceClassifierOutput]:
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
@@ -1972,6 +2279,9 @@ class ProkBertForCurricularClassification(_SafeFromPretrainedMixin, ProkBertPreT
         pooled_output = self.dropout(pooled_output)
         embeddings = self.linear(pooled_output)
 
+        exported_embeddings = l2_norm(embeddings, axis=1) if normalize_embeddings else embeddings
+
+
         loss = None
         if labels is None:
             logits = self._curricular_inference_logits(embeddings)
@@ -1982,11 +2292,14 @@ class ProkBertForCurricularClassification(_SafeFromPretrainedMixin, ProkBertPreT
 
         if not return_dict:
             output = (logits,) + outputs[2:]
+            if return_embeddings:
+                output = output + (exported_embeddings,)
             return ((loss,) + output) if loss is not None else output
 
-        return SequenceClassifierOutput(
+        return CurricularSequenceClassifierOutput(
             loss=loss,
             logits=logits,
+            embeddings=exported_embeddings if return_embeddings else None,
             hidden_states=getattr(outputs, "hidden_states", None),
             attentions=getattr(outputs, "attentions", None),
         )
