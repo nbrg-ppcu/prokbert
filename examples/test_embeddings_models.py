@@ -46,6 +46,7 @@ def main():
     set_seed(cfg.seed)
 
     model_name_path = cfg.model_name
+    actmodelname = cfg.model_name.split('/')[-1]
 
     tokenizer = AutoTokenizer.from_pretrained(model_name_path, trust_remote_code=True)
     # We are going to use base, encoder model
@@ -149,7 +150,7 @@ def main():
     g.add_legend()
 
     os.makedirs(cfg.output_dir, exist_ok=True)
-    output_path = os.path.join(cfg.output_dir, "umap_embeddings.png")
+    output_path = os.path.join(cfg.output_dir, f"eskapee__umap_embeddings__{actmodelname}.png")
     g.savefig(output_path, dpi=300, bbox_inches="tight")
     print(f"Figure saved to: {output_path}")
 
