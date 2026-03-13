@@ -1,4 +1,8 @@
+"""
+torchrun --nproc_per_node=1 test_curriculum_class.py
 
+
+"""
 
 from transformers import TrainingArguments, Trainer, DataCollatorWithPadding
 from prokbert.sequtils import *
@@ -239,17 +243,17 @@ def main() -> None:
         ],
     )
 
-
-
     training_args = TrainingArguments(
             output_dir='eskapee_example',
-            overwrite_output_dir=False,
             report_to="none",
             logging_steps=20,
             per_device_train_batch_size=train_batch_size,
             per_device_eval_batch_size=eval_batch_size,
             num_train_epochs=num_train_epochs,
             bf16=use_bf16,
+            torch_compile=True,
+            #torch_compile_mode ="max-autotune",
+            ddp_backend='nccl'
         )
 
     trainer = Trainer(
@@ -257,7 +261,6 @@ def main() -> None:
         args=training_args,
         train_dataset=tokenized_train_ds,
         eval_dataset=tokenized_test_ds,
-        tokenizer=tokenizer,
         data_collator=data_collator,
         #compute_metrics=evaluate_embeddings,
         optimizers=(optimizer, None),

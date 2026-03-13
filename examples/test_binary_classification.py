@@ -33,12 +33,8 @@ python test_binary_classification.py \
 {'loss': 0.3634, 'grad_norm': 2.641960620880127, 'learning_rate': 3.82043935052531e-06, 'epoch': 1.19}                                                                                                    
 {'eval_loss': 0.3191009759902954, 'eval_accuracy': 0.875, 'eval_precision': 0.8448087431693989, 'eval_recall': 0.8946759259259259, 'eval_specificity': 0.858, 'eval_f1': 0.8690275435637999, 'eval_balanced_accuracy': 0.876337962962963, 'eval_mcc': 0.7507947783112469, 'eval_runtime': 0.6337, 'eval_samples_per_second': 2941.608, 'eval_steps_per_second': 12.625, 'epoch': 1.2}                               
 {'train_runtime': 214.3947, 'train_samples_per_second': 1248.68, 'train_steps_per_second': 4.884, 'train_loss': 0.4550933997291776, 'epoch': 1.2}                                                         
-
-
 """
-
 from __future__ import annotations
-
 import argparse
 import inspect
 import json
