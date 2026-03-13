@@ -1710,7 +1710,10 @@ class ProkBertConfig(MegatronBertConfig):
         if legacy_num_class_labels is not None:
             num_labels = legacy_num_class_labels
         if legacy_curricular_num_labels is not None:
-            num_labels = legacy_curricular_num_labels
+            num_labels = legacy_curricular_num_labels            
+        loaded_id2label = kwargs.get("id2label")
+        if loaded_id2label is not None:
+            num_labels = len(loaded_id2label)                        
         if classifier_dropout is None and legacy_dropout is not None:
             classifier_dropout = legacy_dropout
         if curricular_embedding_size is None and legacy_proj not in (None, -1):
