@@ -230,6 +230,8 @@ def main() -> None:
     backbone_params = [p for n, p in model.named_parameters() if n.startswith("bert.")]
     head_params = [p for n, p in model.named_parameters() if not n.startswith("bert.")]
 
+    print(model)
+
     optimizer = AdamW(
         [
             {"params": backbone_params, "lr": backbone_lr},
