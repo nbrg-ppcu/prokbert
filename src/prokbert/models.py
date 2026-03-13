@@ -2145,6 +2145,192 @@ class ProkBertForCurricularClassification(_SafeFromPretrainedMixin, ProkBertPreT
     base_model_prefix = "bert"
 
     def __init__(self, config: ProkBertConfig):
+        super().__init__(config)
+        self.config = config
+        self.num_labels = int(config.num_labels)
+
+        self.bert = ProkBertModel(config, add_pooling_layer=False)
+        self.weighting_layer = nn.Linear(self.config.hidden_size, 1)
+        self.dropout = nn.Dropout(get_classifier_dropout(self.config))
+
+        use_projection = self.config.curricular_embedding_size not in (None, -1)
+        proj_dim = self.config.hidden_size if not use_projection else int(self.config.curricular_embedding_size)
+        self.linear = nn.Linear(self.config.hidden_size, proj_dim) if use_projection else nn.Identity()
+
+        self.curricular_face = CurricularFace(
+            in_features=proj_dim,
+            out_features=self.num_labels,
+            m=float(self.config.curricular_margin),
+            s=float(self.config.curricular_scale),
+        )
+        self.loss_fct = nn.CrossEntropyLoss()
+
+        self.post_init()
+
+        with torch.no_grad():
+            nn.init.zeros_(self.weighting_layer.weight)
+            if self.weighting_layer.bias is not None:
+                nn.init.zeros_(self.weighting_layer.bias)
+            if isinstance(self.linear, nn.Linear):
+                initialize_linear_kaiming(self.linear)
+
+    def _pool_sequence_output(
+        self,
+        sequence_output: torch.Tensor,
+        attention_mask: Optional[torch.Tensor],
+    ) -> torch.Tensor:
+        pooling = self.config.classifier_pooling
+
+        if pooling == "cls":
+            return sequence_output[:, 0]
+
+        if pooling == "mean":
+            keep_mask = normalize_pooling_attention_mask(attention_mask)
+            if keep_mask is None:
+                return sequence_output.mean(dim=1)
+
+            empty_rows = keep_mask.sum(dim=1) == 0
+            if empty_rows.any():
+                keep_mask = keep_mask.clone()
+                keep_mask[empty_rows, 0] = True
+
+            mask = keep_mask.unsqueeze(-1).to(dtype=sequence_output.dtype)
+            return (sequence_output * mask).sum(dim=1) / mask.sum(dim=1).clamp(min=1.0)
+
+        if pooling == "attention":
+            token_scores = self.weighting_layer(sequence_output)
+            return masked_attention_pool(
+                sequence_output=sequence_output,
+                token_scores=token_scores,
+                attention_mask=attention_mask,
+            )
+
+        raise ValueError(f"Unsupported classifier_pooling={pooling!r}")
+
+    def _compute_embeddings(
+        self,
+        input_ids: Optional[torch.LongTensor] = None,
+        attention_mask: Optional[torch.Tensor] = None,
+        token_type_ids: Optional[torch.LongTensor] = None,
+        position_ids: Optional[torch.LongTensor] = None,
+        inputs_embeds: Optional[torch.Tensor] = None,
+        output_attentions: Optional[bool] = None,
+        output_hidden_states: Optional[bool] = None,
+        apply_dropout: bool = True,
+    ) -> tuple[torch.Tensor, BaseModelOutputWithPoolingAndCrossAttentions]:
+        outputs = self.bert(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            token_type_ids=token_type_ids,
+            position_ids=position_ids,
+            inputs_embeds=inputs_embeds,
+            output_attentions=output_attentions,
+            output_hidden_states=output_hidden_states,
+            return_dict=True,
+        )
+
+        pooled_output = self._pool_sequence_output(
+            outputs.last_hidden_state,
+            attention_mask,
+        )
+
+        if apply_dropout:
+            pooled_output = self.dropout(pooled_output)
+
+        embeddings = self.linear(pooled_output)
+        return embeddings, outputs
+
+    def encode(
+        self,
+        input_ids: Optional[torch.LongTensor] = None,
+        attention_mask: Optional[torch.Tensor] = None,
+        token_type_ids: Optional[torch.LongTensor] = None,
+        position_ids: Optional[torch.LongTensor] = None,
+        inputs_embeds: Optional[torch.Tensor] = None,
+        normalize: bool = True,
+    ) -> torch.Tensor:
+        # deterministic embedding extraction: no dropout
+        embeddings, _ = self._compute_embeddings(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            token_type_ids=token_type_ids,
+            position_ids=position_ids,
+            inputs_embeds=inputs_embeds,
+            apply_dropout=False,
+        )
+        return l2_norm(embeddings, axis=1) if normalize else embeddings
+
+    def _curricular_inference_logits(self, embeddings: torch.Tensor) -> torch.Tensor:
+        embeddings = l2_norm(embeddings, axis=1)
+        kernel_norm = l2_norm(self.curricular_face.kernel, axis=0)
+        cos_theta = torch.mm(embeddings, kernel_norm).clamp(-1.0, 1.0)
+        return cos_theta * self.curricular_face.s
+
+    def forward(
+        self,
+        input_ids: Optional[torch.LongTensor] = None,
+        attention_mask: Optional[torch.Tensor] = None,
+        token_type_ids: Optional[torch.LongTensor] = None,
+        position_ids: Optional[torch.LongTensor] = None,
+        head_mask: Optional[torch.FloatTensor] = None,  # kept for compatibility
+        inputs_embeds: Optional[torch.FloatTensor] = None,
+        labels: Optional[torch.LongTensor] = None,
+        output_attentions: Optional[bool] = None,
+        output_hidden_states: Optional[bool] = None,
+        return_dict: Optional[bool] = None,
+        return_embeddings: bool = False,
+        normalize_embeddings: bool = True,
+    ) -> Union[Tuple, CurricularSequenceClassifierOutput]:
+        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+
+        embeddings, outputs = self._compute_embeddings(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            token_type_ids=token_type_ids,
+            position_ids=position_ids,
+            inputs_embeds=inputs_embeds,
+            output_attentions=output_attentions,
+            output_hidden_states=output_hidden_states,
+            apply_dropout=self.training,  # dropout only on training path
+        )
+
+        exported_embeddings = None
+        if return_embeddings:
+            exported_embeddings = (
+                l2_norm(embeddings, axis=1) if normalize_embeddings else embeddings
+            )
+
+        loss = None
+        if labels is None:
+            logits = self._curricular_inference_logits(embeddings)
+        else:
+            labels = labels.view(-1).long()
+            logits, _ = self.curricular_face(embeddings, labels)
+            loss = self.loss_fct(logits, labels)
+
+        if not return_dict:
+            out = (logits,)
+            if return_embeddings:
+                out = out + (exported_embeddings,)
+            if output_hidden_states:
+                out = out + (outputs.hidden_states,)
+            if output_attentions:
+                out = out + (outputs.attentions,)
+            return ((loss,) + out) if loss is not None else out
+
+        return CurricularSequenceClassifierOutput(
+            loss=loss,
+            logits=logits,
+            embeddings=exported_embeddings,
+            hidden_states=outputs.hidden_states,
+            attentions=outputs.attentions,
+        )
+
+class V1ProkBertForCurricularClassification(_SafeFromPretrainedMixin, ProkBertPreTrainedModel):
+    config_class = ProkBertConfig
+    base_model_prefix = "bert"
+
+    def __init__(self, config: ProkBertConfig):
         if not isinstance(config, ProkBertConfig):
             raise ValueError(
                 f"Expected `ProkBertConfig`, got {config.__class__.__module__}.{config.__class__.__name__}"
