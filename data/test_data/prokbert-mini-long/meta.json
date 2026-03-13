@@ -1,0 +1,9 @@
+{
+  "model_id": "neuralbioinfo/prokbert-mini-long",
+  "n_sequences": 2,
+  "sequence_lengths": [
+    11,
+    9
+  ],
+  "tensor_file": "base_reference.pt"
+}
