@@ -423,3 +423,4 @@ def evaluate_embeddings(
         random_state=random_state,
     )
     return float(score)
+
