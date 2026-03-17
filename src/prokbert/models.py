@@ -21,6 +21,7 @@ from transformers.modeling_utils import PreTrainedModel
 from transformers.generation import GenerationMixin
 from dataclasses import dataclass
 from transformers.utils import ModelOutput
+from contextlib import nullcontext
 
 try:
     from transformers.cache_utils import Cache, DynamicCache, EncoderDecoderCache
@@ -419,6 +420,17 @@ def _read_state_dict(weights_path, weights_only: bool = True) -> dict[str, torch
         # Older torch versions do not support weights_only
         return torch.load(weights_path, map_location="cpu")
 
+def _autocast_disabled(device_type: str):
+    try:
+        return torch.amp.autocast(device_type=device_type, enabled=False)
+    except (AttributeError, TypeError):
+        # fallback for older torch
+        if device_type == "cuda":
+            return torch.cuda.amp.autocast(enabled=False)
+        if device_type == "cpu" and hasattr(torch, "cpu") and hasattr(torch.cpu, "amp"):
+            return torch.cpu.amp.autocast(enabled=False)
+        return nullcontext()
+    
 
 class _SafeFromPretrainedMixin:
     """
@@ -1834,22 +1846,29 @@ class CurricularFace(nn.Module):
         nn.init.xavier_uniform_(self.kernel)
         self.t.zero_()
 
+    def _cos_theta_fp32(self, embeddings: torch.Tensor) -> torch.Tensor:
+        # keep this head in fp32 even when the outer forward runs under bf16 autocast
+        with _autocast_disabled(embeddings.device.type):
+            embeddings = l2_norm(embeddings.float(), axis=1)
+            kernel_norm = l2_norm(self.kernel.float(), axis=0)
+            cos_theta = torch.mm(embeddings, kernel_norm).clamp(-1.0, 1.0)
+        return cos_theta
+
+    def inference_logits(self, embeddings: torch.Tensor) -> torch.Tensor:
+        return self._cos_theta_fp32(embeddings) * self.s
+
     def forward(self, embeddings: torch.Tensor, label: Optional[torch.LongTensor] = None):
-        embeddings = l2_norm(embeddings, axis=1)
-        kernel_norm = l2_norm(self.kernel, axis=0)
-        cos_theta = torch.mm(embeddings, kernel_norm).clamp(-1.0, 1.0)
+        cos_theta = self._cos_theta_fp32(embeddings)
+        origin_cos = cos_theta.detach().clone()
 
-        with torch.no_grad():
-            origin_cos = cos_theta.clone()
-
-        # Inference path: margin-free cosine logits
+        # inference path: margin-free cosine logits, kept in fp32
         if label is None:
             scaled = cos_theta * self.s
             return scaled, scaled
 
         label = label.view(-1).long()
-        batch_index = torch.arange(embeddings.size(0), device=embeddings.device)
-        target_logit = cos_theta[batch_index, label].view(-1, 1)
+        batch_index = torch.arange(cos_theta.size(0), device=cos_theta.device)
+        target_logit = cos_theta[batch_index, label].unsqueeze(1)
 
         sin_theta = torch.sqrt((1.0 - target_logit.pow(2)).clamp(min=0.0))
         cos_theta_m = target_logit * self.cos_m - sin_theta * self.sin_m
@@ -1862,15 +1881,17 @@ class CurricularFace(nn.Module):
         )
 
         with torch.no_grad():
-            self.t.mul_(0.99).add_(0.01 * target_logit.mean())
+            self.t.mul_(0.99).add_(0.01 * target_logit.mean().to(dtype=self.t.dtype))
 
-        hard_example = cos_theta[mask]
-        cos_theta[mask] = hard_example * (self.t + hard_example)
+        # avoid dtype mismatch and avoid boolean indexed write
+        t = self.t.to(device=cos_theta.device, dtype=cos_theta.dtype)
+        cos_theta = torch.where(mask, cos_theta * (t + cos_theta), cos_theta)
 
-        final_target_logit = final_target_logit.to(dtype=cos_theta.dtype)
-        cos_theta.scatter_(1, label.view(-1, 1), final_target_logit)
+        # out-of-place scatter is usually friendlier to torch.compile than scatter_
+        cos_theta = cos_theta.scatter(1, label.view(-1, 1), final_target_logit)
 
         return cos_theta * self.s, origin_cos * self.s
+    
     
 
 class ProkBertForCurricularClassification(_SafeFromPretrainedMixin, ProkBertPreTrainedModel):
@@ -1993,11 +2014,15 @@ class ProkBertForCurricularClassification(_SafeFromPretrainedMixin, ProkBertPreT
         )
         return l2_norm(embeddings, axis=1) if normalize else embeddings
 
-    def _curricular_inference_logits(self, embeddings: torch.Tensor) -> torch.Tensor:
+    def deprecated_curricular_inference_logits(self, embeddings: torch.Tensor) -> torch.Tensor:
         embeddings = l2_norm(embeddings, axis=1)
         kernel_norm = l2_norm(self.curricular_face.kernel, axis=0)
         cos_theta = torch.mm(embeddings, kernel_norm).clamp(-1.0, 1.0)
         return cos_theta * self.curricular_face.s
+    
+    def _curricular_inference_logits(self, embeddings: torch.Tensor) -> torch.Tensor:
+        return self.curricular_face.inference_logits(embeddings)
+
 
     def forward(
         self,
@@ -2014,6 +2039,7 @@ class ProkBertForCurricularClassification(_SafeFromPretrainedMixin, ProkBertPreT
         return_embeddings: bool = False,
         normalize_embeddings: bool = True,
     ) -> Union[Tuple, CurricularSequenceClassifierOutput]:
+        
         return_dict = return_dict if return_dict is not None else self.config.return_dict
 
         embeddings, outputs = self._compute_embeddings(
