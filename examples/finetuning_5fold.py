@@ -327,6 +327,8 @@ def train_one_fold(
     min_segment_length: int = 50,
     seed: int = 42,
     fp16: bool = False,
+    bf16: bool = False,
+    dataloader_num_workers: int = 2,
     gradient_accumulation_steps: int = 1,
     eval_strategy: str = "epoch",
     save_strategy: str = "epoch",
@@ -397,8 +399,12 @@ def train_one_fold(
         report_to="none",
         seed=seed,
         fp16=fp16,
+        bf16=bf16,
+        dataloader_num_workers=dataloader_num_workers,
         gradient_accumulation_steps=gradient_accumulation_steps,
         save_total_limit=2,
+        torch_compile=False,
+        dataloader_pin_memory=True,
     )
 
     trainer = Trainer(
@@ -521,6 +527,8 @@ def parse_args():
     parser.add_argument("--min_segment_length", type=int, default=50)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--fp16", action="store_true")
+    parser.add_argument("--bf16", action="store_true", help="Use bfloat16 (recommended for A100/H100)")
+    parser.add_argument("--dataloader_num_workers", type=int, default=2)
     parser.add_argument("--gradient_accumulation_steps", type=int, default=1)
     parser.add_argument(
         "--groups",
@@ -549,6 +557,10 @@ def main():
     args = parse_args()
     helper.set_seed(args.seed)
     check_nvidia_gpu()
+
+    # Enable TF32 on Ampere+ GPUs (A100, H100) for faster fp32 math
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cudnn.allow_tf32 = True
 
     os.makedirs(args.output_dir, exist_ok=True)
 
@@ -584,6 +596,8 @@ def main():
             min_segment_length=args.min_segment_length,
             seed=args.seed,
             fp16=args.fp16,
+            bf16=args.bf16,
+            dataloader_num_workers=args.dataloader_num_workers,
             gradient_accumulation_steps=args.gradient_accumulation_steps,
             metric_for_best_model=args.metric_for_best_model,
         )
