@@ -380,7 +380,7 @@ def train_one_fold(
         learning_rate=learning_rate,
         weight_decay=weight_decay,
         warmup_ratio=warmup_ratio,
-        evaluation_strategy=eval_strategy,
+        eval_strategy=eval_strategy,
         save_strategy=save_strategy,
         load_best_model_at_end=load_best_model_at_end,
         metric_for_best_model=metric_for_best_model,
