@@ -103,8 +103,14 @@ _HF_CONFIG_LOAD_KWARGS = {
     "token",
     "revision",
     "subfolder",
+    "proxies",
 }
 
+_HF_NON_MODEL_INIT_KWARGS = {
+    "trust_remote_code",
+    "_from_auto",
+    "adapter_kwargs",
+}
 
 
 
@@ -339,6 +345,9 @@ def _split_pretrained_kwargs(kwargs):
     """
     kwargs = dict(kwargs)
 
+    for k in _HF_NON_MODEL_INIT_KWARGS:
+        kwargs.pop(k, None)
+
     config_load_kwargs = {
         k: kwargs.pop(k) for k in list(kwargs) if k in _HF_CONFIG_LOAD_KWARGS
     }
@@ -347,7 +356,6 @@ def _split_pretrained_kwargs(kwargs):
     weights_only = kwargs.pop("weights_only", True)
 
     return config_load_kwargs, use_safetensors, weights_only, kwargs
-
 
 def _resolve_weights_file(
     pretrained_model_name_or_path,
@@ -1322,7 +1330,7 @@ class MegatronBertModel(MegatronBertPreTrainedModel):
         output_hidden_states = (
             output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
         )
-        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+        return_dict = return_dict if return_dict is not None else self.config.return_dict
 
         if self.config.is_decoder:
             use_cache = use_cache if use_cache is not None else self.config.use_cache
@@ -1473,7 +1481,7 @@ class MegatronBertForMaskedLM(MegatronBertPreTrainedModel, GenerationMixin):
             loss is only computed for the tokens with labels in `[0, ..., config.vocab_size]`
         """
 
-        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+        return_dict = return_dict if return_dict is not None else self.config.return_dict
 
         outputs = self.bert(
             input_ids,
@@ -1728,7 +1736,7 @@ class ProkBertForSequenceClassification(_SafeFromPretrainedMixin, ProkBertPreTra
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
     ) -> Union[Tuple, SequenceClassifierOutput]:
-        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+        return_dict = return_dict if return_dict is not None else self.config.return_dict
 
         outputs = self.bert(
             input_ids,
@@ -2006,7 +2014,7 @@ class ProkBertForCurricularClassification(_SafeFromPretrainedMixin, ProkBertPreT
         return_embeddings: bool = False,
         normalize_embeddings: bool = True,
     ) -> Union[Tuple, CurricularSequenceClassifierOutput]:
-        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+        return_dict = return_dict if return_dict is not None else self.config.return_dict
 
         embeddings, outputs = self._compute_embeddings(
             input_ids=input_ids,
@@ -2153,7 +2161,7 @@ class ProkBertForSequenceClassificationExt(_SafeFromPretrainedMixin, ProkBertPre
         return_dict: Optional[bool] = None,
     ) -> Union[Tuple, SequenceClassifierOutput]:
 
-        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+        return_dict = return_dict if return_dict is not None else self.config.return_dict
 
         outputs = self.bert(
             input_ids,

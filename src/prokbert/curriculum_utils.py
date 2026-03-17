@@ -43,6 +43,8 @@ def _maybe_normalize(embeddings: torch.Tensor, normalize: bool) -> torch.Tensor:
         return embeddings
     return F.normalize(embeddings, p=2, dim=1)
 
+    if hasattr(out, "pooler_output") and torch.is_tensor(out.pooler_output):
+        return _maybe_normalize(out.pooler_output, normalize_embeddings)
 
 def extract_batch_embeddings(
     model: torch.nn.Module,
@@ -336,6 +338,71 @@ def transform_umap(reducer, embeddings: np.ndarray) -> np.ndarray:
 
     return coords
 
+def fit_umap(
+    embeddings: np.ndarray,
+    *,
+    seed: int = 42,
+    umap_n_neighbors: int | None = None,
+    umap_min_dist: float = 0.001,
+    umap_metric: str = "cosine",
+    n_components: int = 2,
+    reducer_factory=None,
+    reducer_kwargs: dict | None = None,
+):
+    """
+    Fit a UMAP reducer and return (reducer, coords).
+    """
+    embeddings = np.asarray(embeddings)
+    if embeddings.ndim != 2:
+        raise ValueError(f"`embeddings` must be 2D, got shape={embeddings.shape}")
+
+    n = embeddings.shape[0]
+    if n == 0:
+        raise ValueError("Cannot fit UMAP on an empty embedding array.")
+
+    if umap_n_neighbors is None:
+        umap_n_neighbors = max(5, int(np.log(max(n, 2))))
+
+    if reducer_factory is None:
+        reducer_factory = umap.UMAP
+
+    reducer_kwargs = {} if reducer_kwargs is None else dict(reducer_kwargs)
+
+    reducer = reducer_factory(
+        random_state=seed,
+        n_neighbors=umap_n_neighbors,
+        min_dist=umap_min_dist,
+        metric=umap_metric,
+        n_components=n_components,
+        **reducer_kwargs,
+    )
+    coords = reducer.fit_transform(embeddings)
+
+    if torch.is_tensor(coords):
+        coords = coords.detach().cpu().numpy()
+    elif hasattr(coords, "get"):  # CuPy / cuML
+        coords = coords.get()
+    else:
+        coords = np.asarray(coords)
+
+    return reducer, coords
+
+
+def transform_umap(reducer, embeddings: np.ndarray) -> np.ndarray:
+    """
+    Project embeddings with an already-fitted reducer.
+    """
+    coords = reducer.transform(embeddings)
+
+    if torch.is_tensor(coords):
+        coords = coords.detach().cpu().numpy()
+    elif hasattr(coords, "get"):
+        coords = coords.get()
+    else:
+        coords = np.asarray(coords)
+
+    return coords
+
 
 def compute_umap_for_dataset(
     model,
@@ -423,3 +490,4 @@ def evaluate_embeddings(
         random_state=random_state,
     )
     return float(score)
+
