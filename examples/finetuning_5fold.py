@@ -4,6 +4,7 @@ ProkBERT 5-Fold Cross-Validation Finetuning Script.
 
 Expects pre-split data organized as:
     data_dir/
+        labels.csv                 <-- genome_id,label,length,source
         fold_0/
             group_A_train.fasta, group_A_val.fasta
             group_B_train.fasta, group_B_val.fasta
@@ -14,14 +15,20 @@ Expects pre-split data organized as:
         fold_4/
             ...
 
-FASTA header format (label after last '|' or after whitespace):
-    >seq_001|1          -> label = 1
-    >seq_001 label=1    -> label = 1
-    >seq_001 1          -> label = 1
+FASTA header format:
+    >NC_049379.1 Vibrio phage pVa5, complete genome
+
+Labels CSV format:
+    genome_id,label,length,source
+    NC_011421,1,132562,Dataset-1_virulent.fasta
+
+The genome_id in the CSV is matched against the FASTA record ID
+(with version suffix like '.1' stripped for matching).
 
 Usage:
     python finetuning_5fold.py \
         --data_dir /path/to/folds \
+        --labels_csv /path/to/labels.csv \
         --model_name neuralbioinfo/prokbert-mini \
         --output_dir ./5fold_results \
         --num_epochs 10 \
@@ -32,10 +39,7 @@ Usage:
 import argparse
 import json
 import os
-import re
 import logging
-from dataclasses import dataclass, field, asdict
-from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
@@ -76,44 +80,54 @@ GROUPS = ["A", "B", "C", "D"]
 # Data loading
 # ---------------------------------------------------------------------------
 
-def parse_label_from_header(header: str) -> int:
-    """Extract an integer label from a FASTA header.
+def load_labels_csv(labels_csv_path: str) -> Dict[str, int]:
+    """Load labels CSV and return a dict mapping genome_id -> label (int).
 
-    Supports formats:
-        >seq_id|<label>
-        >seq_id label=<label>
-        >seq_id <label>
+    CSV format: genome_id,label,length,source
+    Example:    NC_011421,1,132562,Dataset-1_virulent.fasta
     """
-    # Try pipe-separated: last field
-    if "|" in header:
-        try:
-            return int(header.rsplit("|", 1)[-1].strip())
-        except ValueError:
-            pass
+    df = pd.read_csv(labels_csv_path)
+    if "genome_id" not in df.columns or "label" not in df.columns:
+        raise ValueError(
+            f"Labels CSV must have 'genome_id' and 'label' columns. "
+            f"Found: {list(df.columns)}"
+        )
+    label_map = dict(zip(df["genome_id"].astype(str), df["label"].astype(int)))
+    logger.info("Loaded %d labels from %s", len(label_map), labels_csv_path)
+    return label_map
 
-    # Try key=value pattern
-    m = re.search(r"label[=:\s]+(\d+)", header, re.IGNORECASE)
-    if m:
-        return int(m.group(1))
 
-    # Try last token
-    parts = header.split()
-    if len(parts) >= 2:
-        try:
-            return int(parts[-1])
-        except ValueError:
-            pass
+def strip_version(accession: str) -> str:
+    """Remove version suffix from accession, e.g. 'NC_049379.1' -> 'NC_049379'."""
+    return accession.rsplit(".", 1)[0] if "." in accession else accession
 
-    raise ValueError(f"Cannot parse label from FASTA header: '{header}'")
+
+def lookup_label(record_id: str, label_map: Dict[str, int]) -> int:
+    """Look up label for a FASTA record ID.
+
+    Tries exact match first, then without version suffix.
+    """
+    if record_id in label_map:
+        return label_map[record_id]
+    stripped = strip_version(record_id)
+    if stripped in label_map:
+        return label_map[stripped]
+    raise KeyError(
+        f"genome_id '{record_id}' (or '{stripped}') not found in labels CSV"
+    )
 
 
 def load_fasta_as_dataframe(
     fasta_path: str,
+    label_map: Dict[str, int],
     max_segment_length: int = 2048,
     min_segment_length: int = 50,
 ) -> pd.DataFrame:
     """Load a FASTA file and return a DataFrame suitable for
     ``get_torch_data_from_segmentdb_classification``.
+
+    Labels are looked up from *label_map* by matching the FASTA record ID
+    (with or without version suffix) against the genome_id keys.
 
     Columns: segment_id, segment, sequence_id, y, label
     """
@@ -124,10 +138,15 @@ def load_fasta_as_dataframe(
     seg_params = {"min_length": min_segment_length, "max_length": max_segment_length}
     all_segments = []
     segment_id = 0
+    missing_labels = []
 
     for record in records:
         seq = str(record.seq).upper()
-        label_int = parse_label_from_header(record.description)
+        try:
+            label_int = lookup_label(record.id, label_map)
+        except KeyError:
+            missing_labels.append(record.id)
+            continue
         label_str = f"class_{label_int}"
 
         # Segment long sequences; short ones become a single segment
@@ -144,12 +163,21 @@ def load_fasta_as_dataframe(
             )
             segment_id += 1
 
+    if missing_labels:
+        logger.warning(
+            "%d sequences in %s have no label in CSV (first 5: %s)",
+            len(missing_labels),
+            fasta_path,
+            missing_labels[:5],
+        )
+
     return pd.DataFrame(all_segments)
 
 
 def load_group_data(
     fold_dir: str,
     group: str,
+    label_map: Dict[str, int],
     max_segment_length: int = 2048,
     min_segment_length: int = 50,
 ) -> Tuple[pd.DataFrame, pd.DataFrame]:
@@ -162,8 +190,8 @@ def load_group_data(
     if not os.path.isfile(val_path):
         raise FileNotFoundError(f"Missing val file: {val_path}")
 
-    train_df = load_fasta_as_dataframe(train_path, max_segment_length, min_segment_length)
-    val_df = load_fasta_as_dataframe(val_path, max_segment_length, min_segment_length)
+    train_df = load_fasta_as_dataframe(train_path, label_map, max_segment_length, min_segment_length)
+    val_df = load_fasta_as_dataframe(val_path, label_map, max_segment_length, min_segment_length)
 
     logger.info(
         "  Group %s — train: %d segments, val: %d segments",
@@ -177,6 +205,7 @@ def load_group_data(
 def load_fold_data(
     fold_dir: str,
     groups: List[str],
+    label_map: Dict[str, int],
     max_segment_length: int = 2048,
     min_segment_length: int = 50,
 ) -> Tuple[pd.DataFrame, pd.DataFrame]:
@@ -186,7 +215,7 @@ def load_fold_data(
     """
     train_dfs, val_dfs = [], []
     for group in groups:
-        tr, va = load_group_data(fold_dir, group, max_segment_length, min_segment_length)
+        tr, va = load_group_data(fold_dir, group, label_map, max_segment_length, min_segment_length)
         train_dfs.append(tr)
         val_dfs.append(va)
 
@@ -239,6 +268,7 @@ def train_one_fold(
     model_name: str,
     output_dir: str,
     groups: List[str],
+    label_map: Dict[str, int],
     num_epochs: int = 10,
     batch_size: int = 64,
     learning_rate: float = 2e-5,
@@ -262,7 +292,7 @@ def train_one_fold(
 
     # ---- Load data ----
     train_df, val_df = load_fold_data(
-        fold_dir, groups, max_segment_length, min_segment_length
+        fold_dir, groups, label_map, max_segment_length, min_segment_length
     )
     logger.info(
         "Fold %d total — train: %d, val: %d", fold_idx, len(train_df), len(val_df)
@@ -406,6 +436,12 @@ def parse_args():
         help="Root directory containing fold_0/ … fold_4/ subdirectories",
     )
     parser.add_argument(
+        "--labels_csv",
+        type=str,
+        required=True,
+        help="Path to labels CSV file (columns: genome_id,label,length,source)",
+    )
+    parser.add_argument(
         "--model_name",
         type=str,
         default="neuralbioinfo/prokbert-mini",
@@ -462,6 +498,9 @@ def main():
     with open(os.path.join(args.output_dir, "run_config.json"), "w") as f:
         json.dump(vars(args), f, indent=2)
 
+    # Load labels once for all folds
+    label_map = load_labels_csv(args.labels_csv)
+
     fold_indices = args.folds if args.folds is not None else list(range(args.num_folds))
 
     all_metrics = []
@@ -477,6 +516,7 @@ def main():
             model_name=args.model_name,
             output_dir=args.output_dir,
             groups=args.groups,
+            label_map=label_map,
             num_epochs=args.num_epochs,
             batch_size=args.batch_size,
             learning_rate=args.learning_rate,
