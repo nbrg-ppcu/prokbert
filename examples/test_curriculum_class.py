@@ -236,6 +236,7 @@ def main() -> None:
 
     print(model)
 
+
     optimizer = AdamW(
         [
             {"params": backbone_params, "lr": backbone_lr},
@@ -252,7 +253,7 @@ def main() -> None:
             num_train_epochs=num_train_epochs,
             bf16=use_bf16,
             torch_compile=True,
-            #torch_compile_mode ="max-autotune",
+            torch_compile_mode ="max-autotune",
             ddp_backend='nccl'
         )
 
