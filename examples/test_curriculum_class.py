@@ -7,7 +7,7 @@ torchrun --nproc_per_node=1 test_curriculum_class.py
 from transformers import TrainingArguments, Trainer, DataCollatorWithPadding
 from prokbert.sequtils import *
 from prokbert.training_utils import *
-from prokbert.models import ProkBertForCurricularClassification, ProkBertConfig
+from prokbert.models import ProkBertForCurricularClassification
 from prokbert.tokenizer import LCATokenizer
 from prokbert.curriculum_utils import compute_umap_for_dataset, evaluate_embeddings
 from datasets import Dataset, load_dataset, ClassLabel
@@ -32,15 +32,6 @@ OUTPUT_PATH = "./test_megatroncurr"
 def main() -> None:
 
     print('Just briefly testing the curriculum class method')
-
-    config_test = ProkBertConfig(return_dict=True)
-    print(config_test)
-
-    config_test = ProkBertConfig(return_dict=True)
-    print(config_test)
-
-    1/0
-
 
     # 1) Load dataset
     ds = load_dataset(REPO_ID, split="train")
