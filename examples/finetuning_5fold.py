@@ -15,30 +15,36 @@ Expects pre-split data organized as:
         fold_4/
             ...
 
-FASTA header format:
-    >NC_049379.1 Vibrio phage pVa5, complete genome
+FASTA header format (label and genome_id embedded in header):
+    >NC_003315__contig_29 label=0 genome_id=NC_003315
 
-Labels CSV format:
+Each genome may be split into multiple contigs for training.
+The label and genome_id are parsed directly from the FASTA description.
+
+Optionally, a labels CSV can be provided as fallback:
     genome_id,label,length,source
     NC_011421,1,132562,Dataset-1_virulent.fasta
-
-The genome_id in the CSV is matched against the FASTA record ID
-(with version suffix like '.1' stripped for matching).
 
 Usage:
     python finetuning_5fold.py \
         --data_dir /path/to/folds \
-        --labels_csv /path/to/labels.csv \
         --model_name neuralbioinfo/prokbert-mini \
         --output_dir ./5fold_results \
         --num_epochs 10 \
         --batch_size 64 \
         --learning_rate 2e-5
+
+    # With optional CSV fallback:
+    python finetuning_5fold.py \
+        --data_dir /path/to/folds \
+        --labels_csv /path/to/labels.csv \
+        ...
 """
 
 import argparse
 import json
 import os
+import re
 import logging
 from typing import Dict, List, Optional, Tuple
 
@@ -97,37 +103,76 @@ def load_labels_csv(labels_csv_path: str) -> Dict[str, int]:
     return label_map
 
 
-def strip_version(accession: str) -> str:
-    """Remove version suffix from accession, e.g. 'NC_049379.1' -> 'NC_049379'."""
-    return accession.rsplit(".", 1)[0] if "." in accession else accession
+def parse_header_fields(description: str) -> Tuple[Optional[int], Optional[str]]:
+    """Parse label and genome_id from a FASTA description line.
 
+    Expected format:
+        NC_003315__contig_29 label=0 genome_id=NC_003315
 
-def lookup_label(record_id: str, label_map: Dict[str, int]) -> int:
-    """Look up label for a FASTA record ID.
-
-    Tries exact match first, then without version suffix.
+    Returns (label, genome_id) or (None, None) if not found.
     """
-    if record_id in label_map:
-        return label_map[record_id]
-    stripped = strip_version(record_id)
-    if stripped in label_map:
-        return label_map[stripped]
+    label = None
+    genome_id = None
+
+    m_label = re.search(r"label=(\d+)", description)
+    if m_label:
+        label = int(m_label.group(1))
+
+    m_gid = re.search(r"genome_id=(\S+)", description)
+    if m_gid:
+        genome_id = m_gid.group(1)
+
+    return label, genome_id
+
+
+def resolve_label(
+    record_id: str,
+    description: str,
+    label_map: Optional[Dict[str, int]],
+) -> Tuple[int, str]:
+    """Resolve label for a FASTA record.
+
+    Priority:
+      1. Parse ``label=X`` directly from the FASTA description header.
+      2. Fall back to CSV label_map using ``genome_id=X`` from header,
+         then the record_id itself.
+
+    Returns (label_int, genome_id).
+    """
+    header_label, header_genome_id = parse_header_fields(description)
+
+    # Use genome_id from header if available, otherwise use record_id
+    genome_id = header_genome_id or record_id
+
+    # Priority 1: label embedded in header
+    if header_label is not None:
+        return header_label, genome_id
+
+    # Priority 2: CSV lookup
+    if label_map is not None:
+        for key in (genome_id, record_id):
+            if key in label_map:
+                return label_map[key], genome_id
+
     raise KeyError(
-        f"genome_id '{record_id}' (or '{stripped}') not found in labels CSV"
+        f"Cannot resolve label for '{record_id}' "
+        f"(genome_id='{genome_id}'): not in header and not in labels CSV"
     )
 
 
 def load_fasta_as_dataframe(
     fasta_path: str,
-    label_map: Dict[str, int],
+    label_map: Optional[Dict[str, int]] = None,
     max_segment_length: int = 2048,
     min_segment_length: int = 50,
 ) -> pd.DataFrame:
     """Load a FASTA file and return a DataFrame suitable for
     ``get_torch_data_from_segmentdb_classification``.
 
-    Labels are looked up from *label_map* by matching the FASTA record ID
-    (with or without version suffix) against the genome_id keys.
+    Each FASTA record is a contig (e.g. ``NC_003315__contig_29``).
+    Labels are parsed from the header (``label=0``) with optional CSV fallback.
+    The ``genome_id`` from the header is used as ``sequence_id`` so that
+    all contigs from the same genome share the same sequence_id.
 
     Columns: segment_id, segment, sequence_id, y, label
     """
@@ -143,20 +188,22 @@ def load_fasta_as_dataframe(
     for record in records:
         seq = str(record.seq).upper()
         try:
-            label_int = lookup_label(record.id, label_map)
+            label_int, genome_id = resolve_label(
+                record.id, record.description, label_map
+            )
         except KeyError:
             missing_labels.append(record.id)
             continue
         label_str = f"class_{label_int}"
 
-        # Segment long sequences; short ones become a single segment
-        segments = segment_sequence_contiguous(seq, seg_params, sequence_id=record.id)
+        # Segment long contigs; short ones become a single segment
+        segments = segment_sequence_contiguous(seq, seg_params, sequence_id=genome_id)
         for seg in segments:
             all_segments.append(
                 {
                     "segment_id": segment_id,
                     "segment": seg["segment"],
-                    "sequence_id": record.id,
+                    "sequence_id": genome_id,
                     "y": label_int,
                     "label": label_str,
                 }
@@ -165,7 +212,7 @@ def load_fasta_as_dataframe(
 
     if missing_labels:
         logger.warning(
-            "%d sequences in %s have no label in CSV (first 5: %s)",
+            "%d contigs in %s have no label (first 5: %s)",
             len(missing_labels),
             fasta_path,
             missing_labels[:5],
@@ -177,7 +224,7 @@ def load_fasta_as_dataframe(
 def load_group_data(
     fold_dir: str,
     group: str,
-    label_map: Dict[str, int],
+    label_map: Optional[Dict[str, int]] = None,
     max_segment_length: int = 2048,
     min_segment_length: int = 50,
 ) -> Tuple[pd.DataFrame, pd.DataFrame]:
@@ -194,10 +241,12 @@ def load_group_data(
     val_df = load_fasta_as_dataframe(val_path, label_map, max_segment_length, min_segment_length)
 
     logger.info(
-        "  Group %s — train: %d segments, val: %d segments",
+        "  Group %s — train: %d segments (%d genomes), val: %d segments (%d genomes)",
         group,
         len(train_df),
+        train_df["sequence_id"].nunique() if len(train_df) > 0 else 0,
         len(val_df),
+        val_df["sequence_id"].nunique() if len(val_df) > 0 else 0,
     )
     return train_df, val_df
 
@@ -205,7 +254,7 @@ def load_group_data(
 def load_fold_data(
     fold_dir: str,
     groups: List[str],
-    label_map: Dict[str, int],
+    label_map: Optional[Dict[str, int]] = None,
     max_segment_length: int = 2048,
     min_segment_length: int = 50,
 ) -> Tuple[pd.DataFrame, pd.DataFrame]:
@@ -268,7 +317,7 @@ def train_one_fold(
     model_name: str,
     output_dir: str,
     groups: List[str],
-    label_map: Dict[str, int],
+    label_map: Optional[Dict[str, int]] = None,
     num_epochs: int = 10,
     batch_size: int = 64,
     learning_rate: float = 2e-5,
@@ -438,8 +487,9 @@ def parse_args():
     parser.add_argument(
         "--labels_csv",
         type=str,
-        required=True,
-        help="Path to labels CSV file (columns: genome_id,label,length,source)",
+        default=None,
+        help="Optional path to labels CSV (columns: genome_id,label,length,source). "
+             "Only needed if FASTA headers do not contain label=X fields.",
     )
     parser.add_argument(
         "--model_name",
@@ -498,8 +548,8 @@ def main():
     with open(os.path.join(args.output_dir, "run_config.json"), "w") as f:
         json.dump(vars(args), f, indent=2)
 
-    # Load labels once for all folds
-    label_map = load_labels_csv(args.labels_csv)
+    # Load labels CSV if provided (optional fallback for headers without label=X)
+    label_map = load_labels_csv(args.labels_csv) if args.labels_csv else None
 
     fold_indices = args.folds if args.folds is not None else list(range(args.num_folds))
 
