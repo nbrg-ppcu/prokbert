@@ -73,6 +73,8 @@ from prokbert.models import BertForBinaryClassificationWithPooling
 from prokbert.prok_datasets import ProkBERTTrainingDatasetPT
 from prokbert import helper
 
+from torch.utils.data import Dataset
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s",
@@ -80,6 +82,56 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 GROUPS = ["A", "B", "C", "D"]
+
+
+# ---------------------------------------------------------------------------
+# Dynamic padding dataset & collator — avoids wasting GPU on pad tokens
+# ---------------------------------------------------------------------------
+
+class VariableLengthDataset(Dataset):
+    """Stores sequences without global padding; each sample is trimmed to its
+    actual length.  The heavy padding is deferred to the per-batch collator."""
+
+    def __init__(self, X: torch.Tensor, y: torch.Tensor):
+        # X is the globally-padded rectangular tensor from prokbert tokenizer.
+        # We compute per-sample lengths and store them so collator can pad
+        # only to the batch maximum.
+        self.y = y
+        # Compute actual (non-zero) length per sample once
+        # Token IDs 0 = PAD, 1 = CLS, 2 = SEP, 3 = UNK, >3 = real k-mer
+        # A valid token is any non-zero position.
+        nonzero = X != 0  # (N, L)
+        # lengths[i] = index of last nonzero + 1
+        self.lengths = nonzero.long().sum(dim=1)  # (N,)
+        # Store trimmed sequences as a list to save memory
+        self.seqs = []
+        for i in range(len(X)):
+            self.seqs.append(X[i, : self.lengths[i]].clone())
+
+    def __len__(self):
+        return len(self.y)
+
+    def __getitem__(self, idx):
+        return {"input_ids": self.seqs[idx], "labels": self.y[idx]}
+
+
+def dynamic_padding_collator(batch):
+    """Pad input_ids to the max length in the current batch and build
+    attention masks on-the-fly."""
+    max_len = max(item["input_ids"].size(0) for item in batch)
+    input_ids = torch.zeros(len(batch), max_len, dtype=torch.long)
+    attention_mask = torch.zeros(len(batch), max_len, dtype=torch.float)
+    labels = torch.stack([item["labels"] for item in batch])
+
+    for i, item in enumerate(batch):
+        seq = item["input_ids"]
+        length = seq.size(0)
+        input_ids[i, :length] = seq
+        # Valid tokens: >3 (real k-mer) or 1 (CLS) or 2 (SEP)
+        mask = (seq > 3) | (seq == 2) | (seq == 1)
+        attention_mask[i, :length] = mask.float()
+
+    return {"input_ids": input_ids, "attention_mask": attention_mask, "labels": labels}
 
 
 # ---------------------------------------------------------------------------
@@ -373,8 +425,16 @@ def train_one_fold(
     logger.info("Tokenizing val set …")
     X_val, y_val, _ = get_torch_data_from_segmentdb_classification(tokenizer, val_df, L=token_limit)
 
-    train_ds = ProkBERTTrainingDatasetPT(X_train, y_train, AddAttentionMask=True)
-    val_ds = ProkBERTTrainingDatasetPT(X_val, y_val, AddAttentionMask=True)
+    # Use variable-length dataset + dynamic padding for speed
+    train_ds = VariableLengthDataset(X_train, y_train)
+    val_ds = VariableLengthDataset(X_val, y_val)
+
+    # Log sequence length statistics
+    train_lens = train_ds.lengths.float()
+    logger.info(
+        "Train seq lengths — mean: %.0f, median: %.0f, max: %d, min: %d",
+        train_lens.mean(), train_lens.median(), train_lens.max().item(), train_lens.min().item(),
+    )
 
     # ---- Output dir ----
     fold_output = os.path.join(output_dir, f"fold_{fold_idx}")
@@ -412,6 +472,7 @@ def train_one_fold(
         args=training_args,
         train_dataset=train_ds,
         eval_dataset=val_ds,
+        data_collator=dynamic_padding_collator,
         compute_metrics=compute_metrics_eval_prediction,
     )
 
