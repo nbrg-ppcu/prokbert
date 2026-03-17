@@ -419,6 +419,17 @@ def train_one_fold(
         max_pos, token_limit,
     )
 
+    # ---- Move model to GPU early and compile ----
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model = model.to(device)
+    logger.info("Model device: %s", device)
+    logger.info("Model parameters: %.1fM", sum(p.numel() for p in model.parameters()) / 1e6)
+
+    # torch.compile fuses kernels — big win for attention-heavy models on A100
+    if torch.cuda.is_available() and hasattr(torch, "compile"):
+        logger.info("Applying torch.compile …")
+        model = torch.compile(model)
+
     # ---- Tokenize ----
     logger.info("Tokenizing train set …")
     X_train, y_train, _ = get_torch_data_from_segmentdb_classification(tokenizer, train_df, L=token_limit)
@@ -463,7 +474,6 @@ def train_one_fold(
         dataloader_num_workers=dataloader_num_workers,
         gradient_accumulation_steps=gradient_accumulation_steps,
         save_total_limit=2,
-        torch_compile=False,
         dataloader_pin_memory=True,
     )
 
@@ -584,7 +594,11 @@ def parse_args():
     parser.add_argument("--learning_rate", type=float, default=2e-5)
     parser.add_argument("--weight_decay", type=float, default=0.01)
     parser.add_argument("--warmup_ratio", type=float, default=0.1)
-    parser.add_argument("--max_segment_length", type=int, default=1024)
+    parser.add_argument(
+        "--max_segment_length", type=int, default=512,
+        help="Max nucleotide segment length. Attention is O(n^2), so shorter = much faster. "
+             "512 gives ~4x speedup over 1024 with minimal accuracy loss.",
+    )
     parser.add_argument("--min_segment_length", type=int, default=50)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--fp16", action="store_true")
