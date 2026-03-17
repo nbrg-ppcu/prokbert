@@ -54,7 +54,7 @@ class BertForBinaryClassificationWithPooling(nn.Module):
         self.dropout = nn.Dropout(self.dropout_rate)
         self.classifier = nn.Linear(self.hidden_size, 2)
 
-    def forward(self, input_ids, attention_mask=None, labels=None, output_hidden_states=False, output_pooled_output=False):
+    def forward(self, input_ids, attention_mask=None, labels=None, output_hidden_states=False, output_pooled_output=False, **kwargs):
         # Modified call to base model to include output_hidden_states
         outputs = self.base_model(input_ids, attention_mask=attention_mask, output_hidden_states=output_hidden_states)
         sequence_output = outputs[0]
