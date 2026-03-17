@@ -357,11 +357,19 @@ def train_one_fold(
     )
     model = BertForBinaryClassificationWithPooling(pretrained_model)
 
+    # ---- Compute safe token limit from model config ----
+    max_pos = pretrained_model.config.max_position_embeddings  # e.g. 1024
+    token_limit = max_pos - 2  # reserve 2 for [CLS] and [SEP]
+    logger.info(
+        "Model max_position_embeddings=%d, using token_limit=%d (excl. special tokens)",
+        max_pos, token_limit,
+    )
+
     # ---- Tokenize ----
     logger.info("Tokenizing train set …")
-    X_train, y_train, _ = get_torch_data_from_segmentdb_classification(tokenizer, train_df)
+    X_train, y_train, _ = get_torch_data_from_segmentdb_classification(tokenizer, train_df, L=token_limit)
     logger.info("Tokenizing val set …")
-    X_val, y_val, _ = get_torch_data_from_segmentdb_classification(tokenizer, val_df)
+    X_val, y_val, _ = get_torch_data_from_segmentdb_classification(tokenizer, val_df, L=token_limit)
 
     train_ds = ProkBERTTrainingDatasetPT(X_train, y_train, AddAttentionMask=True)
     val_ds = ProkBERTTrainingDatasetPT(X_val, y_val, AddAttentionMask=True)
@@ -509,7 +517,7 @@ def parse_args():
     parser.add_argument("--learning_rate", type=float, default=2e-5)
     parser.add_argument("--weight_decay", type=float, default=0.01)
     parser.add_argument("--warmup_ratio", type=float, default=0.1)
-    parser.add_argument("--max_segment_length", type=int, default=2048)
+    parser.add_argument("--max_segment_length", type=int, default=1024)
     parser.add_argument("--min_segment_length", type=int, default=50)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--fp16", action="store_true")
