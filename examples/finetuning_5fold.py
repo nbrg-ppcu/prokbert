@@ -475,6 +475,7 @@ def train_one_fold(
         gradient_accumulation_steps=gradient_accumulation_steps,
         save_total_limit=2,
         dataloader_pin_memory=True,
+        remove_unused_columns=False,
     )
 
     trainer = Trainer(
