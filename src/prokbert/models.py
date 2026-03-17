@@ -103,8 +103,14 @@ _HF_CONFIG_LOAD_KWARGS = {
     "token",
     "revision",
     "subfolder",
+    "proxies",
 }
 
+_HF_NON_MODEL_INIT_KWARGS = {
+    "trust_remote_code",
+    "_from_auto",
+    "adapter_kwargs",
+}
 
 
 
@@ -339,6 +345,9 @@ def _split_pretrained_kwargs(kwargs):
     """
     kwargs = dict(kwargs)
 
+    for k in _HF_NON_MODEL_INIT_KWARGS:
+        kwargs.pop(k, None)
+
     config_load_kwargs = {
         k: kwargs.pop(k) for k in list(kwargs) if k in _HF_CONFIG_LOAD_KWARGS
     }
@@ -347,7 +356,6 @@ def _split_pretrained_kwargs(kwargs):
     weights_only = kwargs.pop("weights_only", True)
 
     return config_load_kwargs, use_safetensors, weights_only, kwargs
-
 
 def _resolve_weights_file(
     pretrained_model_name_or_path,
