@@ -2026,13 +2026,6 @@ class ProkBertForCurricularClassification(_SafeFromPretrainedMixin, ProkBertPreT
         )
         return l2_norm(embeddings, axis=1) if normalize else embeddings
 
-    def deprecated_curricular_inference_logits(self, embeddings: torch.Tensor) -> torch.Tensor:
-        embeddings = l2_norm(embeddings, axis=1)
-        kernel_norm = l2_norm(self.curricular_face.kernel, axis=0)
-        cos_theta = torch.mm(embeddings, kernel_norm).clamp(-1.0, 1.0)
-        return cos_theta * self.curricular_face.s
-    
-
     def _curricular_inference_logits(self, embeddings: torch.Tensor) -> torch.Tensor:
         return self.curricular_face.inference_logits(embeddings)
 

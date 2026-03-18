@@ -313,98 +313,96 @@ def initialize_linear_kaiming(layer: nn.Linear):
 
 class ProkBertConfig(PretrainedConfig):
     r"""
-    This is the configuration class to store the configuration of a [`ProkBertModel`]. It is used to
-    instantiate a ProkBert model according to the specified arguments, defining the model architecture.
-    Instantiating a configuration with the defaults will yield a similar configuration to that of a ProkBERT-base.
+    Configuration for the standalone ProkBERT ModernBERT-style encoder stack.
 
-    Args:
-        vocab_size (int, optional, defaults to ):
-            Vocabulary size of the ProkBert model.
-        hidden_size (int, optional, defaults to ):
-            Dimension of the hidden representations.
-        intermediate_size (int, optional, defaults to ):
-            Dimension of the MLP representations.
-        num_hidden_layers (int, optional, defaults to ):
-            Number of hidden layers in the Transformer.
-        num_attention_heads (int, optional, defaults to ):
-            Number of attention heads for each attention layer.
-        hidden_activation (str or function, optional, defaults to "gelu"):
-            The activation function for intermediate layers.
-        max_position_embeddings (int, optional, defaults to 8192):
-            Maximum sequence length that this model might ever be used with.
-        initializer_range (float, optional, defaults to 0.02):
-            Standard deviation of the truncated_normal_initializer.
-        initializer_cutoff_factor (float, optional, defaults to 2.0):
-            The cutoff factor for weight initialization.
-        norm_eps (float, optional, defaults to 1e-05):
-            Epsilon for layer normalization.
-        norm_bias (bool, optional, defaults to False):
-            Whether to use bias in the normalization layers.
-        pad_token_id (int, optional, defaults to 50283):
-            Padding token id.
-        eos_token_id (int, optional, defaults to 50282):
-            End-of-sequence token id.
-        bos_token_id (int, optional, defaults to 50281):
-            Beginning-of-sequence token id.
-        cls_token_id (int, optional, defaults to 50281):
-            Classification token id.
-        sep_token_id (int, optional, defaults to 50282):
-            Separation token id.
-        rope_parameters: (RopeParameters or dict, optional):
-            Parameters for the RoPE positional embeddings.
-            If not provided, default RoPE parameters will be computed based on the config.
-        global_rope_theta (float, optional, defaults to 160000.0):
-            Base period for the global rotary positional embeddings.
-        attention_bias (bool, optional, defaults to False):
-            Whether to use bias in query, key, value, and output projection layers.
-        attention_dropout (float, optional, defaults to 0.0):
-            Dropout rate for the attention probabilities.
-        global_attn_every_n_layers (int, optional, defaults to 1):
-            Set to 1 to use global attention in every layer (i.e. no sliding-window/local attention).
-        local_attention (int, optional, defaults to 128):
-            Window size for local attention (unused if `global_attn_every_n_layers` is 1).
-        local_rope_theta (float, optional, defaults to 10000.0):
-            Base period for the local rotary positional embeddings.
-        embedding_dropout (float, optional, defaults to 0.0):
-            Dropout rate applied to the embeddings.
-        mlp_bias (bool, optional, defaults to False):
-            Whether to use bias in the MLP layers.
-        mlp_dropout (float, optional, defaults to 0.0):
-            Dropout rate in the MLP layers.
-        decoder_bias (bool, optional, defaults to True):
-            Whether to use bias in the decoder layers.
-        classifier_pooling (str, optional, defaults to "cls"):
-            Pooling method for the classifier head, either "cls" or "mean".
-        classifier_dropout (float, optional, defaults to 0.0):
-            Dropout rate for the classifier head.
-        classifier_bias (bool, optional, defaults to False):
-            Whether to use bias in the classifier head.
-        classifier_activation (str, optional, defaults to "gelu"):
-            Activation function for the classifier head.
-        deterministic_flash_attn (bool, optional, defaults to False):
-            Whether to use deterministic flash attention.
-        sparse_prediction (bool, optional, defaults to False):
-            Whether to use sparse prediction for masked language modeling.
-        sparse_pred_ignore_index (int, optional, defaults to -100):
-            Index to ignore for sparse prediction.
-        reference_compile (bool, optional):
-            Whether to compile model layers for performance (if supported).
-            Argument is deprecated and will be removed in a future version.
-        repad_logits_with_grad (bool, optional, defaults to False):
-            If True, logits are repadded with gradient tracking.
+    Canonical config names follow the current ModernBERT conventions:
+      - `layer_types` instead of `global_attn_every_n_layers`
+      - nested `rope_parameters` keyed by attention type instead of a single flat RoPE dict
+      - `tie_word_embeddings` explicitly tracked in the config
+
+    Legacy names are still accepted for backward compatibility when loading older checkpoints/configs.
     """
 
     model_type = "prokbert"
     keys_to_ignore_at_inference = ["past_key_values"]
+    default_theta = {"full_attention": 160_000.0, "sliding_attention": 10_000.0}
+
+    attribute_map = {
+        "classification_dropout_rate": "classifier_dropout",
+        "curricular_num_labels": "num_labels",
+        "curricular_face_m": "curricular_margin",
+        "curricular_face_s": "curricular_scale",
+        "curriculum_hidden_size": "curricular_embedding_size",
+    }
 
     def __setattr__(self, name, value):
         if name == "reference_compile" and value is not None:
             logger.warning_once(
-                "The `reference_compile` argument is deprecated and will be removed in `transformers v5.2.0`"
+                "The `reference_compile` argument is deprecated and will be removed in `transformers v5.2.0`. "
                 "Use `torch.compile()` directly on the model instead."
             )
             value = None
         super().__setattr__(name, value)
+
+    @classmethod
+    def _build_layer_types(
+        cls,
+        num_hidden_layers: int,
+        global_attn_every_n_layers: int,
+    ) -> list[str]:
+        if global_attn_every_n_layers <= 0:
+            raise ValueError("`global_attn_every_n_layers` must be a positive integer.")
+        return [
+            "sliding_attention" if bool(i % global_attn_every_n_layers) else "full_attention"
+            for i in range(num_hidden_layers)
+        ]
+
+    @classmethod
+    def _normalize_rope_parameters(
+        cls,
+        rope_parameters: RopeParameters | dict | None,
+        global_rope_theta: float,
+        local_rope_theta: float,
+    ) -> dict[str, dict]:
+        default_rope_parameters = {
+            "full_attention": {"rope_type": "default", "rope_theta": float(global_rope_theta)},
+            "sliding_attention": {"rope_type": "default", "rope_theta": float(local_rope_theta)},
+        }
+
+        if rope_parameters is None:
+            return default_rope_parameters
+
+        rope_parameters = dict(rope_parameters)
+
+        # Backward compatibility: older configs used a single flat dict plus `global_rope_theta` / `local_rope_theta`.
+        if "rope_type" in rope_parameters or "rope_theta" in rope_parameters:
+            shared_rope_type = rope_parameters.get("rope_type", "default")
+            full_theta = float(rope_parameters.get("rope_theta", global_rope_theta))
+            return {
+                "full_attention": {
+                    **{k: v for k, v in rope_parameters.items() if k != "rope_theta"},
+                    "rope_type": shared_rope_type,
+                    "rope_theta": full_theta,
+                },
+                "sliding_attention": {
+                    **{k: v for k, v in rope_parameters.items() if k != "rope_theta"},
+                    "rope_type": shared_rope_type,
+                    "rope_theta": float(local_rope_theta),
+                },
+            }
+
+        normalized_rope_parameters = {}
+        for layer_type in ("full_attention", "sliding_attention"):
+            layer_params = rope_parameters.get(layer_type)
+            if layer_params is None:
+                layer_params = {"rope_type": "default"}
+            else:
+                layer_params = dict(layer_params)
+            layer_params.setdefault("rope_type", "default")
+            layer_params.setdefault("rope_theta", cls.default_theta[layer_type])
+            normalized_rope_parameters[layer_type] = layer_params
+
+        return normalized_rope_parameters
 
     def __init__(
         self,
@@ -424,13 +422,11 @@ class ProkBertConfig(PretrainedConfig):
         bos_token_id: int = 2,
         cls_token_id: int = 2,
         sep_token_id: int = 3,
-        rope_parameters: RopeParameters | dict | None = None,
-        global_rope_theta: float = 160000.0,
         attention_bias: bool = False,
         attention_dropout: float = 0.0,
-        global_attn_every_n_layers: int = 1,  # Use global attention in every layer.
+        layer_types: list[str] | None = None,
+        rope_parameters: RopeParameters | dict | None = None,
         local_attention: int = 256,
-        local_rope_theta: float = 10000.0,
         embedding_dropout: float = 0.0,
         mlp_bias: bool = False,
         mlp_dropout: float = 0.0,
@@ -442,12 +438,56 @@ class ProkBertConfig(PretrainedConfig):
         deterministic_flash_attn: bool = False,
         sparse_prediction: bool = False,
         sparse_pred_ignore_index: int = -100,
-        reference_compile: bool = False,
+        reference_compile: bool | None = False,
         repad_logits_with_grad: bool = False,
         norm_type: str = "rms",
+        tie_word_embeddings: bool = True,
         num_labels: int = 2,
+        problem_type: str | None = None,
+        curricular_margin: float = 0.5,
+        curricular_scale: float = 64.0,
+        curricular_embedding_size: int | None = None,
         **kwargs,
     ):
+        legacy_global_attn_every_n_layers = int(kwargs.pop("global_attn_every_n_layers", 1))
+        legacy_global_rope_theta = float(kwargs.pop("global_rope_theta", self.default_theta["full_attention"]))
+        legacy_local_rope_theta = float(kwargs.pop("local_rope_theta", self.default_theta["sliding_attention"]))
+
+        legacy_curricular_num_labels = kwargs.pop("curricular_num_labels", None)
+        legacy_classifier_dropout = kwargs.pop("classification_dropout_rate", None)
+        legacy_curricular_margin = kwargs.pop("curricular_face_m", None)
+        legacy_curricular_scale = kwargs.pop("curricular_face_s", None)
+        legacy_curricular_embedding_size = kwargs.pop("curriculum_hidden_size", None)
+        kwargs.pop("bert_base_model", None)
+
+        loaded_id2label = kwargs.get("id2label")
+        if loaded_id2label is not None:
+            num_labels = len(loaded_id2label)
+        elif legacy_curricular_num_labels is not None:
+            num_labels = int(legacy_curricular_num_labels)
+
+        if legacy_classifier_dropout is not None:
+            classifier_dropout = float(legacy_classifier_dropout)
+        if legacy_curricular_margin is not None:
+            curricular_margin = float(legacy_curricular_margin)
+        if legacy_curricular_scale is not None:
+            curricular_scale = float(legacy_curricular_scale)
+        if curricular_embedding_size is None and legacy_curricular_embedding_size not in (None, -1):
+            curricular_embedding_size = int(legacy_curricular_embedding_size)
+
+        if layer_types is None:
+            layer_types = self._build_layer_types(
+                num_hidden_layers=num_hidden_layers,
+                global_attn_every_n_layers=legacy_global_attn_every_n_layers,
+            )
+        else:
+            layer_types = list(layer_types)
+
+        rope_parameters = self._normalize_rope_parameters(
+            rope_parameters=rope_parameters,
+            global_rope_theta=legacy_global_rope_theta,
+            local_rope_theta=legacy_local_rope_theta,
+        )
 
         super().__init__(
             pad_token_id=pad_token_id,
@@ -455,26 +495,28 @@ class ProkBertConfig(PretrainedConfig):
             eos_token_id=eos_token_id,
             cls_token_id=cls_token_id,
             sep_token_id=sep_token_id,
+            tie_word_embeddings=tie_word_embeddings,
+            num_labels=num_labels,
+            problem_type=problem_type,
             **kwargs,
         )
+
         self.vocab_size = vocab_size
         self.max_position_embeddings = max_position_embeddings
         self.hidden_size = hidden_size
         self.intermediate_size = intermediate_size
         self.num_hidden_layers = num_hidden_layers
         self.num_attention_heads = num_attention_heads
+        self.hidden_activation = hidden_activation
         self.initializer_range = initializer_range
         self.initializer_cutoff_factor = initializer_cutoff_factor
         self.norm_eps = norm_eps
         self.norm_bias = norm_bias
-        self.rope_parameters = rope_parameters
-        self.global_rope_theta = global_rope_theta
         self.attention_bias = attention_bias
         self.attention_dropout = attention_dropout
-        self.hidden_activation = hidden_activation
-        self.global_attn_every_n_layers = global_attn_every_n_layers
+        self.layer_types = layer_types
+        self.rope_parameters = rope_parameters
         self.local_attention = local_attention
-        self.local_rope_theta = local_rope_theta
         self.embedding_dropout = embedding_dropout
         self.mlp_bias = mlp_bias
         self.mlp_dropout = mlp_dropout
@@ -489,42 +531,59 @@ class ProkBertConfig(PretrainedConfig):
         self.reference_compile = reference_compile
         self.repad_logits_with_grad = repad_logits_with_grad
         self.norm_type = norm_type
+        self.tie_word_embeddings = tie_word_embeddings
         self.num_labels = num_labels
+        self.problem_type = problem_type
+        self.curricular_margin = curricular_margin
+        self.curricular_scale = curricular_scale
+        self.curricular_embedding_size = curricular_embedding_size
+
+        if len(self.layer_types) != self.num_hidden_layers:
+            raise ValueError(
+                "`layer_types` must contain one entry per hidden layer: "
+                f"expected {self.num_hidden_layers}, got {len(self.layer_types)}."
+            )
+
+        invalid_layer_types = sorted(set(self.layer_types) - {"full_attention", "sliding_attention"})
+        if invalid_layer_types:
+            raise ValueError(
+                f"Unsupported values in `layer_types`: {invalid_layer_types}. "
+                'Allowed values are ["full_attention", "sliding_attention"].'
+            )
 
         if self.classifier_pooling not in ["cls", "mean"]:
             raise ValueError(
                 f'Invalid value for `classifier_pooling`, should be either "cls" or "mean", but is {self.classifier_pooling}.'
             )
-        if not self.rope_parameters:
-            self.rope_parameters = { "rope_type": "default", "rope_theta": global_rope_theta }
 
+        if self.norm_type not in {"rms", "layernorm"}:
+            raise ValueError(
+                f'Invalid value for `norm_type`, should be either "rms" or "layernorm", but is {self.norm_type}.'
+            )
+
+    def get_rope_parameters(self, layer_type: str) -> dict:
+        if layer_type not in {"full_attention", "sliding_attention"}:
+            raise ValueError(
+                f"Unsupported `layer_type`={layer_type!r}. Expected 'full_attention' or 'sliding_attention'."
+            )
+        rope_params = self.rope_parameters.get(layer_type)
+        if rope_params is None:
+            rope_params = {"rope_type": "default", "rope_theta": self.default_theta[layer_type]}
+        return rope_params
+
+    @property
+    def sliding_window(self) -> int:
+        return self.local_attention // 2
+
+    @sliding_window.setter
+    def sliding_window(self, value: int):
+        self.local_attention = int(value) * 2
 
     def to_dict(self):
         output = super().to_dict()
         output.pop("reference_compile", None)
         return output
 
-
-class ProkBertConfigCurr(ProkBertConfig):
-    model_type = "prokbert"
-
-    def __init__(
-        self,
-        bert_base_model = "neuralbioinfo/prokbert-mini",
-        curricular_face_m = 0.5,
-        curricular_face_s=64.,
-        curricular_num_labels = 2,
-        curriculum_hidden_size = -1,
-        classification_dropout_rate = 0.0,
-        **kwargs,
-    ):
-        super().__init__( **kwargs)
-        self.curricular_num_labels = curricular_num_labels
-        self.curricular_face_m = curricular_face_m
-        self.curricular_face_s = curricular_face_s
-        self.classification_dropout_rate = classification_dropout_rate
-        self.bert_base_model = bert_base_model
-        self.curriculum_hidden_size = curriculum_hidden_size
 
 _CHECKPOINT_FOR_DOC = "example/prokbert-base"
 _CONFIG_FOR_DOC = "ProkBertConfig"
@@ -940,20 +999,22 @@ class ProkBertEmbeddings(nn.Module):
 
 
 class ProkBertRotaryEmbedding(nn.Module):
-    def __init__(self, config: ProkBertConfig, device: Optional[torch.device] = None):
+    def __init__(self, config: ProkBertConfig, layer_type: str, device: Optional[torch.device] = None):
         super().__init__()
 
         self.max_seq_len_cached = config.max_position_embeddings
         self.original_max_seq_len = config.max_position_embeddings
 
         self.config = config
+        self.layer_type = layer_type
 
-        self.rope_type = config.rope_parameters["rope_type"]
+        rope_params = config.get_rope_parameters(layer_type)
+        self.rope_type = rope_params["rope_type"]
         self.rope_init_fn: Callable = self.compute_default_rope_parameters
         if self.rope_type != "default":
             self.rope_init_fn = ROPE_INIT_FUNCTIONS[self.rope_type]
 
-        inv_freq, self.attention_scaling = self.rope_init_fn(config, device)
+        inv_freq, self.attention_scaling = self.rope_init_fn(config, device, layer_type=layer_type)
 
         self.register_buffer("inv_freq", inv_freq, persistent=False)
         self.register_buffer("original_inv_freq", inv_freq.clone(), persistent=False)
@@ -963,26 +1024,17 @@ class ProkBertRotaryEmbedding(nn.Module):
         config: ProkBertConfig,
         device: Optional["torch.device"] = None,
         seq_len: Optional[int] = None,
+        layer_type: Optional[str] = None,
     ) -> tuple["torch.Tensor", float]:
         """
-        Computes the inverse frequencies according to the original RoPE implementation
-        Args:
-            config ([`~transformers.PretrainedConfig`]):
-                The model configuration.
-            device (`torch.device`):
-                The device to use for initialization of the inverse frequencies.
-            seq_len (`int`, *optional*):
-                The current sequence length. Unused for this type of RoPE.
-        Returns:
-            Tuple of (`torch.Tensor`, `float`), containing the inverse frequencies for the RoPE embeddings and the
-            post-processing scaling factor applied to the computed cos/sin (unused in this type of RoPE).
+        Computes the inverse frequencies according to the original RoPE implementation.
         """
-        base = config.rope_parameters["rope_theta"]
+        current_layer_type = layer_type or "full_attention"
+        rope_params = config.get_rope_parameters(current_layer_type)
+        base = rope_params["rope_theta"]
         dim = getattr(config, "head_dim", None) or config.hidden_size // config.num_attention_heads
 
-        attention_factor = 1.0  # Unused in this type of RoPE
-
-        # Compute the inverse frequencies
+        attention_factor = 1.0
         inv_freq = 1.0 / (base ** (torch.arange(0, dim, 2, dtype=torch.int64).to(device=device, dtype=torch.float) / dim))
         return inv_freq, attention_factor
 
@@ -993,12 +1045,17 @@ class ProkBertRotaryEmbedding(nn.Module):
         2 - The current sequence length is in the original scale (avoid losing precision with small sequences)
         """
         seq_len = torch.max(position_ids) + 1
-        if seq_len > self.max_seq_len_cached:  # growth
-            inv_freq, self.attention_scaling = self.rope_init_fn(self.config, device, seq_len=seq_len)
+        if seq_len > self.max_seq_len_cached:
+            inv_freq, self.attention_scaling = self.rope_init_fn(
+                self.config,
+                device,
+                seq_len=seq_len,
+                layer_type=self.layer_type,
+            )
             self.register_buffer("inv_freq", inv_freq, persistent=False)
             self.max_seq_len_cached = seq_len
 
-        if seq_len < self.original_max_seq_len and self.max_seq_len_cached > self.original_max_seq_len:  # reset
+        if seq_len < self.original_max_seq_len and self.max_seq_len_cached > self.original_max_seq_len:
             self.original_inv_freq = self.original_inv_freq.to(device)
             self.register_buffer("inv_freq", self.original_inv_freq, persistent=False)
             self.max_seq_len_cached = self.original_max_seq_len
@@ -1008,10 +1065,8 @@ class ProkBertRotaryEmbedding(nn.Module):
         if "dynamic" in self.rope_type:
             self._dynamic_frequency_update(position_ids, device=x.device)
 
-        # Core RoPE block
         inv_freq_expanded = self.inv_freq[None, :, None].float().expand(position_ids.shape[0], -1, 1)
         position_ids_expanded = position_ids[:, None, :].float()
-        # Force float32 (see https://github.com/huggingface/transformers/pull/29285)
         device_type = x.device.type
         device_type = device_type if isinstance(device_type, str) and device_type != "mps" else "cpu"
         with torch.autocast(device_type=device_type, enabled=False):
@@ -1020,11 +1075,11 @@ class ProkBertRotaryEmbedding(nn.Module):
             cos = emb.cos()
             sin = emb.sin()
 
-        # Advanced RoPE types (e.g. yarn) apply a post-processing scaling factor
         cos = cos * self.attention_scaling
         sin = sin * self.attention_scaling
 
         return cos.to(dtype=x.dtype), sin.to(dtype=x.dtype)
+
 
 class ProkBertMLP(nn.Module):
     """Applies the GLU at the end of each ModernBERT layer.
@@ -1070,25 +1125,33 @@ class ProkBertAttention(nn.Module):
         self.all_head_size = self.head_dim * self.num_heads
         self.Wqkv = nn.Linear(config.hidden_size, 3 * self.all_head_size, bias=config.attention_bias)
 
-        if layer_id % config.global_attn_every_n_layers != 0:
-            self.local_attention = (config.local_attention // 2, config.local_attention // 2)
+        if layer_id is None:
+            self.attention_type = "full_attention"
         else:
-            self.local_attention = (-1, -1)
+            self.attention_type = config.layer_types[layer_id]
 
-        rope_theta = config.global_rope_theta
-        max_position_embeddings = config.max_position_embeddings
-        if self.local_attention != (-1, -1):
-            if config.local_rope_theta is not None:
-                rope_theta = config.local_rope_theta
-                config.rope_parameters["rope_theta"] = rope_theta
+        if self.attention_type == "sliding_attention":
+            self.local_attention = (config.sliding_window, config.sliding_window)
             max_position_embeddings = config.local_attention
+        elif self.attention_type == "full_attention":
+            self.local_attention = (-1, -1)
+            max_position_embeddings = config.max_position_embeddings
+        else:
+            raise ValueError(
+                f"Unsupported attention type {self.attention_type!r}. "
+                "Expected 'full_attention' or 'sliding_attention'."
+            )
+
+        rope_theta = float(config.get_rope_parameters(self.attention_type)["rope_theta"])
 
         if config._attn_implementation == "flash_attention_2":
             self.rotary_emb = ProkBertUnpaddedRotaryEmbedding(
-                dim=self.head_dim, max_seqlen=max_position_embeddings, base=rope_theta
+                dim=self.head_dim,
+                max_seqlen=max_position_embeddings,
+                base=rope_theta,
             )
         else:
-            self.rotary_emb = ProkBertRotaryEmbedding(config=config)
+            self.rotary_emb = ProkBertRotaryEmbedding(config=config, layer_type=self.attention_type)
 
         self.Wo = nn.Linear(config.hidden_size, config.hidden_size, bias=config.attention_bias)
         self.out_drop = nn.Dropout(config.attention_dropout) if config.attention_dropout > 0.0 else nn.Identity()
@@ -1126,16 +1189,14 @@ class ProkBertEncoderLayer(nn.Module):
     def __init__(self, config: ProkBertConfig, layer_id: Optional[int] = None):
         super().__init__()
         self.config = config
+        self.attention_type = "full_attention" if layer_id is None else config.layer_types[layer_id]
 
-        # choose norm kind once
         Norm = RMSNorm if config.norm_type == "rms" else nn.LayerNorm
 
-        # Pre-LN everywhere (no layer_id==0 Identity)
         self.attn_norm = Norm(config.hidden_size, eps=config.norm_eps, bias=config.norm_bias)
-        self.mlp_norm  = Norm(config.hidden_size, eps=config.norm_eps, bias=config.norm_bias)
+        self.mlp_norm = Norm(config.hidden_size, eps=config.norm_eps, bias=config.norm_bias)
 
         self.attn = ProkBertAttention(config=config, layer_id=layer_id)
-
         self.mlp = ProkBertMLP(config)
 
     def forward(
@@ -1157,12 +1218,12 @@ class ProkBertEncoderLayer(nn.Module):
             max_seqlen=max_seqlen,
             output_attentions=output_attentions,
         )
-        # Residual connection for attention.
         hidden_states = hidden_states + attn_outputs[0]
         mlp_output = self.mlp(self.mlp_norm(hidden_states))
         hidden_states = hidden_states + mlp_output
 
-        return (hidden_states,) + attn_outputs[1:]  # Return additional outputs (e.g. attentions) if provided.
+        return (hidden_states,) + attn_outputs[1:]
+
 
 
 PROK_BERT_START_DOCSTRING = r"""
@@ -1226,7 +1287,7 @@ class ProkBertPreTrainedModel(PreTrainedModel):
             init_weight(module.Wo, stds["out"])
         elif isinstance(module, ProkBertPredictionHead):
             init_weight(module.dense, stds["out"])
-        elif isinstance(module, ProkBertForMaskedLM):
+        elif isinstance(module, (ProkBertForMaskedLM, ProkBertForMaskedLM2)):
             init_weight(module.decoder, stds["out"])
 
 
@@ -1288,7 +1349,6 @@ class ProkBertModel(_SafeFromPretrainedMixin, ProkBertPreTrainedModel):
     def set_input_embeddings(self, value):
         self.embeddings.tok_embeddings = value
 
-    #@add_start_docstrings_to_model_forward(PROK_BERT_INPUTS_DOCSTRING)
     @add_code_sample_docstrings(
         checkpoint=_CHECKPOINT_FOR_DOC,
         output_type=BaseModelOutput,
@@ -1310,14 +1370,19 @@ class ProkBertModel(_SafeFromPretrainedMixin, ProkBertPreTrainedModel):
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
     ) -> Union[Tuple[torch.Tensor, ...], BaseModelOutput]:
-        # Set defaults for outputs
         output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
         output_hidden_states = (
             output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
         )
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
-        # Ensure exactly one of input_ids or inputs_embeds is provided.
+        if output_attentions and self.config._attn_implementation == "flash_attention_2":
+            logger.warning_once(
+                "`output_attentions=True` is not supported with flash_attention_2 in ProkBertModel. "
+                "Falling back to `output_attentions=False`."
+            )
+            output_attentions = False
+
         if (input_ids is None) ^ (inputs_embeds is not None):
             raise ValueError("You must specify exactly one of input_ids or inputs_embeds")
 
@@ -1327,7 +1392,7 @@ class ProkBertModel(_SafeFromPretrainedMixin, ProkBertPreTrainedModel):
         if input_ids is not None:
             self.warn_if_padding_and_no_attention_mask(input_ids, attention_mask)
 
-        if batch_size is None and seq_len is None:
+        if batch_size is None or seq_len is None:
             if inputs_embeds is not None:
                 batch_size, seq_len = inputs_embeds.shape[:2]
             else:
@@ -1344,17 +1409,20 @@ class ProkBertModel(_SafeFromPretrainedMixin, ProkBertPreTrainedModel):
                 if inputs_embeds is None:
                     with torch.no_grad():
                         input_ids, indices, cu_seqlens, max_seqlen, *_ = _unpad_prokbert_input(
-                            inputs=input_ids, attention_mask=attention_mask
+                            inputs=input_ids,
+                            attention_mask=attention_mask,
                         )
                 else:
                     inputs_embeds, indices, cu_seqlens, max_seqlen, *_ = _unpad_prokbert_input(
-                        inputs=inputs_embeds, attention_mask=attention_mask
+                        inputs=inputs_embeds,
+                        attention_mask=attention_mask,
                     )
         else:
             if position_ids is None:
                 position_ids = torch.arange(seq_len, device=device).unsqueeze(0)
             attention_mask, sliding_window_mask = self._update_attention_mask(
-                attention_mask, output_attentions=output_attentions
+                attention_mask,
+                output_attentions=output_attentions,
             )
 
         hidden_states = self.embeddings(input_ids=input_ids, inputs_embeds=inputs_embeds)
@@ -1387,10 +1455,10 @@ class ProkBertModel(_SafeFromPretrainedMixin, ProkBertPreTrainedModel):
             if output_attentions and len(layer_outputs) > 1:
                 all_self_attentions = all_self_attentions + (layer_outputs[1],)
 
+        hidden_states = self.final_norm(hidden_states)
+
         if output_hidden_states:
             all_hidden_states = all_hidden_states + (hidden_states,)
-
-        hidden_states = self.final_norm(hidden_states)
 
         if repad:
             hidden_states = _pad_prokbert_output(inputs=hidden_states, indices=indices, batch=batch_size, seqlen=seq_len)
@@ -1408,7 +1476,11 @@ class ProkBertModel(_SafeFromPretrainedMixin, ProkBertPreTrainedModel):
             attentions=all_self_attentions,
         )
 
-    def _update_attention_mask(self, attention_mask: torch.Tensor, output_attentions: bool) -> Tuple[torch.Tensor, torch.Tensor]:
+    def _update_attention_mask(
+        self,
+        attention_mask: torch.Tensor,
+        output_attentions: bool,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
         if output_attentions:
             if self.config._attn_implementation == "sdpa":
                 logger.warning_once(
@@ -1422,43 +1494,27 @@ class ProkBertModel(_SafeFromPretrainedMixin, ProkBertPreTrainedModel):
                     f'not with {self.config._attn_implementation}. Consider setting `attn_implementation="eager"`. '
                     "Setting `output_attentions=False`."
                 )
+
         global_attention_mask = _prepare_4d_attention_mask(attention_mask, self.dtype)
-        rows = torch.arange(global_attention_mask.shape[2]).unsqueeze(0)
+        rows = torch.arange(global_attention_mask.shape[2], device=attention_mask.device).unsqueeze(0)
         distance = torch.abs(rows - rows.T)
-        window_mask = ((distance <= self.config.local_attention // 2).unsqueeze(0).unsqueeze(0)
-                       .to(attention_mask.device))
+        window_mask = (distance <= self.config.sliding_window).unsqueeze(0).unsqueeze(0)
         sliding_window_mask = global_attention_mask.masked_fill(window_mask.logical_not(), torch.finfo(self.dtype).min)
         return global_attention_mask, sliding_window_mask
 
 
-class no_rms_cjoice_ProkBertPredictionHead(nn.Module):
-    """
-    ProkBertPredictionHead applies a dense layer followed by an activation function and layer normalization.
-    This block is used as a preprocessing step before the final vocabulary projection in the masked language modeling head.
-    """
-    def __init__(self, config):
-        super().__init__()
-        self.config = config
-        self.dense = nn.Linear(config.hidden_size, config.hidden_size, config.classifier_bias)
-        self.act = ACT2FN[config.classifier_activation]
-        self.norm = nn.LayerNorm(config.hidden_size, eps=config.norm_eps, bias=config.norm_bias)
-
-
 
 class ProkBertPredictionHead(nn.Module):
-    def __init__(self, config):
+    def __init__(self, config: ProkBertConfig):
         super().__init__()
         Norm = RMSNorm if getattr(config, "norm_type", "layernorm") == "rms" else nn.LayerNorm
         self.dense = nn.Linear(config.hidden_size, config.hidden_size, config.classifier_bias)
         self.act = ACT2FN[config.classifier_activation]
         self.norm = Norm(config.hidden_size, eps=config.norm_eps, bias=config.norm_bias)
 
-
-
-
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
-        # Applies the dense projection, activation, and normalization.
         return self.norm(self.act(self.dense(hidden_states)))
+
 
 
 @add_start_docstrings(
@@ -1469,7 +1525,7 @@ class ProkBertPredictionHead(nn.Module):
 class ProkBertForMaskedLM(_SafeFromPretrainedMixin, ProkBertPreTrainedModel):
     _tied_weights_keys = {"decoder.weight": "model.embeddings.tok_embeddings.weight"}
 
-    def __init__(self, config):
+    def __init__(self, config: ProkBertConfig):
         super().__init__(config)
         self.config = config
         self.model = ProkBertModel(config)
@@ -1479,7 +1535,6 @@ class ProkBertForMaskedLM(_SafeFromPretrainedMixin, ProkBertPreTrainedModel):
         self.sparse_prediction = self.config.sparse_prediction
         self.sparse_pred_ignore_index = self.config.sparse_pred_ignore_index
 
-        # Initialize weights and apply final processing.
         self.post_init()
 
     def get_output_embeddings(self):
@@ -1494,9 +1549,8 @@ class ProkBertForMaskedLM(_SafeFromPretrainedMixin, ProkBertPreTrainedModel):
     def set_output_embeddings(self, new_embeddings: nn.Linear):
         self.decoder = new_embeddings
 
-    @torch.compile(dynamic=True)
-    def compiled_head(self, output: torch.Tensor) -> torch.Tensor:
-        return self.decoder(self.head(output))
+    def _prediction_logits(self, hidden_states: torch.Tensor) -> torch.Tensor:
+        return self.decoder(self.head(hidden_states))
 
     @add_code_sample_docstrings(
         checkpoint=_CHECKPOINT_FOR_DOC,
@@ -1523,10 +1577,9 @@ class ProkBertForMaskedLM(_SafeFromPretrainedMixin, ProkBertPreTrainedModel):
     ) -> Union[Tuple[torch.Tensor], MaskedLMOutput]:
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
-        # For flash attention, unpad the inputs to avoid wasting compute on padding tokens.
         if self.config._attn_implementation == "flash_attention_2":
             if indices is None and cu_seqlens is None and max_seqlen is None:
-                if batch_size is None and seq_len is None:
+                if batch_size is None or seq_len is None:
                     if inputs_embeds is not None:
                         batch_size, seq_len = inputs_embeds.shape[:2]
                     else:
@@ -1539,11 +1592,17 @@ class ProkBertForMaskedLM(_SafeFromPretrainedMixin, ProkBertPreTrainedModel):
                 if inputs_embeds is None:
                     with torch.no_grad():
                         input_ids, indices, cu_seqlens, max_seqlen, position_ids, labels = _unpad_prokbert_input(
-                            inputs=input_ids, attention_mask=attention_mask, position_ids=position_ids, labels=labels
+                            inputs=input_ids,
+                            attention_mask=attention_mask,
+                            position_ids=position_ids,
+                            labels=labels,
                         )
                 else:
                     inputs_embeds, indices, cu_seqlens, max_seqlen, position_ids, labels = _unpad_prokbert_input(
-                        inputs=inputs_embeds, attention_mask=attention_mask, position_ids=position_ids, labels=labels
+                        inputs=inputs_embeds,
+                        attention_mask=attention_mask,
+                        position_ids=position_ids,
+                        labels=labels,
                     )
 
         outputs = self.model(
@@ -1563,22 +1622,29 @@ class ProkBertForMaskedLM(_SafeFromPretrainedMixin, ProkBertPreTrainedModel):
         )
         last_hidden_state = outputs[0]
 
-        # If sparse prediction is enabled, filter out non-masked tokens.
+        logits_are_sparse = False
         if self.sparse_prediction and labels is not None:
             labels = labels.view(-1)
             last_hidden_state = last_hidden_state.view(labels.shape[0], -1)
             mask_tokens = labels != self.sparse_pred_ignore_index
             last_hidden_state = last_hidden_state[mask_tokens]
             labels = labels[mask_tokens]
+            logits_are_sparse = True
 
-        logits = self.decoder(self.head(last_hidden_state))
+        logits = self._prediction_logits(last_hidden_state)
 
         loss = None
         if labels is not None:
-            loss = self.loss_function(logits, labels, vocab_size=self.config.vocab_size)
+            loss = self.loss_function(logits, labels, vocab_size=self.config.vocab_size, **kwargs)
 
-        # If using flash attention, repad the output.
-        if self.config._attn_implementation == "flash_attention_2":
+        should_repad_logits = (
+            self.config._attn_implementation == "flash_attention_2"
+            and indices is not None
+            and batch_size is not None
+            and seq_len is not None
+            and not logits_are_sparse
+        )
+        if should_repad_logits:
             with nullcontext() if self.config.repad_logits_with_grad or labels is None else torch.no_grad():
                 logits = _pad_prokbert_output(inputs=logits, indices=indices, batch=batch_size, seqlen=seq_len)
 
@@ -1592,6 +1658,7 @@ class ProkBertForMaskedLM(_SafeFromPretrainedMixin, ProkBertPreTrainedModel):
             hidden_states=outputs.hidden_states,
             attentions=outputs.attentions,
         )
+
 
 
 class ProkBertForSequenceClassification(_SafeFromPretrainedMixin, ProkBertPreTrainedModel):
@@ -1846,7 +1913,14 @@ class ProkBertForMaskedLM2(_SafeFromPretrainedMixin, ProkBertPreTrainedModel):
             logp = F.log_softmax(pred, dim=-1)
             loss = F.kl_div(logp, targ, reduction="batchmean")
 
-        if self.config._attn_implementation == "flash_attention_2":
+        should_repad_logits = (
+            self.config._attn_implementation == "flash_attention_2"
+            and indices is not None
+            and batch_size is not None
+            and seq_len is not None
+            and not (self.sparse_prediction and labels is not None)
+        )
+        if should_repad_logits:
             with nullcontext() if self.config.repad_logits_with_grad or labels is None else torch.no_grad():
                 logits = _pad_prokbert_output(inputs=logits, indices=indices, batch=batch_size, seqlen=seq_len)
 
