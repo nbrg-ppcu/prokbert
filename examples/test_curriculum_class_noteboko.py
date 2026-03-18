@@ -55,8 +55,9 @@ def main() -> None:
     max_length = 512
     lut_cols = ["sequence_id", "label_id"]
 
-    sequences = sequences.sample(frac=0.1, random_state=seed)
-    print(sequences)
+    #sequences = sequences.sample(frac=0.1, random_state=seed)
+    #print(sequences)
+    #1/0
 
 
     print("[prepare_dataset] Running segmentation")
@@ -164,9 +165,9 @@ def main() -> None:
         desc="Tokenize segments",
     )
 
-    train_batch_size = 64
+    train_batch_size = 256
     eval_batch_size = 64
-    num_train_epochs = 0.5
+    num_train_epochs = 2.5
 
     backbone_lr = 1e-5
     head_lr = 5e-4
@@ -190,6 +191,7 @@ def main() -> None:
             per_device_eval_batch_size=eval_batch_size,
             num_train_epochs=num_train_epochs,
             bf16=use_bf16,
+            #torch_compile=True,
         )
 
     trainer = Trainer(
@@ -198,7 +200,7 @@ def main() -> None:
         train_dataset=tokenized_train_ds,
         eval_dataset=tokenized_test_ds,
         data_collator=data_collator,
-        compute_metrics=compute_metrics,
+        #compute_metrics=compute_metrics,
         optimizers=(optimizer, None),
     )
     trainer.train()

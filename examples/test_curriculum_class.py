@@ -52,9 +52,9 @@ def main() -> None:
     # Converting the dataset into a pandas dataframe for further dataprocessing
     seed = 42
     test_size = 0.10
-    train_batch_size = 32
+    train_batch_size = 256
     eval_batch_size = 32
-    num_train_epochs = 0.5
+    num_train_epochs = 2.5
     num_eval_steps = 400
     use_bf16 = True
     seed = 42
@@ -254,7 +254,7 @@ def main() -> None:
             bf16=use_bf16,
             #torch_compile=True,
             #torch_compile_mode ="max-autotune",
-            ddp_backend='nccl'
+            #ddp_backend='nccl'
         )
 
     trainer = Trainer(
@@ -263,8 +263,10 @@ def main() -> None:
         train_dataset=tokenized_train_ds,
         eval_dataset=tokenized_test_ds,
         data_collator=data_collator,
-        #compute_metrics=evaluate_embeddings,
+        #eval_strategy="steps",
+        compute_metrics=evaluate_embeddings,
         optimizers=(optimizer, None),
+
     )
 
     trainer.train()
