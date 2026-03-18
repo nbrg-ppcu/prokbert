@@ -3,12 +3,13 @@ from typing import Optional, Tuple, Union, Dict, Literal, Callable
 import math
 import os
 from contextlib import nullcontext
+from dataclasses import dataclass
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from transformers import PreTrainedModel
-from transformers.utils import logging
+from transformers.utils import ModelOutput, logging
 from transformers.activations import ACT2FN
 from transformers.modeling_rope_utils import ROPE_INIT_FUNCTIONS
 from transformers.configuration_utils import PretrainedConfig
@@ -310,6 +311,17 @@ def initialize_linear_kaiming(layer: nn.Linear):
             nn.init.zeros_(layer.bias)
 
 
+def _autocast_disabled(device_type: str):
+    try:
+        return torch.amp.autocast(device_type=device_type, enabled=False)
+    except (AttributeError, TypeError):
+        if device_type == "cuda":
+            return torch.cuda.amp.autocast(enabled=False)
+        if device_type == "cpu" and hasattr(torch, "cpu") and hasattr(torch.cpu, "amp"):
+            return torch.cpu.amp.autocast(enabled=False)
+        return nullcontext()
+
+
 def _normalize_token_attention_mask(
     attention_mask: Optional[torch.Tensor],
     *,
@@ -422,6 +434,7 @@ class ProkBertConfig(PretrainedConfig):
 
     attribute_map = {
         "classification_dropout_rate": "classifier_dropout",
+        "num_class_labels": "num_labels",
         "curricular_num_labels": "num_labels",
         "curricular_face_m": "curricular_margin",
         "curricular_face_s": "curricular_scale",
@@ -538,6 +551,7 @@ class ProkBertConfig(PretrainedConfig):
         legacy_global_rope_theta = float(kwargs.pop("global_rope_theta", self.default_theta["full_attention"]))
         legacy_local_rope_theta = float(kwargs.pop("local_rope_theta", self.default_theta["sliding_attention"]))
 
+        legacy_num_class_labels = kwargs.pop("num_class_labels", None)
         legacy_curricular_num_labels = kwargs.pop("curricular_num_labels", None)
         legacy_classifier_dropout = kwargs.pop("classification_dropout_rate", None)
         legacy_curricular_margin = kwargs.pop("curricular_face_m", None)
@@ -550,6 +564,8 @@ class ProkBertConfig(PretrainedConfig):
             num_labels = len(loaded_id2label)
         elif legacy_curricular_num_labels is not None:
             num_labels = int(legacy_curricular_num_labels)
+        elif legacy_num_class_labels is not None:
+            num_labels = int(legacy_num_class_labels)
 
         if legacy_classifier_dropout is not None:
             classifier_dropout = float(legacy_classifier_dropout)
@@ -722,11 +738,12 @@ def apply_rotary_pos_emb(q, k, cos, sin, position_ids=None, unsqueeze_dim=1):
     Returns:
         tuple(torch.Tensor): The rotated query and key tensors.
     """
+    original_dtype = q.dtype
     cos = cos.unsqueeze(unsqueeze_dim)
     sin = sin.unsqueeze(unsqueeze_dim)
-    q_embed = (q * cos) + (rotate_half(q) * sin)
-    k_embed = (k * cos) + (rotate_half(k) * sin)
-    return q_embed, k_embed
+    q_embed = (q.float() * cos) + (rotate_half(q.float()) * sin)
+    k_embed = (k.float() * cos) + (rotate_half(k.float()) * sin)
+    return q_embed.to(original_dtype), k_embed.to(original_dtype)
 
 
 def eager_attention_forward(
@@ -965,7 +982,7 @@ class ApplyRotaryEmbUnpad(torch.autograd.Function):
             inplace=True,
             conjugate=True,
         )
-        return do, None, None, None, None, None, None
+        return do, None, None, None, None
 
 
 def apply_rotary_unpadded(
@@ -1216,7 +1233,11 @@ class ProkBertAttention(nn.Module):
             self.attention_type = config.layer_types[layer_id]
 
         if self.attention_type == "sliding_attention":
-            self.local_attention = (config.sliding_window, config.sliding_window)
+            local_window = config.sliding_window
+            if config._attn_implementation == "flash_attention_2":
+                # FlashAttention uses inclusive local-attention boundaries.
+                local_window = local_window + 1
+            self.local_attention = (local_window, local_window)
             max_position_embeddings = config.local_attention
         elif self.attention_type == "full_attention":
             self.local_attention = (-1, -1)
@@ -1919,6 +1940,349 @@ class ProkBertForSequenceClassification(_SafeFromPretrainedMixin, ProkBertPreTra
         return SequenceClassifierOutput(
             loss=loss,
             logits=logits,
+            hidden_states=outputs.hidden_states,
+            attentions=outputs.attentions,
+        )
+
+
+@dataclass
+class CurricularSequenceClassifierOutput(ModelOutput):
+    loss: Optional[torch.FloatTensor] = None
+    logits: Optional[torch.FloatTensor] = None
+    embeddings: Optional[torch.FloatTensor] = None
+    hidden_states: Optional[Tuple[torch.FloatTensor, ...]] = None
+    attentions: Optional[Tuple[torch.FloatTensor, ...]] = None
+
+
+class CurricularFace(nn.Module):
+    def __init__(self, in_features: int, out_features: int, m: float = 0.5, s: float = 64.0, ema_alpha: float = 0.01):
+        super().__init__()
+        self.in_features = int(in_features)
+        self.out_features = int(out_features)
+        self.m = float(m)
+        self.s = float(s)
+        self.ema_alpha = float(ema_alpha)
+
+        self.cos_m = math.cos(self.m)
+        self.sin_m = math.sin(self.m)
+        self.threshold = math.cos(math.pi - self.m)
+        self.mm = math.sin(math.pi - self.m) * self.m
+
+        self.kernel = nn.Parameter(torch.empty(self.in_features, self.out_features))
+        self.register_buffer("t", torch.zeros(1, dtype=torch.float32))
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        nn.init.xavier_uniform_(self.kernel)
+        self.t.zero_()
+
+    def cosine(self, embeddings: torch.Tensor) -> torch.Tensor:
+        with _autocast_disabled(embeddings.device.type):
+            x = F.normalize(embeddings.float(), p=2.0, dim=1, eps=1e-12)
+            w = F.normalize(self.kernel.float(), p=2.0, dim=0, eps=1e-12)
+            cos_theta = F.linear(x, w.t()).clamp(-1.0, 1.0)
+        return cos_theta
+
+    def inference_logits(self, embeddings: torch.Tensor) -> torch.Tensor:
+        return self.cosine(embeddings) * self.s
+
+    def margin_logits_from_cosine(
+        self,
+        cos_theta: torch.Tensor,
+        labels: torch.LongTensor,
+        update_t: bool = False,
+    ) -> torch.Tensor:
+        labels = labels.reshape(-1).long()
+        target = cos_theta.gather(1, labels.unsqueeze(1))
+
+        sin_theta = torch.sqrt((1.0 - target.square()).clamp(min=0.0))
+        cos_theta_m = target * self.cos_m - sin_theta * self.sin_m
+
+        hard_mask = cos_theta > cos_theta_m
+        final_target = torch.where(
+            target > self.threshold,
+            cos_theta_m,
+            target - self.mm,
+        )
+
+        if update_t:
+            with torch.no_grad():
+                target_mean = target.mean().to(dtype=self.t.dtype).view_as(self.t)
+                self.t.lerp_(target_mean, self.ema_alpha)
+
+        t = self.t.to(device=cos_theta.device, dtype=cos_theta.dtype)
+        adjusted = torch.where(hard_mask, cos_theta * (t + cos_theta), cos_theta)
+        adjusted = adjusted.scatter(1, labels.unsqueeze(1), final_target)
+
+        return adjusted * self.s
+
+
+class ProkBertForCurricularClassification(_SafeFromPretrainedMixin, ProkBertPreTrainedModel):
+    """ProkBERT sequence classifier with CurricularFace logits for single-label classification."""
+
+    def __init__(self, config: ProkBertConfig):
+        super().__init__(config)
+        self.config = config
+        self.num_labels = int(config.num_labels)
+
+        if self.num_labels < 2:
+            raise ValueError(
+                "`ProkBertForCurricularClassification` requires `config.num_labels >= 2`. "
+                "CurricularFace is intended for single-label classification."
+            )
+        if self.config.problem_type is None:
+            self.config.problem_type = "single_label_classification"
+        elif self.config.problem_type != "single_label_classification":
+            raise ValueError(
+                "`ProkBertForCurricularClassification` only supports `problem_type='single_label_classification'`."
+            )
+
+        self.model = ProkBertModel(config)
+        self.weighting_layer = nn.Linear(config.hidden_size, 1)
+        self.dropout = nn.Dropout(config.classifier_dropout)
+
+        use_projection = config.curricular_embedding_size not in (None, -1)
+        embedding_dim = config.hidden_size if not use_projection else int(config.curricular_embedding_size)
+        self.linear = nn.Linear(config.hidden_size, embedding_dim) if use_projection else nn.Identity()
+
+        self.curricular_face = CurricularFace(
+            in_features=embedding_dim,
+            out_features=self.num_labels,
+            m=float(config.curricular_margin),
+            s=float(config.curricular_scale),
+        )
+        self.loss_fct = nn.CrossEntropyLoss()
+
+        self.post_init()
+
+        with torch.no_grad():
+            nn.init.zeros_(self.weighting_layer.weight)
+            if self.weighting_layer.bias is not None:
+                nn.init.zeros_(self.weighting_layer.bias)
+            if isinstance(self.linear, nn.Linear):
+                initialize_linear_kaiming(self.linear)
+
+    def get_input_embeddings(self):
+        return self.model.get_input_embeddings()
+
+    def set_input_embeddings(self, value):
+        self.model.set_input_embeddings(value)
+
+    def _pool_cls(self, sequence_output: torch.Tensor, token_mask: Optional[torch.Tensor]) -> torch.Tensor:
+        if token_mask is None:
+            return sequence_output[:, 0]
+
+        first_token_indices = token_mask.to(dtype=torch.long).argmax(dim=-1)
+        batch_indices = torch.arange(sequence_output.shape[0], device=sequence_output.device)
+        return sequence_output[batch_indices, first_token_indices]
+
+    def _pool_mean(self, sequence_output: torch.Tensor, token_mask: Optional[torch.Tensor]) -> torch.Tensor:
+        if token_mask is None:
+            return sequence_output.mean(dim=1)
+
+        weights = token_mask.unsqueeze(-1).to(dtype=sequence_output.dtype)
+        denom = weights.sum(dim=1).clamp(min=1.0)
+        return (sequence_output * weights).sum(dim=1) / denom
+
+    def _pool_attention(self, sequence_output: torch.Tensor, token_mask: Optional[torch.Tensor]) -> torch.Tensor:
+        scores = self.weighting_layer(sequence_output)
+
+        if token_mask is not None:
+            empty_rows = token_mask.sum(dim=1) == 0
+            if empty_rows.any():
+                token_mask = token_mask.clone()
+                token_mask[empty_rows, 0] = True
+            scores = scores.masked_fill(~token_mask.unsqueeze(-1), torch.finfo(scores.dtype).min)
+
+        weights = torch.softmax(scores.float(), dim=1).to(dtype=sequence_output.dtype)
+        return torch.sum(weights * sequence_output, dim=1)
+
+    def _pool_sequence(self, sequence_output: torch.Tensor, attention_mask: Optional[torch.Tensor]) -> torch.Tensor:
+        token_mask = _normalize_token_attention_mask(
+            attention_mask,
+            batch_size=sequence_output.shape[0],
+            seq_len=sequence_output.shape[1],
+            device=sequence_output.device,
+        )
+
+        pooling = self.config.classifier_pooling
+        if pooling == "attention":
+            return self._pool_attention(sequence_output, token_mask)
+        if pooling == "mean":
+            return self._pool_mean(sequence_output, token_mask)
+        if pooling == "cls":
+            return self._pool_cls(sequence_output, token_mask)
+        raise ValueError(
+            f"Unsupported `classifier_pooling`={pooling!r}. Expected one of ['attention', 'cls', 'mean']."
+        )
+
+    def _repad_sequence_output_if_needed(
+        self,
+        sequence_output: torch.Tensor,
+        indices: Optional[torch.Tensor],
+        batch_size: Optional[int],
+        seq_len: Optional[int],
+    ) -> torch.Tensor:
+        if sequence_output.dim() != 2:
+            return sequence_output
+
+        if indices is None or batch_size is None or seq_len is None:
+            raise ValueError(
+                "Received unpadded hidden states from `ProkBertModel`, but `indices`, `batch_size`, and "
+                "`seq_len` were not provided to repad them for curricular classification."
+            )
+
+        return _pad_prokbert_output(
+            inputs=sequence_output,
+            indices=indices,
+            batch=batch_size,
+            seqlen=seq_len,
+        )
+
+    def _compute_embeddings(
+        self,
+        input_ids: Optional[torch.LongTensor] = None,
+        attention_mask: Optional[torch.Tensor] = None,
+        sliding_window_mask: Optional[torch.Tensor] = None,
+        position_ids: Optional[torch.LongTensor] = None,
+        inputs_embeds: Optional[torch.Tensor] = None,
+        indices: Optional[torch.Tensor] = None,
+        cu_seqlens: Optional[torch.Tensor] = None,
+        max_seqlen: Optional[int] = None,
+        batch_size: Optional[int] = None,
+        seq_len: Optional[int] = None,
+        output_attentions: Optional[bool] = None,
+        output_hidden_states: Optional[bool] = None,
+        apply_dropout: bool = True,
+    ) -> tuple[torch.Tensor, BaseModelOutput]:
+        outputs = self.model(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            sliding_window_mask=sliding_window_mask,
+            position_ids=position_ids,
+            inputs_embeds=inputs_embeds,
+            indices=indices,
+            cu_seqlens=cu_seqlens,
+            max_seqlen=max_seqlen,
+            batch_size=batch_size,
+            seq_len=seq_len,
+            output_attentions=output_attentions,
+            output_hidden_states=output_hidden_states,
+            return_dict=True,
+        )
+
+        sequence_output = self._repad_sequence_output_if_needed(
+            outputs.last_hidden_state,
+            indices=indices,
+            batch_size=batch_size,
+            seq_len=seq_len,
+        )
+        pooled_output = self._pool_sequence(sequence_output, attention_mask)
+
+        if apply_dropout:
+            pooled_output = self.dropout(pooled_output)
+
+        embeddings = self.linear(pooled_output)
+        return embeddings, outputs
+
+    def encode(
+        self,
+        input_ids: Optional[torch.LongTensor] = None,
+        attention_mask: Optional[torch.Tensor] = None,
+        sliding_window_mask: Optional[torch.Tensor] = None,
+        position_ids: Optional[torch.LongTensor] = None,
+        inputs_embeds: Optional[torch.Tensor] = None,
+        indices: Optional[torch.Tensor] = None,
+        cu_seqlens: Optional[torch.Tensor] = None,
+        max_seqlen: Optional[int] = None,
+        batch_size: Optional[int] = None,
+        seq_len: Optional[int] = None,
+        normalize: bool = True,
+    ) -> torch.Tensor:
+        embeddings, _ = self._compute_embeddings(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            sliding_window_mask=sliding_window_mask,
+            position_ids=position_ids,
+            inputs_embeds=inputs_embeds,
+            indices=indices,
+            cu_seqlens=cu_seqlens,
+            max_seqlen=max_seqlen,
+            batch_size=batch_size,
+            seq_len=seq_len,
+            apply_dropout=False,
+        )
+        return l2_norm(embeddings, axis=1) if normalize else embeddings
+
+    def forward(
+        self,
+        input_ids: Optional[torch.LongTensor] = None,
+        attention_mask: Optional[torch.Tensor] = None,
+        sliding_window_mask: Optional[torch.Tensor] = None,
+        position_ids: Optional[torch.LongTensor] = None,
+        inputs_embeds: Optional[torch.Tensor] = None,
+        labels: Optional[torch.LongTensor] = None,
+        indices: Optional[torch.Tensor] = None,
+        cu_seqlens: Optional[torch.Tensor] = None,
+        max_seqlen: Optional[int] = None,
+        batch_size: Optional[int] = None,
+        seq_len: Optional[int] = None,
+        output_attentions: Optional[bool] = None,
+        output_hidden_states: Optional[bool] = None,
+        return_dict: Optional[bool] = None,
+        return_embeddings: bool = False,
+        normalize_embeddings: bool = True,
+        **kwargs,
+    ) -> Union[Tuple, CurricularSequenceClassifierOutput]:
+        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+
+        embeddings, outputs = self._compute_embeddings(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            sliding_window_mask=sliding_window_mask,
+            position_ids=position_ids,
+            inputs_embeds=inputs_embeds,
+            indices=indices,
+            cu_seqlens=cu_seqlens,
+            max_seqlen=max_seqlen,
+            batch_size=batch_size,
+            seq_len=seq_len,
+            output_attentions=output_attentions,
+            output_hidden_states=output_hidden_states,
+            apply_dropout=self.training,
+        )
+
+        exported_embeddings = None
+        if return_embeddings:
+            exported_embeddings = l2_norm(embeddings, axis=1) if normalize_embeddings else embeddings
+
+        cos_theta = self.curricular_face.cosine(embeddings)
+        logits = cos_theta * self.curricular_face.s
+
+        loss = None
+        if labels is not None:
+            labels = labels.view(-1).long()
+            train_logits = self.curricular_face.margin_logits_from_cosine(
+                cos_theta,
+                labels,
+                update_t=self.training,
+            )
+            loss = self.loss_fct(train_logits, labels)
+
+        if not return_dict:
+            out = (logits,)
+            if return_embeddings:
+                out = out + (exported_embeddings,)
+            if output_hidden_states:
+                out = out + (outputs.hidden_states,)
+            if output_attentions:
+                out = out + (outputs.attentions,)
+            return ((loss,) + out) if loss is not None else out
+
+        return CurricularSequenceClassifierOutput(
+            loss=loss,
+            logits=logits,
+            embeddings=exported_embeddings,
             hidden_states=outputs.hidden_states,
             attentions=outputs.attentions,
         )
