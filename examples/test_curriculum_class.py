@@ -73,7 +73,7 @@ def main() -> None:
     # Converting the dataset into a pandas dataframe for further dataprocessing
     seed = 42
     test_size = 0.10
-    train_batch_size = 256
+    train_batch_size = 96
     eval_batch_size = 32
     num_train_epochs = 2.5
     num_eval_steps = 400
@@ -83,7 +83,7 @@ def main() -> None:
     max_length = 1000
 
     sequences = ds.to_pandas()
-    max_length = 512
+    max_length = 2000
     lut_cols = ["sequence_id", "label_id"]
 
 
