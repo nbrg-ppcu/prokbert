@@ -3,3 +3,4 @@ prune src/prokbert/dev_notebooks
 graft docs
 prune docs/_build
 include prokbert/data/*
+
