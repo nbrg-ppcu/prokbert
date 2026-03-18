@@ -64,7 +64,9 @@ _HF_MODEL_INIT_BLACKLIST = {
     "tp_plan",
     "tp_size",
     "weights_only",
-    "use_flash_attention_2",
+    #"use_flash_attention_2",
+    #"attn_implementation",
+    #"torch_dtype"
 }
 
 logger = logging.get_logger(__name__)
@@ -244,6 +246,14 @@ class _SafeFromPretrainedMixin:
             config_load_kwargs=config_load_kwargs,
             other_kwargs=other_kwargs,
         )
+        '''
+        config = cls._autoset_attn_implementation(
+            config,
+            use_flash_attention_2=bool(init_kwargs.get("use_flash_attention_2", False)),
+            torch_dtype=init_kwargs.get("torch_dtype", None),
+            device_map=init_kwargs.get("device_map", None),
+        )
+        ''' 
 
         for k in _HF_MODEL_INIT_BLACKLIST:
             init_kwargs.pop(k, None)
@@ -425,6 +435,9 @@ class ProkBertConfig(PretrainedConfig):
     `classifier_pooling` is also standardized as a single field and extended with the custom
     `"attention"` option used by the standalone ProkBERT sequence-classification head.
 
+    The tokenizer metadata fields `kmer` and `shift` are also stored on the config so the model artifact keeps
+    the sequence-tokenization contract alongside the architectural settings.
+
     Legacy names are still accepted for backward compatibility when loading older checkpoints/configs.
     """
 
@@ -515,6 +528,8 @@ class ProkBertConfig(PretrainedConfig):
         initializer_cutoff_factor: float = 2.0,
         norm_eps: float = 1e-6,
         norm_bias: bool = False,
+        kmer: int = 6,
+        shift: int = 1,
         pad_token_id: int = 0,
         eos_token_id: int = 3,
         bos_token_id: int = 2,
@@ -602,6 +617,8 @@ class ProkBertConfig(PretrainedConfig):
             **kwargs,
         )
 
+        self.kmer = int(kmer)
+        self.shift = int(shift)
         self.vocab_size = vocab_size
         self.max_position_embeddings = max_position_embeddings
         self.hidden_size = hidden_size
@@ -638,6 +655,12 @@ class ProkBertConfig(PretrainedConfig):
         self.curricular_margin = curricular_margin
         self.curricular_scale = curricular_scale
         self.curricular_embedding_size = curricular_embedding_size
+
+        if self.kmer <= 0:
+            raise ValueError(f"`kmer` must be a positive integer, got {self.kmer}.")
+
+        if self.shift <= 0:
+            raise ValueError(f"`shift` must be a positive integer, got {self.shift}.")
 
         if len(self.layer_types) != self.num_hidden_layers:
             raise ValueError(
@@ -1436,6 +1459,7 @@ class ProkBertPreTrainedModel(PreTrainedModel):
 )
 class ProkBertModel(_SafeFromPretrainedMixin, ProkBertPreTrainedModel):
     def __init__(self, config: ProkBertConfig):
+        #config = self._autoset_attn_implementation(config)
         super().__init__(config)
         self.config = config
         self.embeddings = ProkBertEmbeddings(config)
@@ -1509,6 +1533,7 @@ class ProkBertModel(_SafeFromPretrainedMixin, ProkBertPreTrainedModel):
             attention_mask = torch.ones((batch_size, seq_len), device=device, dtype=torch.bool)
 
         repad = False
+        restore_attn_implementation = None
         if self.config._attn_implementation == "flash_attention_2":
             if indices is None and cu_seqlens is None and max_seqlen is None:
                 repad = True
@@ -1524,6 +1549,8 @@ class ProkBertModel(_SafeFromPretrainedMixin, ProkBertPreTrainedModel):
                         attention_mask=attention_mask,
                     )
         else:
+            if output_attentions and self.config._attn_implementation == "sdpa":
+                restore_attn_implementation = self.config._attn_implementation
             if position_ids is None:
                 position_ids = torch.arange(seq_len, device=device).unsqueeze(0)
             attention_mask, sliding_window_mask = self._update_attention_mask(
@@ -1573,6 +1600,9 @@ class ProkBertModel(_SafeFromPretrainedMixin, ProkBertPreTrainedModel):
                     _pad_prokbert_output(inputs=hs, indices=indices, batch=batch_size, seqlen=seq_len)
                     for hs in all_hidden_states
                 )
+
+        if restore_attn_implementation is not None:
+            self.config._attn_implementation = restore_attn_implementation
 
         if not return_dict:
             return tuple(v for v in [hidden_states, all_hidden_states, all_self_attentions] if v is not None)
@@ -2463,7 +2493,7 @@ class ProkBertForMaskedLM2(_SafeFromPretrainedMixin, ProkBertPreTrainedModel):
 
         return MaskedLMOutput(
             loss=loss,
-            logits=logits if logits.dim() == 3 else None,
+            logits=logits,
             hidden_states=outputs.hidden_states,
             attentions=outputs.attentions,
         )
