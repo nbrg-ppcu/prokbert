@@ -4,6 +4,13 @@ torchrun --nproc_per_node=1 test_curriculum_class.py
 
 """
 
+import torch
+USE_TF32 = False   # safest while debugging; set True if you want TF32 on fp32 ops
+torch.backends.cuda.matmul.allow_tf32 = USE_TF32
+torch.backends.cudnn.allow_tf32 = USE_TF32
+torch.backends.cuda.matmul.allow_tf32 = False
+torch.backends.cudnn.allow_tf32 = False
+
 from transformers import TrainingArguments, Trainer, DataCollatorWithPadding
 from prokbert.sequtils import *
 from prokbert.training_utils import *
@@ -14,7 +21,6 @@ from datasets import Dataset, load_dataset, ClassLabel
 import seaborn as sns
 import matplotlib.pyplot as plt
 import pandas as pd
-import torch
 import numpy as np
 from os.path import join
 import os
@@ -26,6 +32,21 @@ REPO_ID = "neuralbioinfo/eskapee"
 MODEL_NAME = "neuralbioinfo/prokbert-mini-long"
 
 OUTPUT_PATH = "./test_megatroncurr"
+
+
+def reset_matmul_precision(tf32: bool = False) -> None:
+    mode = "high" if tf32 else "highest"
+    torch.set_float32_matmul_precision(mode)
+
+    # Optional hard reset in case another import changed backend-specific state.
+    if hasattr(torch.backends, "cuda") and hasattr(torch.backends.cuda, "matmul"):
+        if hasattr(torch.backends.cuda.matmul, "fp32_precision"):
+            torch.backends.cuda.matmul.fp32_precision = "tf32" if tf32 else "ieee"
+
+    if hasattr(torch.backends, "mkldnn") and hasattr(torch.backends.mkldnn, "matmul"):
+        if hasattr(torch.backends.mkldnn.matmul, "fp32_precision"):
+            torch.backends.mkldnn.matmul.fp32_precision = "tf32" if tf32 else "ieee"
+
 
 
 
@@ -229,7 +250,7 @@ def main() -> None:
 
     backbone_lr = 1e-5
     head_lr = 5e-4
-    use_bf16 = False
+    use_bf16 = True
 
     backbone_params = [p for n, p in model.named_parameters() if n.startswith("bert.")]
     head_params = [p for n, p in model.named_parameters() if not n.startswith("bert.")]
@@ -243,6 +264,7 @@ def main() -> None:
             {"params": head_params, "lr": head_lr},
         ],
     )
+    reset_matmul_precision(tf32=False)
 
     training_args = TrainingArguments(
             output_dir='eskapee_example',
@@ -252,9 +274,9 @@ def main() -> None:
             per_device_eval_batch_size=eval_batch_size,
             num_train_epochs=num_train_epochs,
             bf16=use_bf16,
-            #torch_compile=True,
-            #torch_compile_mode ="max-autotune",
-            #ddp_backend='nccl'
+            torch_compile=True,
+            torch_compile_mode ="max-autotune",
+            ddp_backend='nccl'
         )
 
     trainer = Trainer(
@@ -264,9 +286,8 @@ def main() -> None:
         eval_dataset=tokenized_test_ds,
         data_collator=data_collator,
         #eval_strategy="steps",
-        compute_metrics=evaluate_embeddings,
+        #compute_metrics=evaluate_embeddings,
         optimizers=(optimizer, None),
-
     )
 
     trainer.train()
