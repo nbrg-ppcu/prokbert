@@ -12,7 +12,6 @@ from transformers.utils import logging
 from transformers.activations import ACT2FN
 from transformers.modeling_rope_utils import ROPE_INIT_FUNCTIONS
 from transformers.configuration_utils import PretrainedConfig
-from transformers.modeling_attn_mask_utils import _prepare_4d_attention_mask
 from transformers.utils.doc import add_code_sample_docstrings, add_start_docstrings
 from transformers.utils.import_utils import is_triton_available, is_flash_attn_2_available
 from transformers.modeling_outputs import SequenceClassifierOutput, BaseModelOutput, MaskedLMOutput
@@ -311,6 +310,97 @@ def initialize_linear_kaiming(layer: nn.Linear):
             nn.init.zeros_(layer.bias)
 
 
+def _normalize_token_attention_mask(
+    attention_mask: Optional[torch.Tensor],
+    *,
+    batch_size: Optional[int] = None,
+    seq_len: Optional[int] = None,
+    device: Optional[torch.device] = None,
+) -> Optional[torch.Tensor]:
+    """Convert common attention-mask layouts to a `(batch, seq_len)` boolean keep-mask.
+
+    Supported inputs are 2D token masks, 3D masks of shape `(batch, 1, seq_len)`, and 4D masks
+    of shape `(batch, 1, query_len, key_len)` used by eager/SDPA attention. Returned values use
+    `True` for valid (non-padding) tokens.
+    """
+    if attention_mask is None:
+        if batch_size is None or seq_len is None:
+            return None
+        return torch.ones((batch_size, seq_len), device=device, dtype=torch.bool)
+
+    mask = attention_mask
+
+    if mask.dim() == 4:
+        if mask.dtype == torch.bool:
+            mask = mask[:, 0].any(dim=-2)
+        else:
+            mask = mask[:, 0].amax(dim=-2) >= 0
+        return mask.to(dtype=torch.bool)
+
+    if mask.dim() == 3:
+        if mask.size(1) != 1:
+            raise ValueError(
+                "3D attention masks must have shape (batch, 1, seq_len) when used in ProkBert."
+            )
+        mask = mask[:, 0, :]
+
+    if mask.dim() != 2:
+        raise ValueError(
+            "Attention masks for ProkBert must be 2D, 3D `(batch, 1, seq_len)`, or 4D "
+            "`(batch, 1, query_len, key_len)`."
+        )
+
+    if mask.dtype == torch.bool:
+        return mask
+
+    if mask.is_floating_point():
+        if mask.numel() == 0:
+            return mask.to(dtype=torch.bool)
+        return (mask >= 0) if torch.any(mask < 0) else (mask > 0)
+
+    return mask != 0
+
+
+def _to_additive_attention_bias(mask: torch.Tensor, dtype: torch.dtype) -> torch.Tensor:
+    """Convert a boolean keep-mask to the additive attention-bias format expected by eager attention."""
+    min_dtype = torch.finfo(dtype).min
+    bias = torch.zeros(mask.shape, device=mask.device, dtype=dtype)
+    return bias.masked_fill(~mask, min_dtype)
+
+
+def _build_bidirectional_attention_biases(
+    attention_mask: torch.Tensor,
+    dtype: torch.dtype,
+    sliding_window: int,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """Create full-attention and sliding-window additive masks for eager/SDPA attention."""
+    if attention_mask.dim() == 4:
+        if attention_mask.dtype == torch.bool:
+            global_attention_mask = _to_additive_attention_bias(attention_mask, dtype)
+        else:
+            global_attention_mask = attention_mask.to(dtype=dtype)
+        query_length = global_attention_mask.shape[-2]
+        key_length = global_attention_mask.shape[-1]
+    else:
+        token_mask = _normalize_token_attention_mask(attention_mask)
+        if token_mask is None:
+            raise ValueError("`attention_mask` cannot be None when creating additive attention biases.")
+        query_length = token_mask.shape[-1]
+        key_length = token_mask.shape[-1]
+        expanded_token_mask = token_mask[:, None, None, :].expand(-1, 1, query_length, -1)
+        global_attention_mask = _to_additive_attention_bias(expanded_token_mask, dtype)
+
+    row_positions = torch.arange(query_length, device=global_attention_mask.device)[:, None]
+    col_positions = torch.arange(key_length, device=global_attention_mask.device)[None, :]
+    local_window = (row_positions - col_positions).abs() <= sliding_window
+    min_dtype = torch.finfo(dtype).min
+    sliding_window_mask = global_attention_mask.masked_fill(
+        ~local_window.view(1, 1, query_length, key_length),
+        min_dtype,
+    )
+    return global_attention_mask, sliding_window_mask
+
+
 class ProkBertConfig(PretrainedConfig):
     r"""
     Configuration for the standalone ProkBERT ModernBERT-style encoder stack.
@@ -319,6 +409,9 @@ class ProkBertConfig(PretrainedConfig):
       - `layer_types` instead of `global_attn_every_n_layers`
       - nested `rope_parameters` keyed by attention type instead of a single flat RoPE dict
       - `tie_word_embeddings` explicitly tracked in the config
+
+    `classifier_pooling` is also standardized as a single field and extended with the custom
+    `"attention"` option used by the standalone ProkBERT sequence-classification head.
 
     Legacy names are still accepted for backward compatibility when loading older checkpoints/configs.
     """
@@ -335,14 +428,6 @@ class ProkBertConfig(PretrainedConfig):
         "curriculum_hidden_size": "curricular_embedding_size",
     }
 
-    def __setattr__(self, name, value):
-        if name == "reference_compile" and value is not None:
-            logger.warning_once(
-                "The `reference_compile` argument is deprecated and will be removed in `transformers v5.2.0`. "
-                "Use `torch.compile()` directly on the model instead."
-            )
-            value = None
-        super().__setattr__(name, value)
 
     @classmethod
     def _build_layer_types(
@@ -431,14 +516,14 @@ class ProkBertConfig(PretrainedConfig):
         mlp_bias: bool = False,
         mlp_dropout: float = 0.0,
         decoder_bias: bool = True,
-        classifier_pooling: Literal["cls", "mean"] = "cls",
+        classifier_pooling: Literal["attention", "cls", "mean"] = "attention",
         classifier_dropout: float = 0.0,
         classifier_bias: bool = False,
         classifier_activation: str = "gelu",
         deterministic_flash_attn: bool = False,
         sparse_prediction: bool = False,
         sparse_pred_ignore_index: int = -100,
-        reference_compile: bool | None = False,
+        reference_compile: bool | None = None,
         repad_logits_with_grad: bool = False,
         norm_type: str = "rms",
         tie_word_embeddings: bool = True,
@@ -551,9 +636,9 @@ class ProkBertConfig(PretrainedConfig):
                 'Allowed values are ["full_attention", "sliding_attention"].'
             )
 
-        if self.classifier_pooling not in ["cls", "mean"]:
+        if self.classifier_pooling not in ["attention", "cls", "mean"]:
             raise ValueError(
-                f'Invalid value for `classifier_pooling`, should be either "cls" or "mean", but is {self.classifier_pooling}.'
+                f'Invalid value for `classifier_pooling`, should be one of ["attention", "cls", "mean"], but is {self.classifier_pooling}.'
             )
 
         if self.norm_type not in {"rms", "layernorm"}:
@@ -1495,12 +1580,11 @@ class ProkBertModel(_SafeFromPretrainedMixin, ProkBertPreTrainedModel):
                     "Setting `output_attentions=False`."
                 )
 
-        global_attention_mask = _prepare_4d_attention_mask(attention_mask, self.dtype)
-        rows = torch.arange(global_attention_mask.shape[2], device=attention_mask.device).unsqueeze(0)
-        distance = torch.abs(rows - rows.T)
-        window_mask = (distance <= self.config.sliding_window).unsqueeze(0).unsqueeze(0)
-        sliding_window_mask = global_attention_mask.masked_fill(window_mask.logical_not(), torch.finfo(self.dtype).min)
-        return global_attention_mask, sliding_window_mask
+        return _build_bidirectional_attention_biases(
+            attention_mask=attention_mask,
+            dtype=self.dtype,
+            sliding_window=self.config.sliding_window,
+        )
 
 
 
@@ -1662,39 +1746,112 @@ class ProkBertForMaskedLM(_SafeFromPretrainedMixin, ProkBertPreTrainedModel):
 
 
 class ProkBertForSequenceClassification(_SafeFromPretrainedMixin, ProkBertPreTrainedModel):
-    """
-    ProkBERT model for sequence classification tasks.
-    """
+    """Standalone ProkBERT sequence classifier with mask-aware pooling."""
+
     def __init__(self, config: ProkBertConfig):
         super().__init__(config)
-        self.num_labels = config.num_labels
+        self.num_labels = int(config.num_labels)
         self.config = config
 
         self.model = ProkBertModel(config)
-        self.norm = nn.LayerNorm(config.hidden_size, eps=1e-5)
+        self.norm = nn.LayerNorm(config.hidden_size, eps=config.norm_eps)
 
-        self.weighting_layer = nn.Linear(self.config.hidden_size, 1)
-        self.dropout = nn.Dropout(self.config.classifier_dropout)
-        self.classifier = nn.Linear(self.config.hidden_size, self.config.num_labels)
-        self.loss_fct = torch.nn.CrossEntropyLoss()
+        # Kept for backward compatibility with existing sequence-classification checkpoints.
+        self.weighting_layer = nn.Linear(config.hidden_size, 1)
+        self.dropout = nn.Dropout(config.classifier_dropout)
+        self.classifier = nn.Linear(config.hidden_size, self.num_labels)
 
-        # Initialize weights and apply final processing
         self.post_init()
+
     def _init_weights(self, module: nn.Module):
         super()._init_weights(module)
 
-        # Uniform token attention at start
         if module is self.weighting_layer:
             nn.init.zeros_(module.weight)
-            nn.init.zeros_(module.bias)
+            if module.bias is not None:
+                nn.init.zeros_(module.bias)
 
-        # BERT-style head init: small Gaussian, zero bias
         if module is self.classifier:
-            # both are good:
             nn.init.xavier_uniform_(module.weight, gain=1.0)
-            module.weight.data /= math.sqrt(self.classifier.in_features)  # extra shrink
-            nn.init.zeros_(module.bias)
+            module.weight.data /= math.sqrt(self.classifier.in_features)
+            if module.bias is not None:
+                nn.init.zeros_(module.bias)
 
+    def _pool_cls(self, sequence_output: torch.Tensor, token_mask: Optional[torch.Tensor]) -> torch.Tensor:
+        if token_mask is None:
+            return sequence_output[:, 0]
+
+        first_token_indices = token_mask.to(dtype=torch.long).argmax(dim=-1)
+        batch_indices = torch.arange(sequence_output.shape[0], device=sequence_output.device)
+        return sequence_output[batch_indices, first_token_indices]
+
+    def _pool_mean(self, sequence_output: torch.Tensor, token_mask: Optional[torch.Tensor]) -> torch.Tensor:
+        if token_mask is None:
+            return sequence_output.mean(dim=1)
+
+        weights = token_mask.unsqueeze(-1).to(dtype=sequence_output.dtype)
+        denom = weights.sum(dim=1).clamp(min=1.0)
+        return (sequence_output * weights).sum(dim=1) / denom
+
+    def _pool_attention(self, sequence_output: torch.Tensor, token_mask: Optional[torch.Tensor]) -> torch.Tensor:
+        scores = self.weighting_layer(sequence_output)
+
+        if token_mask is not None:
+            empty_rows = token_mask.sum(dim=1) == 0
+            if empty_rows.any():
+                token_mask = token_mask.clone()
+                token_mask[empty_rows, 0] = True
+            scores = scores.masked_fill(~token_mask.unsqueeze(-1), torch.finfo(scores.dtype).min)
+
+        weights = torch.softmax(scores.float(), dim=1).to(dtype=sequence_output.dtype)
+        return torch.sum(weights * sequence_output, dim=1)
+
+    def _pool_sequence(self, sequence_output: torch.Tensor, attention_mask: Optional[torch.Tensor]) -> torch.Tensor:
+        token_mask = _normalize_token_attention_mask(
+            attention_mask,
+            batch_size=sequence_output.shape[0],
+            seq_len=sequence_output.shape[1],
+            device=sequence_output.device,
+        )
+
+        pooling = self.config.classifier_pooling
+        if pooling == "attention":
+            return self._pool_attention(sequence_output, token_mask)
+        if pooling == "mean":
+            return self._pool_mean(sequence_output, token_mask)
+        if pooling == "cls":
+            return self._pool_cls(sequence_output, token_mask)
+        raise ValueError(
+            f"Unsupported `classifier_pooling`={pooling!r}. Expected one of ['attention', 'cls', 'mean']."
+        )
+
+    def _compute_loss(self, logits: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
+        if self.config.problem_type is None:
+            if self.num_labels == 1:
+                self.config.problem_type = "regression"
+            elif labels.dtype in (torch.int8, torch.int16, torch.int32, torch.int64, torch.long, torch.uint8):
+                self.config.problem_type = "single_label_classification"
+            else:
+                self.config.problem_type = "multi_label_classification"
+
+        if self.config.problem_type == "regression":
+            loss_fct = nn.MSELoss()
+            if self.num_labels == 1:
+                return loss_fct(logits.squeeze(), labels.squeeze().to(logits.dtype))
+            return loss_fct(logits, labels.to(logits.dtype))
+
+        if self.config.problem_type == "single_label_classification":
+            loss_fct = nn.CrossEntropyLoss()
+            return loss_fct(logits.view(-1, self.num_labels), labels.view(-1))
+
+        if self.config.problem_type == "multi_label_classification":
+            loss_fct = nn.BCEWithLogitsLoss()
+            return loss_fct(logits, labels.to(logits.dtype))
+
+        raise ValueError(
+            f"Unsupported `problem_type`={self.config.problem_type!r}. "
+            "Expected 'regression', 'single_label_classification', or 'multi_label_classification'."
+        )
 
     def forward(
         self,
@@ -1714,7 +1871,6 @@ class ProkBertForSequenceClassification(_SafeFromPretrainedMixin, ProkBertPreTra
         return_dict: bool = None,
         **kwargs,
     ) -> SequenceClassifierOutput:
-
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
         outputs = self.model(
@@ -1732,28 +1888,40 @@ class ProkBertForSequenceClassification(_SafeFromPretrainedMixin, ProkBertPreTra
             output_hidden_states=output_hidden_states,
             return_dict=return_dict,
         )
-        # Get hidden states
+
         sequence_output = outputs[0]
-        weights = self.weighting_layer(sequence_output)
-        weights = torch.nn.functional.softmax(weights, dim=1)
-        # Compute weighted sum
-        pooled_output = torch.sum(weights * sequence_output, dim=1)
+        if sequence_output.dim() == 2:
+            if indices is None or batch_size is None or seq_len is None:
+                raise ValueError(
+                    "Received unpadded hidden states from `ProkBertModel`, but `indices`, `batch_size`, and "
+                    "`seq_len` were not provided to repad them for sequence classification."
+                )
+            sequence_output = _pad_prokbert_output(
+                inputs=sequence_output,
+                indices=indices,
+                batch=batch_size,
+                seqlen=seq_len,
+            )
+
+        pooled_output = self._pool_sequence(sequence_output, attention_mask)
         pooled_output = self.norm(pooled_output)
-        # Classification head
         pooled_output = self.dropout(pooled_output)
         logits = self.classifier(pooled_output)
 
         loss = None
         if labels is not None:
-            loss = self.loss_fct(logits.view(-1, self.config.num_labels), labels.view(-1))
+            loss = self._compute_loss(logits, labels)
 
-        classification_output = SequenceClassifierOutput(
+        if not return_dict:
+            output = (logits,) + outputs[1:]
+            return ((loss,) + output) if loss is not None else output
+
+        return SequenceClassifierOutput(
             loss=loss,
             logits=logits,
             hidden_states=outputs.hidden_states,
             attentions=outputs.attentions,
         )
-        return classification_output
 
 
 class ProkBertForMaskedLM2(_SafeFromPretrainedMixin, ProkBertPreTrainedModel):
