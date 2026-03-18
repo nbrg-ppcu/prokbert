@@ -262,8 +262,8 @@ def build_training_arguments(args: argparse.Namespace) -> TrainingArguments:
         "report_to": "none",
         "seed": args.seed,
         "remove_unused_columns": True,
-        "fp16": fp16,
-        "bf16": bf16,
+        #"fp16": fp16,
+        "bf16": True,
         "gradient_checkpointing": args.gradient_checkpointing,
     }
 
@@ -323,6 +323,20 @@ def main() -> None:
     )
 
     training_args = build_training_arguments(args)
+    training_args = TrainingArguments(
+        output_dir='fsdfds',
+        report_to="none",
+        logging_steps=20,
+        per_device_train_batch_size=128,
+        per_device_eval_batch_size=128,
+        num_train_epochs=2.0,
+        bf16=True,
+        #torch_compile=True,
+        #torch_compile_mode ="max-autotune",
+        #ddp_backend='nccl'
+    )
+    
+    print(training_args)
 
     trainer = Trainer(
         model=model,
