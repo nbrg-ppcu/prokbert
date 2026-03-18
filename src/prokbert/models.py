@@ -8,6 +8,7 @@ import torch
 import torch.nn as nn
 from torch.nn import CrossEntropyLoss
 from torch.nn.parameter import Parameter
+import torch.nn.functional as F
 from transformers.activations import ACT2FN
 from transformers.configuration_utils import PretrainedConfig
 from transformers.modeling_outputs import (
@@ -21,6 +22,7 @@ from transformers.modeling_utils import PreTrainedModel
 from transformers.generation import GenerationMixin
 from dataclasses import dataclass
 from transformers.utils import ModelOutput
+from contextlib import nullcontext
 
 try:
     from transformers.cache_utils import Cache, DynamicCache, EncoderDecoderCache
@@ -419,6 +421,17 @@ def _read_state_dict(weights_path, weights_only: bool = True) -> dict[str, torch
         # Older torch versions do not support weights_only
         return torch.load(weights_path, map_location="cpu")
 
+def _autocast_disabled(device_type: str):
+    try:
+        return torch.amp.autocast(device_type=device_type, enabled=False)
+    except (AttributeError, TypeError):
+        # older torch fallback
+        if device_type == "cuda":
+            return torch.cuda.amp.autocast(enabled=False)
+        if device_type == "cpu" and hasattr(torch, "cpu") and hasattr(torch.cpu, "amp"):
+            return torch.cpu.amp.autocast(enabled=False)
+        return nullcontext()
+    
 
 class _SafeFromPretrainedMixin:
     """
@@ -1814,63 +1827,83 @@ class CurricularSequenceClassifierOutput(ModelOutput):
 
 
 class CurricularFace(nn.Module):
-    def __init__(self, in_features, out_features, m=0.5, s=64.0):
+    def __init__(self, in_features, out_features, m=0.5, s=64.0, ema_alpha=0.01):
         super().__init__()
         self.in_features = in_features
         self.out_features = out_features
         self.m = float(m)
         self.s = float(s)
+        self.ema_alpha = float(ema_alpha)
 
         self.cos_m = math.cos(self.m)
         self.sin_m = math.sin(self.m)
         self.threshold = math.cos(math.pi - self.m)
         self.mm = math.sin(math.pi - self.m) * self.m
 
+        # keep checkpoint compatibility: same shape as before
         self.kernel = Parameter(torch.empty(in_features, out_features))
-        self.register_buffer("t", torch.zeros(1))
+        self.register_buffer("t", torch.zeros(1, dtype=torch.float32))
         self.reset_parameters()
 
     def reset_parameters(self):
         nn.init.xavier_uniform_(self.kernel)
         self.t.zero_()
 
-    def forward(self, embeddings: torch.Tensor, label: Optional[torch.LongTensor] = None):
-        embeddings = l2_norm(embeddings, axis=1)
-        kernel_norm = l2_norm(self.kernel, axis=0)
-        cos_theta = torch.mm(embeddings, kernel_norm).clamp(-1.0, 1.0)
+    def cosine(self, embeddings: torch.Tensor) -> torch.Tensor:
+        # entire angular-margin block starts from fp32 cosine similarities
+        # one cast at the entrance; do not keep re-casting inside
+        with _autocast_disabled(embeddings.device.type):
+            x = F.normalize(embeddings.float(), p=2.0, dim=1, eps=1e-12)
+            w = F.normalize(self.kernel.float(), p=2.0, dim=0, eps=1e-12)
+            cos_theta = F.linear(x, w.t()).clamp(-1.0, 1.0)
+        return cos_theta  # fp32
 
-        with torch.no_grad():
-            origin_cos = cos_theta.clone()
+    def inference_logits(self, embeddings: torch.Tensor) -> torch.Tensor:
+        return self.cosine(embeddings) * self.s
 
-        # Inference path: margin-free cosine logits
-        if label is None:
-            scaled = cos_theta * self.s
-            return scaled, scaled
+    def margin_logits_from_cosine(
+        self,
+        cos_theta: torch.Tensor,
+        labels: torch.LongTensor,
+        update_t: bool = False,
+    ) -> torch.Tensor:
+        labels = labels.reshape(-1).long()
 
-        label = label.view(-1).long()
-        batch_index = torch.arange(embeddings.size(0), device=embeddings.device)
-        target_logit = cos_theta[batch_index, label].view(-1, 1)
+        # (B, 1)
+        target = cos_theta.gather(1, labels.unsqueeze(1))
 
-        sin_theta = torch.sqrt((1.0 - target_logit.pow(2)).clamp(min=0.0))
-        cos_theta_m = target_logit * self.cos_m - sin_theta * self.sin_m
+        sin_theta = torch.sqrt((1.0 - target.square()).clamp(min=0.0))
+        cos_theta_m = target * self.cos_m - sin_theta * self.sin_m
 
-        mask = cos_theta > cos_theta_m
-        final_target_logit = torch.where(
-            target_logit > self.threshold,
+        hard_mask = cos_theta > cos_theta_m
+        final_target = torch.where(
+            target > self.threshold,
             cos_theta_m,
-            target_logit - self.mm,
+            target - self.mm,
         )
 
-        with torch.no_grad():
-            self.t.mul_(0.99).add_(0.01 * target_logit.mean())
+        # update running t only in training
+        if update_t:
+            with torch.no_grad():
+                target_mean = target.mean().to(dtype=self.t.dtype).view_as(self.t)
+                self.t.lerp_(target_mean, self.ema_alpha)
 
-        hard_example = cos_theta[mask]
-        cos_theta[mask] = hard_example * (self.t + hard_example)
+        # keep everything in one dtype; no masked indexed assignment
+        t = self.t.to(device=cos_theta.device, dtype=cos_theta.dtype)
+        adjusted = torch.where(hard_mask, cos_theta * (t + cos_theta), cos_theta)
+        adjusted = adjusted.scatter(1, labels.unsqueeze(1), final_target)
 
-        final_target_logit = final_target_logit.to(dtype=cos_theta.dtype)
-        cos_theta.scatter_(1, label.view(-1, 1), final_target_logit)
+        return adjusted * self.s
 
-        return cos_theta * self.s, origin_cos * self.s
+    def training_logits(
+        self,
+        embeddings: torch.Tensor,
+        labels: torch.LongTensor,
+        update_t: bool = False,
+    ) -> torch.Tensor:
+        cos_theta = self.cosine(embeddings)
+        return self.margin_logits_from_cosine(cos_theta, labels, update_t=update_t)
+    
     
 
 class ProkBertForCurricularClassification(_SafeFromPretrainedMixin, ProkBertPreTrainedModel):
@@ -1993,11 +2026,16 @@ class ProkBertForCurricularClassification(_SafeFromPretrainedMixin, ProkBertPreT
         )
         return l2_norm(embeddings, axis=1) if normalize else embeddings
 
-    def _curricular_inference_logits(self, embeddings: torch.Tensor) -> torch.Tensor:
+    def deprecated_curricular_inference_logits(self, embeddings: torch.Tensor) -> torch.Tensor:
         embeddings = l2_norm(embeddings, axis=1)
         kernel_norm = l2_norm(self.curricular_face.kernel, axis=0)
         cos_theta = torch.mm(embeddings, kernel_norm).clamp(-1.0, 1.0)
         return cos_theta * self.curricular_face.s
+    
+
+    def _curricular_inference_logits(self, embeddings: torch.Tensor) -> torch.Tensor:
+        return self.curricular_face.inference_logits(embeddings)
+
 
     def forward(
         self,
@@ -2024,7 +2062,7 @@ class ProkBertForCurricularClassification(_SafeFromPretrainedMixin, ProkBertPreT
             inputs_embeds=inputs_embeds,
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
-            apply_dropout=self.training,  # dropout only on training path
+            apply_dropout=self.training,
         )
 
         exported_embeddings = None
@@ -2033,13 +2071,21 @@ class ProkBertForCurricularClassification(_SafeFromPretrainedMixin, ProkBertPreT
                 l2_norm(embeddings, axis=1) if normalize_embeddings else embeddings
             )
 
+        # compute cosine once in fp32
+        cos_theta = self.curricular_face.cosine(embeddings)
+
+        # always return label-free prediction logits
+        logits = cos_theta * self.curricular_face.s
+
         loss = None
-        if labels is None:
-            logits = self._curricular_inference_logits(embeddings)
-        else:
+        if labels is not None:
             labels = labels.view(-1).long()
-            logits, _ = self.curricular_face(embeddings, labels)
-            loss = self.loss_fct(logits, labels)
+            train_logits = self.curricular_face.margin_logits_from_cosine(
+                cos_theta,
+                labels,
+                update_t=self.training,  # do not mutate t in eval
+            )
+            loss = self.loss_fct(train_logits, labels)
 
         if not return_dict:
             out = (logits,)

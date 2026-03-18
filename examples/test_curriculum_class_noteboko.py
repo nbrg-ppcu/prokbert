@@ -1,58 +1,36 @@
-"""
-torchrun --nproc_per_node=1 test_curriculum_class.py
-
-
-"""
-
-import torch
-USE_TF32 = False   # safest while debugging; set True if you want TF32 on fp32 ops
-torch.backends.cuda.matmul.allow_tf32 = USE_TF32
-torch.backends.cudnn.allow_tf32 = USE_TF32
-torch.backends.cuda.matmul.allow_tf32 = False
-torch.backends.cudnn.allow_tf32 = False
-
 from transformers import TrainingArguments, Trainer, DataCollatorWithPadding
 from prokbert.sequtils import *
 from prokbert.training_utils import *
 from prokbert.models import ProkBertForCurricularClassification
 from prokbert.tokenizer import LCATokenizer
-from prokbert.curriculum_utils import compute_umap_for_dataset, evaluate_embeddings
+from prokbert.curriculum_utils import compute_umap_for_dataset
 from datasets import Dataset, load_dataset, ClassLabel
 import seaborn as sns
 import matplotlib.pyplot as plt
 import pandas as pd
+import torch
 import numpy as np
 from os.path import join
 import os
-from prokbert.trainers.curriculum_trainer import CustomTrainer
 from torch.optim import AdamW
 
 
 REPO_ID = "neuralbioinfo/eskapee"
 MODEL_NAME = "neuralbioinfo/prokbert-mini-long"
 
-OUTPUT_PATH = "./test_megatroncurr"
-
-
-def reset_matmul_precision(tf32: bool = False) -> None:
-    mode = "high" if tf32 else "highest"
-    torch.set_float32_matmul_precision(mode)
-
-    # Optional hard reset in case another import changed backend-specific state.
-    if hasattr(torch.backends, "cuda") and hasattr(torch.backends.cuda, "matmul"):
-        if hasattr(torch.backends.cuda.matmul, "fp32_precision"):
-            torch.backends.cuda.matmul.fp32_precision = "tf32" if tf32 else "ieee"
-
-    if hasattr(torch.backends, "mkldnn") and hasattr(torch.backends.mkldnn, "matmul"):
-        if hasattr(torch.backends.mkldnn.matmul, "fp32_precision"):
-            torch.backends.mkldnn.matmul.fp32_precision = "tf32" if tf32 else "ieee"
-
-
-
 
 def main() -> None:
 
     print('Just briefly testing the curriculum class method')
+    # Check if CUDA (GPU support) is available
+    if not torch.cuda.is_available():
+        raise SystemError('GPU device not found')
+    else:
+        device_name = torch.cuda.get_device_name(0)
+        print(f'Found GPU at: {device_name}')
+    num_cores = os.cpu_count()
+    print(f'Number of available CPU cores: {num_cores}')
+
 
     # 1) Load dataset
     ds = load_dataset(REPO_ID, split="train")
@@ -69,22 +47,17 @@ def main() -> None:
     print(f"Number of assembly labels: {len(id2label)}")
 
 
-
     # Converting the dataset into a pandas dataframe for further dataprocessing
     seed = 42
     test_size = 0.10
-    train_batch_size = 96
-    eval_batch_size = 32
-    num_train_epochs = 2.5
-    num_eval_steps = 400
-    use_bf16 = True
-    seed = 42
-    test_size = 0.10
-    max_length = 1000
 
     sequences = ds.to_pandas()
-    max_length = 2000
+    max_length = 512
     lut_cols = ["sequence_id", "label_id"]
+
+    #sequences = sequences.sample(frac=0.1, random_state=seed)
+    #print(sequences)
+    #1/0
 
 
     print("[prepare_dataset] Running segmentation")
@@ -124,14 +97,18 @@ def main() -> None:
     train_ds = split["train"]
     test_ds = split["test"]
 
+    curricular_face_m = 0.5          # angular margin (typical range ~0.2–0.6)
+    curricular_face_s = 64.0         # logit scale (typical range ~16–64)
+    classification_dropout_rate = 0.1
+    curriculum_hidden_size = 128     # embedding/projection size used by the curricular head (often 128)
+
     use_bf16 = True
     model_dtype = torch.bfloat16 if use_bf16 else torch.float32
 
-    num_labels = len(id2label)
 
     model, loading_info = ProkBertForCurricularClassification.from_pretrained(
         MODEL_NAME,
-        num_labels=num_labels,
+        num_labels=len(id2label),
         problem_type="single_label_classification",
         classifier_head_type="curricular",
         classifier_pooling="attention",      # change to "cls" if you want CLS pooling
@@ -141,12 +118,12 @@ def main() -> None:
         curricular_scale=64.0,
         output_loading_info=True,
     )
-    print("Missing keys:", loading_info["missing_keys"])
-    print("Unexpected keys:", loading_info["unexpected_keys"])
 
     tokenizer = LCATokenizer.from_pretrained(MODEL_NAME, trust_remote_code=True)
     data_collator = DataCollatorWithPadding(tokenizer=tokenizer)
+
     num_cores = max(1, min(os.cpu_count() or 1, 16))  
+
 
     def _tokenize_fn(batch):
         tok = tokenizer(
@@ -188,65 +165,9 @@ def main() -> None:
         desc="Tokenize segments",
     )
 
-    umap_n = 2000
-    umap_seed = 123
-
-    umap_ds = tokenized_test_ds.shuffle(seed=umap_seed)#.select(range(min(umap_n, len(tokenized_train_ds))))
-    emb, coords = compute_umap_for_dataset(
-        model=model,
-        dataset=umap_ds,
-        data_collator=data_collator,
-        batch_size=eval_batch_size,
-        seed=42,
-    )
-    score_before = evaluate_embeddings(emb, umap_ds["labels"])
-    print(f"Silhouette score before training: {score_before:.4f}")
-
-
-    #coords are aligned with umap_ds order
-    plot_df = pd.DataFrame(coords, columns=["umap_1", "umap_2"])
-    meta_cols = ["sequence_id", "segment_id", "assembly", "taxon", "taxon_short", "taxon_name"]
-    meta_df = hf_dataset.select_columns(meta_cols).to_pandas()
-
-    # Build plot dataframe in the same order as tokenized_test_ds_to_plot
-    plot_df = pd.DataFrame(coords, columns=["umap_1", "umap_2"])
-    plot_df["sequence_id"] = umap_ds["sequence_id"]
-    plot_df["segment_id"]  = umap_ds["segment_id"]
-    plot_df["label_id"]    = umap_ds["labels"]
-
-    # Join metadata (many-to-one should hold per segment_id; if not, switch to validate="many_to_many")
-    plot_df = plot_df.merge(
-        meta_df,
-        on=["sequence_id", "segment_id"],
-        how="left",
-        validate="one_to_one",
-    )
-
-    plt.figure(figsize=(12, 7))
-    ax = sns.scatterplot(
-        data=plot_df,
-        x="umap_1",
-        y="umap_2",
-        hue="taxon_short",
-        s=28,          # larger dots
-        alpha=0.85,
-        linewidth=0,
-        palette="tab20",
-    )
-
-    ax.set_title("UMAP of ProkBERT embeddings (colored by taxa)", pad=12)
-    ax.set_xlabel("UMAP-1")
-    ax.set_ylabel("UMAP-2")
-
-    sns.move_legend(ax, "upper left", bbox_to_anchor=(1.02, 1), title="taxon_short")
-    plt.tight_layout()
-    plt.savefig(join(OUTPUT_PATH, "curricular_finetuning_umap_before.png"), dpi=300)
-    plt.close()
-
-
-    #train_batch_size = 64
-    #eval_batch_size = 64
-    #num_train_epochs = 0.5
+    train_batch_size = 256
+    eval_batch_size = 64
+    num_train_epochs = 2.5
 
     backbone_lr = 1e-5
     head_lr = 5e-4
@@ -255,16 +176,12 @@ def main() -> None:
     backbone_params = [p for n, p in model.named_parameters() if n.startswith("bert.")]
     head_params = [p for n, p in model.named_parameters() if not n.startswith("bert.")]
 
-    print(model)
-
-
     optimizer = AdamW(
         [
             {"params": backbone_params, "lr": backbone_lr},
             {"params": head_params, "lr": head_lr},
         ],
     )
-    reset_matmul_precision(tf32=False)
 
     training_args = TrainingArguments(
             output_dir='eskapee_example',
@@ -274,9 +191,7 @@ def main() -> None:
             per_device_eval_batch_size=eval_batch_size,
             num_train_epochs=num_train_epochs,
             bf16=use_bf16,
-            torch_compile=True,
-            torch_compile_mode ="max-autotune",
-            ddp_backend='nccl'
+            #torch_compile=True,
         )
 
     trainer = Trainer(
@@ -285,69 +200,17 @@ def main() -> None:
         train_dataset=tokenized_train_ds,
         eval_dataset=tokenized_test_ds,
         data_collator=data_collator,
-        #eval_strategy="steps",
-        #compute_metrics=evaluate_embeddings,
+        #compute_metrics=compute_metrics,
         optimizers=(optimizer, None),
     )
-
     trainer.train()
-    model.save_pretrained(OUTPUT_PATH)
 
-    trained_model = ProkBertForCurricularClassification.from_pretrained(OUTPUT_PATH)
-    emb, coords = compute_umap_for_dataset(
-        model=trained_model,
-        dataset=umap_ds,
-        data_collator=data_collator,
-        batch_size=eval_batch_size,
-        seed=42,
-    )
-    score_before = evaluate_embeddings(emb, umap_ds["labels"])
-    score_after = evaluate_embeddings(emb, umap_ds["labels"])
-    print(f"Silhouette score after the training: {score_after:.4f}")
 
-    #coords are aligned with umap_ds order
-    plot_df = pd.DataFrame(coords, columns=["umap_1", "umap_2"])
-    meta_cols = ["sequence_id", "segment_id", "assembly", "taxon", "taxon_short", "taxon_name"]
-    meta_df = hf_dataset.select_columns(meta_cols).to_pandas()
-
-    # Build plot dataframe in the same order as tokenized_test_ds_to_plot
-    plot_df = pd.DataFrame(coords, columns=["umap_1", "umap_2"])
-    plot_df["sequence_id"] = umap_ds["sequence_id"]
-    plot_df["segment_id"]  = umap_ds["segment_id"]
-    plot_df["label_id"]    = umap_ds["labels"]
-
-    # Join metadata (many-to-one should hold per segment_id; if not, switch to validate="many_to_many")
-    plot_df = plot_df.merge(
-        meta_df,
-        on=["sequence_id", "segment_id"],
-        how="left",
-        validate="one_to_one",
-    )
-
-    plt.figure(figsize=(12, 7))
-    ax = sns.scatterplot(
-        data=plot_df,
-        x="umap_1",
-        y="umap_2",
-        hue="taxon_short",
-        s=28,          # larger dots
-        alpha=0.85,
-        linewidth=0,
-        palette="tab20",
-    )
-
-    ax.set_title("UMAP of ProkBERT embeddings (colored by taxa)", pad=12)
-    ax.set_xlabel("UMAP-1")
-    ax.set_ylabel("UMAP-2")
-
-    sns.move_legend(ax, "upper left", bbox_to_anchor=(1.02, 1), title="taxon_short")
-    plt.tight_layout()
-    plt.savefig(join(OUTPUT_PATH, "curricular_finetuning_umap_after.png"), dpi=300)
-    plt.close()
 
 
 
 
 if __name__ == "__main__":
     main()
+
 
