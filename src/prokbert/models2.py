@@ -515,6 +515,15 @@ class ProkBertConfig(PretrainedConfig):
 
         return normalized_rope_parameters
 
+    def __setattr__(self, name, value):
+        if name == "reference_compile" and value is not None:
+            logger.warning_once(
+                "The `reference_compile` argument is deprecated and will be removed in `transformers v5.2.0`"
+                "Use `torch.compile()` directly on the model instead."
+            )
+            value = None
+        super().__setattr__(name, value)
+
     def __init__(
         self,
         vocab_size: int = 4608,
@@ -667,6 +676,15 @@ class ProkBertConfig(PretrainedConfig):
                 "`layer_types` must contain one entry per hidden layer: "
                 f"expected {self.num_hidden_layers}, got {len(self.layer_types)}."
             )
+        if not self.rope_parameters:
+            self.rope_parameters = { "rope_type": "default", "rope_theta": global_rope_theta }
+
+
+    def to_dict(self):
+        output = super().to_dict()
+        output.pop("reference_compile", None)
+        return output
+
 
         invalid_layer_types = sorted(set(self.layer_types) - {"full_attention", "sliding_attention"})
         if invalid_layer_types:
