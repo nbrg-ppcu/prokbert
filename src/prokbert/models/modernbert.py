@@ -470,6 +470,9 @@ class ProkBertAttention(nn.Module):
         cos, sin = position_embeddings
         query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin, unsqueeze_dim=1)
 
+        # NOTE sdpa attention (the `sdpa_attention_forward` fn) calls pytorch's
+        # `scaled_dot_product_attention` fn which requires boolean attention mask,
+        # for other types, e.g. eager attention it is converted to float (zeros and -inf values)
         attention_interface = eager_attention_forward
         if self.config._attn_implementation != "eager":
             attention_interface = ALL_ATTENTION_FUNCTIONS[self.config._attn_implementation]
@@ -499,7 +502,6 @@ class ProkBertEncoderLayer(nn.Module):
 
         norm = RMSNorm if config.norm_type == "rms" else nn.LayerNorm
 
-        # Pre-LN everywhere (no layer_idx==0 Identity)
         self.attn_norm = norm(config.hidden_size, eps=config.norm_eps, bias=config.norm_bias)
         self.mlp_norm  = norm(config.hidden_size, eps=config.norm_eps, bias=config.norm_bias)
         self.attn = ProkBertAttention(config=config, layer_idx=layer_idx)
@@ -657,15 +659,13 @@ class ProkBertModel(ProkBertPreTrainedModel):
                 "config": self.config,
                 "inputs_embeds": hidden_states,
                 # NOTE if not provided, create_bidirectional_mask will default to
-                # full attention which will be None (it doesn't require a mask)
+                # full attention, which will be None (full attention doesn't require a mask)
                 "attention_mask": attention_mask,
             }
             attention_mask_mapping = {
                 "full_attention": create_bidirectional_mask(**mask_kwargs),
                 "sliding_attention": create_bidirectional_sliding_window_mask(**mask_kwargs),
             }
-
-            print(attention_mask_mapping)
 
         position_embeddings = {}
         for layer_type in self.config.layer_types:
