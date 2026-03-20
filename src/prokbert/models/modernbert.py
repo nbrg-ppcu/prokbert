@@ -18,7 +18,7 @@ from transformers.configuration_utils import PretrainedConfig, layer_type_valida
 from transformers.utils.doc import add_code_sample_docstrings, add_start_docstrings
 from transformers.modeling_outputs import SequenceClassifierOutput, BaseModelOutput, MaskedLMOutput
 from transformers.masking_utils import create_bidirectional_mask, create_bidirectional_sliding_window_mask
-
+from transformers.integrations import use_kernel_func_from_hub, use_kernelized_func
 
 logger = logging.get_logger(__name__)
 
@@ -151,11 +151,9 @@ class ProkBertConfig(PretrainedConfig):
         sep_token_id: int = 3,
         layer_types: list[str] | None = None,
         rope_parameters: dict[Literal["full_attention", "sliding_attention"], RopeParameters] | None = None,
-        global_rope_theta: float = 160000.0,
         attention_bias: bool = False,
         attention_dropout: float = 0.0,
         local_attention: int = 256,
-        local_rope_theta: float = 10000.0,
         embedding_dropout: float = 0.0,
         mlp_bias: bool = False,
         mlp_dropout: float = 0.0,
@@ -187,17 +185,15 @@ class ProkBertConfig(PretrainedConfig):
         self.initializer_cutoff_factor = initializer_cutoff_factor
         self.norm_eps = norm_eps
         self.norm_bias = norm_bias
-        self.rope_parameters = rope_parameters
-        self.global_rope_theta = global_rope_theta
         self.attention_bias = attention_bias
         self.attention_dropout = attention_dropout
         self.hidden_activation = hidden_activation
         self.local_attention = local_attention
-        self.local_rope_theta = local_rope_theta
         self.embedding_dropout = embedding_dropout
         self.mlp_bias = mlp_bias
         self.mlp_dropout = mlp_dropout
         self.decoder_bias = decoder_bias
+        self.rope_parameters = rope_parameters
         self.classifier_pooling = classifier_pooling
         self.classifier_dropout = classifier_dropout
         self.classifier_bias = classifier_bias
@@ -227,7 +223,7 @@ class ProkBertConfig(PretrainedConfig):
 
         super().__init__(**kwargs)
 
-    def convert_rope_params_to_dict(self, ignore_keys_at_rope_validation=None, **kwargs):
+    def convert_rope_params_to_dict(self, ignore_keys_at_rope_validation: set | None = None, **kwargs):
 
         default_rope_params = {
             "sliding_attention": {"rope_type": "default"},
@@ -235,7 +231,6 @@ class ProkBertConfig(PretrainedConfig):
         }
         self.rope_parameters = self.rope_parameters if self.rope_parameters is not None else default_rope_params
 
-        # Set default values if not present
         if self.rope_parameters.get("full_attention") is None:
             self.rope_parameters["full_attention"] = {"rope_type": "default"}
         self.rope_parameters["full_attention"].setdefault(
@@ -248,6 +243,11 @@ class ProkBertConfig(PretrainedConfig):
         )
 
         self.standardize_rope_params()
+        # NOTE the self.validate_rope method will casues a warning:
+        #   "Unrecognized keys in `rope_parameters` for 'rope_type'='default':
+        #    {'sliding_attention', 'full_attention'}"
+        # It can be safely ignored, as it comes from the fact we don't
+        # use sliding_attention, which is set in `global_attn_every_n_layers`
         self.validate_rope(ignore_keys=ignore_keys_at_rope_validation)
         return kwargs
 
@@ -325,6 +325,20 @@ class ProkBertEmbeddings(nn.Module):
         return hidden_states
 
 
+class ProkBertMLP(nn.Module):
+    def __init__(self, config: ProkBertConfig):
+        super().__init__()
+        self.config = config
+        self.Wi = nn.Linear(config.hidden_size, int(config.intermediate_size) * 2, bias=config.mlp_bias)
+        self.act = ACT2FN[config.hidden_activation]
+        self.drop = nn.Dropout(config.mlp_dropout)
+        self.Wo = nn.Linear(config.intermediate_size, config.hidden_size, bias=config.mlp_bias)
+
+    def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
+        input, gate = self.Wi(hidden_states).chunk(2, dim=-1)
+        return self.Wo(self.drop(self.act(input) * gate))
+
+
 class ProkBertRotaryEmbedding(nn.Module):
     def __init__(self, config: ProkBertConfig, device: Optional[torch.device] = None):
         super().__init__()
@@ -361,9 +375,9 @@ class ProkBertRotaryEmbedding(nn.Module):
         base = config.rope_parameters[layer_type]["rope_theta"]
         dim = getattr(config, "head_dim", None) or config.hidden_size // config.num_attention_heads
 
-        attention_factor = 1.0  # Unused in this type of RoPE
+        attention_factor = 1.0  # unused in this type of RoPE
 
-        # Compute the inverse frequencies
+        # compute the inverse frequencies
         inv_freq = 1.0 / (
             base ** (torch.arange(0, dim, 2, dtype=torch.int64).to(device=device, dtype=torch.float) / dim)
         )
@@ -388,20 +402,23 @@ class ProkBertRotaryEmbedding(nn.Module):
         return cos.to(dtype=x.dtype), sin.to(dtype=x.dtype)
 
 
-class ProkBertMLP(nn.Module):
-    def __init__(self, config: ProkBertConfig):
-        super().__init__()
-        self.config = config
-        self.Wi = nn.Linear(config.hidden_size, int(config.intermediate_size) * 2, bias=config.mlp_bias)
-        self.act = ACT2FN[config.hidden_activation]
-        self.drop = nn.Dropout(config.mlp_dropout)
-        self.Wo = nn.Linear(config.intermediate_size, config.hidden_size, bias=config.mlp_bias)
-
-    def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
-        input, gate = self.Wi(hidden_states).chunk(2, dim=-1)
-        return self.Wo(self.drop(self.act(input) * gate))
+def rotate_half(x):
+    x1 = x[..., : x.shape[-1] // 2]
+    x2 = x[..., x.shape[-1] // 2 :]
+    return torch.cat((-x2, x1), dim=-1)
 
 
+@use_kernel_func_from_hub("rotary_pos_emb")
+def apply_rotary_pos_emb(q, k, cos, sin, unsqueeze_dim=1):
+    original_dtype = q.dtype
+    cos = cos.unsqueeze(unsqueeze_dim)
+    sin = sin.unsqueeze(unsqueeze_dim)
+    q_embed = (q.float() * cos) + (rotate_half(q.float()) * sin)
+    k_embed = (k.float() * cos) + (rotate_half(k.float()) * sin)
+    return q_embed.to(original_dtype), k_embed.to(original_dtype)
+
+
+@use_kernelized_func(apply_rotary_pos_emb)
 class ProkBertAttention(nn.Module):
     def __init__(self, config: ProkBertConfig, layer_idx: Optional[int] = None):
         super().__init__()
@@ -435,7 +452,7 @@ class ProkBertAttention(nn.Module):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        position_embeddings: tuple[torch.Tensor, torch.Tensor] | None = None,
+        position_embeddings: tuple[torch.Tensor, torch.Tensor],
         attention_mask: torch.Tensor | None = None,
         **kwargs: Unpack[TransformersKwargs],
     ) -> tuple[torch.Tensor, torch.Tensor | None]:
@@ -450,9 +467,8 @@ class ProkBertAttention(nn.Module):
         key_states = key_states.transpose(1, 2)
         value_states = value_states.transpose(1, 2)
 
-        # TODO add rope
-        # cos, sin = position_embeddings
-        # query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin, unsqueeze_dim=1)
+        cos, sin = position_embeddings
+        query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin, unsqueeze_dim=1)
 
         attention_interface = eager_attention_forward
         if self.config._attn_implementation != "eager":
@@ -640,14 +656,16 @@ class ProkBertModel(ProkBertPreTrainedModel):
             mask_kwargs = {
                 "config": self.config,
                 "inputs_embeds": hidden_states,
-                # if not provided, create_bidirectional_mask will default to full attention
+                # NOTE if not provided, create_bidirectional_mask will default to
+                # full attention which will be None (it doesn't require a mask)
                 "attention_mask": attention_mask,
             }
             attention_mask_mapping = {
                 "full_attention": create_bidirectional_mask(**mask_kwargs),
                 "sliding_attention": create_bidirectional_sliding_window_mask(**mask_kwargs),
             }
-            print(attention_mask_mapping["full_attention"], attention_mask_mapping["sliding_attention"])
+
+            print(attention_mask_mapping)
 
         position_embeddings = {}
         for layer_type in self.config.layer_types:
