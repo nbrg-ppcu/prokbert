@@ -755,12 +755,8 @@ class ProkBertForMaskedLM(ProkBertPreTrainedModel):
 
             # batch_size x seq_len x probability distribution over ACGT nucleotids (4 items)
             elif labels_dist is not None:
-                # NOTE currently, the LCATokenizer's vocab size includes the special tokens, so
-                # the actual vocab size is vocab size - special tokens (e.g. PAD and CLS tokens)
-                # example: when kmer=1 and shift=1, the vocab size is 4
-                vocab_size = self.config.vocab_size
                 # flatten target distribution and last hidden state (output)
-                labels_dist = labels_dist.view(-1, vocab_size)
+                labels_dist = labels_dist.view(-1, self.config.vocab_size)
                 last_hidden_state = last_hidden_state.view(labels_dist.shape[0], -1)
 
                 # extract only the masked tokens (where labels_dist is not all zeros)
