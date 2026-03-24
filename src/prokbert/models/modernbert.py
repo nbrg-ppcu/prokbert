@@ -1,40 +1,28 @@
-from typing import Optional, Tuple, Union, Dict, Literal, Callable
+from typing import Optional, Tuple, Union, Literal, Callable
 
 import math
-from contextlib import nullcontext
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+
 from transformers.utils import logging
 from transformers.activations import ACT2FN
 from transformers import initialization as init
 from transformers.processing_utils import Unpack
-from transformers.utils.generic import TransformersKwargs, maybe_autocast
 from transformers.utils.auto_docstring import auto_docstring
+from transformers.utils.output_capturing import capture_outputs
 from transformers.models.align.modeling_align import eager_attention_forward
-from transformers.modeling_rope_utils import ROPE_INIT_FUNCTIONS, RopeParameters, dynamic_rope_update
 from transformers.modeling_utils import ALL_ATTENTION_FUNCTIONS, PreTrainedModel
 from transformers.configuration_utils import PretrainedConfig, layer_type_validation
-from transformers.modeling_outputs import SequenceClassifierOutput, BaseModelOutput, MaskedLMOutput
-from transformers.masking_utils import create_bidirectional_mask, create_bidirectional_sliding_window_mask
 from transformers.integrations import use_kernel_func_from_hub, use_kernelized_func
+from transformers.modeling_outputs import SequenceClassifierOutput, BaseModelOutput, MaskedLMOutput
+from transformers.modeling_rope_utils import ROPE_INIT_FUNCTIONS, RopeParameters, dynamic_rope_update
+from transformers.masking_utils import create_bidirectional_mask, create_bidirectional_sliding_window_mask
+from transformers.utils.generic import TransformersKwargs, maybe_autocast, can_return_tuple, merge_with_config_defaults
+
 
 logger = logging.get_logger(__name__)
-
-
-def l2_norm(input, axis=1, epsilon=1e-12):
-    norm = torch.norm(input, 2, axis, True)
-    norm = torch.clamp(norm, min=epsilon)  # Avoid zero division
-    output = torch.div(input, norm)
-    return output
-
-
-def initialize_linear_kaiming(layer: nn.Linear):
-    if isinstance(layer, nn.Linear):
-        nn.init.kaiming_uniform_(layer.weight, nonlinearity='linear')
-        if layer.bias is not None:
-            nn.init.zeros_(layer.bias)
 
 
 class ProkBertConfig(PretrainedConfig):
@@ -253,6 +241,7 @@ class ProkBertConfig(PretrainedConfig):
         #    {'sliding_attention', 'full_attention'}"
         # It can be safely ignored, as it comes from the fact we don't
         # use sliding_attention, which is set in `global_attn_every_n_layers`
+        # later we might use it, so the sliding attention code parts should remain
         self.validate_rope(ignore_keys=ignore_keys_at_rope_validation)
         return kwargs
 
@@ -586,14 +575,21 @@ class ProkBertPreTrainedModel(PreTrainedModel):
             init_weight(module.dense, stds["out"])
         elif isinstance(module, ProkBertForMaskedLM):
             init_weight(module.decoder, stds["out"])
-        # TODO fix this
-        # elif isinstance(
-        #     module,
-        #     (
-        #         ProkBertForSequenceClassification,
-        #     ),
-        # ):
-        #     init_weight(module.classifier, stds["final_out"])
+        elif isinstance(
+            module,
+            (
+                ProkBertForSequenceClassification,
+            ),
+        ):
+            # uniform token attention at start
+            nn.init.zeros_(module.weighting_layer.weight)
+            nn.init.zeros_(module.weighting_layer.bias)
+
+            # BERT-style head init: small gaussian, zero bias
+            nn.init.xavier_uniform_(module.classifier.weight, gain=1.0)
+            module.classifier.weight.data /= math.sqrt(module.classifier.in_features)  # extra shrink
+            nn.init.zeros_(module.classifier.bias)
+
         elif isinstance(module, nn.LayerNorm):
             init.ones_(module.weight)
             if module.bias is not None:
@@ -631,6 +627,8 @@ class ProkBertModel(ProkBertPreTrainedModel):
     def set_input_embeddings(self, value):
         self.embeddings.tok_embeddings = value
 
+    @merge_with_config_defaults
+    @capture_outputs
     @auto_docstring
     def forward(
        self,
@@ -721,6 +719,8 @@ class ProkBertForMaskedLM(ProkBertPreTrainedModel):
     def set_output_embeddings(self, new_embeddings: nn.Linear):
         self.decoder = new_embeddings
 
+    @can_return_tuple
+    @auto_docstring
     def forward(
         self,
         input_ids: Optional[torch.LongTensor] = None,
@@ -767,7 +767,6 @@ class ProkBertForMaskedLM(ProkBertPreTrainedModel):
         logits = self.decoder(self.head(last_hidden_state))
 
         loss = None
-
         # standard MLM loss (cross-entropy)
         if labels is not None:
             loss = self.loss_function(logits, labels, vocab_size=self.config.vocab_size, **kwargs)
@@ -788,6 +787,7 @@ class ProkBertForMaskedLM(ProkBertPreTrainedModel):
             attentions=outputs.attentions,
         )
 
+
 @auto_docstring(
     custom_intro="""
     The ProkBert Model with a sequence classification head on top for sequence classification tasks.
@@ -800,89 +800,55 @@ class ProkBertForSequenceClassification(ProkBertPreTrainedModel):
         self.config = config
 
         self.model = ProkBertModel(config)
-        self.norm = nn.LayerNorm(config.hidden_size, eps=1e-5)
-
+        self.norm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
         self.weighting_layer = nn.Linear(self.config.hidden_size, 1)
-        self.dropout = nn.Dropout(self.config.classifier_dropout)
+        self.drop = nn.Dropout(self.config.classifier_dropout)
         self.classifier = nn.Linear(self.config.hidden_size, self.config.num_labels)
-        self.loss_fct = torch.nn.CrossEntropyLoss()
 
-        # Initialize weights and apply final processing
+        # initialize weights and apply final processing
         self.post_init()
-    def _init_weights(self, module: nn.Module):
-        super()._init_weights(module)
 
-        # Uniform token attention at start
-        if module is self.weighting_layer:
-            nn.init.zeros_(module.weight)
-            nn.init.zeros_(module.bias)
-
-        # BERT-style head init: small Gaussian, zero bias
-        if module is self.classifier:
-            # both are good:
-            nn.init.xavier_uniform_(module.weight, gain=1.0)
-            module.weight.data /= math.sqrt(self.classifier.in_features)  # extra shrink
-            nn.init.zeros_(module.bias)
-
-
+    @can_return_tuple
+    @auto_docstring
     def forward(
         self,
-        input_ids: torch.LongTensor = None,
-        attention_mask: torch.Tensor = None,
-        sliding_window_mask: torch.Tensor = None,
-        position_ids: torch.LongTensor = None,
-        inputs_embeds: torch.Tensor = None,
-        labels: torch.Tensor = None,
-        indices: torch.Tensor = None,
-        cu_seqlens: torch.Tensor = None,
-        max_seqlen: int = None,
-        batch_size: int = None,
-        seq_len: int = None,
-        output_attentions: bool = None,
-        output_hidden_states: bool = None,
-        return_dict: bool = None,
-        **kwargs,
+        input_ids: torch.LongTensor | None = None,
+        attention_mask: torch.Tensor | None = None,
+        position_ids: torch.LongTensor | None = None,
+        inputs_embeds: torch.Tensor | None = None,
+        labels: torch.Tensor | None = None,
+        **kwargs: Unpack[TransformersKwargs],
     ) -> SequenceClassifierOutput:
-
-        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
         outputs = self.model(
             input_ids=input_ids,
             attention_mask=attention_mask,
-            sliding_window_mask=sliding_window_mask,
             position_ids=position_ids,
             inputs_embeds=inputs_embeds,
-            indices=indices,
-            cu_seqlens=cu_seqlens,
-            max_seqlen=max_seqlen,
-            batch_size=batch_size,
-            seq_len=seq_len,
-            output_attentions=output_attentions,
-            output_hidden_states=output_hidden_states,
-            return_dict=return_dict,
+            **kwargs,
         )
-        # Get hidden states
-        sequence_output = outputs[0]
-        weights = self.weighting_layer(sequence_output)
+        last_hidden_state = outputs[0]  # (batch_size, seq_len, hidden_size)
+
+        weights = self.weighting_layer(last_hidden_state) # (batch_size, seq_len, 1)
         weights = torch.nn.functional.softmax(weights, dim=1)
-        # Compute weighted sum
-        pooled_output = torch.sum(weights * sequence_output, dim=1)
+
+        pooled_output = torch.sum(weights * last_hidden_state, dim=1) # (batch_size, hidden_size)
         pooled_output = self.norm(pooled_output)
-        # Classification head
-        pooled_output = self.dropout(pooled_output)
+
+        pooled_output = self.drop(pooled_output)
         logits = self.classifier(pooled_output)
 
         loss = None
-        if labels is not None:
-            loss = self.loss_fct(logits.view(-1, self.config.num_labels), labels.view(-1))
+        if labels is not None: # single label classification
+            loss_fct = torch.nn.CrossEntropyLoss()
+            loss = loss_fct(logits.view(-1, self.config.num_labels), labels.view(-1))
 
-        classification_output = SequenceClassifierOutput(
+        return SequenceClassifierOutput(
             loss=loss,
             logits=logits,
             hidden_states=outputs.hidden_states,
             attentions=outputs.attentions,
         )
-        return classification_output
 
 
 __all__ = [
