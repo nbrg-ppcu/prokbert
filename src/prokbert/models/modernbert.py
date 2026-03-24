@@ -800,7 +800,7 @@ class ProkBertForSequenceClassification(ProkBertPreTrainedModel):
         self.config = config
 
         self.model = ProkBertModel(config)
-        self.norm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
+        self.norm = nn.LayerNorm(config.hidden_size, eps=config.norm_eps)
         self.weighting_layer = nn.Linear(self.config.hidden_size, 1)
         self.drop = nn.Dropout(self.config.classifier_dropout)
         self.classifier = nn.Linear(self.config.hidden_size, self.config.num_labels)

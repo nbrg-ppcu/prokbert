@@ -171,9 +171,23 @@ class ProkBertModelTest(unittest.TestCase):
         self.assertIsNotNone(result.loss)
 
     def test_for_sequence_classification(self):
-        pass
-    #     config_and_inputs = self.model_tester.prepare_config_and_inputs()
-    #     self.model_tester.create_and_check_for_sequence_classification(*config_and_inputs)
+        self.config.num_labels = 3
+        model = ProkBertForSequenceClassification(config=self.config)
+        model.to(torch_device)
+        model.eval()
+        result = model(self.input_ids, attention_mask=None)
+        self.assertEqual(result.logits.shape, (self.batch_size, self.config.num_labels))
+        self.assertIsNone(result.loss)
+
+    def test_for_sequence_classification_with_labels(self):
+        self.config.num_labels = 3
+        model = ProkBertForSequenceClassification(config=self.config)
+        model.to(torch_device)
+        model.eval()
+        labels = torch.tensor([0, 2], dtype=torch.long).to(torch_device)
+        result = model(self.input_ids, attention_mask=None, labels=labels)
+        self.assertEqual(result.logits.shape, (self.batch_size, self.config.num_labels))
+        self.assertIsNotNone(result.loss)
 
     @slow
     def test_model_from_pretrained(self):
