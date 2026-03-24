@@ -1,19 +1,12 @@
-import os
-import pytest
 import unittest
 
 import torch
-from transformers import AutoModel, AutoTokenizer
 from transformers.testing_utils import (
-    Expectations,
-    require_flash_attn,
     require_torch,
-    require_torch_accelerator,
     slow,
     torch_device,
 )
 
-from src.prokbert.tokenizer import LCATokenizer
 from src.prokbert.models import (
     ProkBertConfig,
     ProkBertModel,
