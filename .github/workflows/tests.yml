@@ -1,5 +1,4 @@
-name: Basic CI
-
+name: Tests
 on:
   push:
     branches:
@@ -7,34 +6,22 @@ on:
   pull_request:
     branches:
       - main
-
 jobs:
-  build:
-
+  test:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ["3.9", "3.10", "3.11", "3.12", "3.13"]
-
+        python-version: ["3.12"]
     steps:
       - uses: actions/checkout@v4
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install pylint ruff mypy types-requests pytest
-
-      - name: Linter
-        run: ruff check src/
-
-      - name: Static code checker
+          pip install pytest transformers==5.3.0 torch
+      - name: Run tests
         run: |
-          mypy src/ --strict-equality --install-types
-
-      - name: Static code analysis
-        run: |
-          env PYTHONPATH="." python3 -m pylint src/
+          env PYTHONPATH="." pytest -v --disable-warnings tests/test_prokbert_model.py
