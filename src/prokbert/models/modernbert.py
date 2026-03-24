@@ -723,11 +723,11 @@ class ProkBertForMaskedLM(ProkBertPreTrainedModel):
     @auto_docstring
     def forward(
         self,
-        input_ids: Optional[torch.LongTensor] = None,
-        attention_mask: Optional[torch.Tensor] = None,
-        position_ids: Optional[torch.Tensor] = None,
-        inputs_embeds: Optional[torch.Tensor] = None,
-        labels: Optional[torch.Tensor] = None,
+        input_ids: torch.LongTensor | None = None,
+        attention_mask: torch.Tensor | None = None,
+        position_ids: torch.Tensor | None = None,
+        inputs_embeds: torch.Tensor | None = None,
+        labels: torch.Tensor | None = None,
         labels_dist: torch.Tensor | None = None,
         **kwargs: Unpack[TransformersKwargs],
     ) -> Union[Tuple[torch.Tensor], MaskedLMOutput]:
