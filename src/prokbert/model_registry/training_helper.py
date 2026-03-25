@@ -1,100 +1,159 @@
 from __future__ import annotations
 
-from pathlib import Path
-from typing import Any, Callable, Dict, Optional, Union
+import json
 import os
 import re
+from pathlib import Path
+from typing import Any, Callable, Dict, Iterable, Optional, Union
 
 import pandas as pd
 import torch
-from huggingface_hub import snapshot_download
+from huggingface_hub import hf_hub_download
 
 
-DEFAULT_REGISTRY_REPO_ID = os.getenv("PROKBERT_MODEL_REGISTRY_REPO", "neuralbioinfo/model-registry")
-DEFAULT_REGISTRY_REVISION = os.getenv("PROKBERT_MODEL_REGISTRY_REVISION", "main")
-DEFAULT_REGISTRY_DIR = os.getenv("PROKBERT_MODEL_REGISTRY_DIR")
-_DEFAULT_ALLOW_PATTERNS = ["models.csv", "training_defaults.csv", "README.md"]
+DEFAULT_REGISTRY_REPO_ID = os.getenv("PROKBERT_TRAINING_REGISTRY_REPO", "neuralbioinfo/model-registry")
+DEFAULT_REGISTRY_REVISION = os.getenv("PROKBERT_TRAINING_REGISTRY_REVISION", "main")
+
+_BASEMODELS_FILENAME = "basemodels.json"
+_DEFAULTS_FILENAME = "default_training_parameters.json"
 
 
-def _load_registry_from_directory(registry_dir: Union[str, Path]) -> tuple[pd.DataFrame, pd.DataFrame]:
-    registry_dir = Path(registry_dir)
-    models_path = registry_dir / "models.csv"
-    defaults_path = registry_dir / "training_defaults.csv"
+def _load_records_from_hf_json(
+    *,
+    repo_id: str,
+    filename: str,
+    revision: str = DEFAULT_REGISTRY_REVISION,
+    token: Optional[str] = None,
+    local_files_only: bool = False,
+) -> list[dict[str, Any]]:
+    path = hf_hub_download(
+        repo_id=repo_id,
+        filename=filename,
+        repo_type="dataset",
+        revision=revision,
+        token=token,
+        local_files_only=local_files_only,
+    )
 
-    if not models_path.exists():
-        raise FileNotFoundError(f"Registry file not found: {models_path}")
-    if not defaults_path.exists():
-        raise FileNotFoundError(f"Registry file not found: {defaults_path}")
+    with open(path, "r", encoding="utf-8") as handle:
+        payload = json.load(handle)
 
-    model_db = pd.read_csv(models_path)
-    training_defaults = pd.read_csv(defaults_path)
+    if isinstance(payload, list):
+        records = payload
+    elif isinstance(payload, dict) and isinstance(payload.get("records"), list):
+        records = payload["records"]
+    else:
+        raise ValueError(
+            f"Unsupported JSON structure in {filename!r}. Expected either a list of records "
+            "or an object with a top-level 'records' array."
+        )
+
+    return records
+
+
+def _load_registry_from_hf_dataset(
+    *,
+    repo_id: str,
+    revision: str = DEFAULT_REGISTRY_REVISION,
+    token: Optional[str] = None,
+    local_files_only: bool = False,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    model_records = _load_records_from_hf_json(
+        repo_id=repo_id,
+        filename=_BASEMODELS_FILENAME,
+        revision=revision,
+        token=token,
+        local_files_only=local_files_only,
+    )
+    default_records = _load_records_from_hf_json(
+        repo_id=repo_id,
+        filename=_DEFAULTS_FILENAME,
+        revision=revision,
+        token=token,
+        local_files_only=local_files_only,
+    )
+
+    model_db = pd.DataFrame(model_records)
+    training_defaults = pd.DataFrame(default_records)
     return _normalize_registry_tables(model_db, training_defaults)
 
 
-def _normalize_registry_tables(model_db: pd.DataFrame, training_defaults: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+def _normalize_registry_tables(
+    model_db: pd.DataFrame,
+    training_defaults: pd.DataFrame,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
     model_db = model_db.copy()
     training_defaults = training_defaults.copy()
 
-    if "model_id" not in model_db.columns and "name" in model_db.columns:
-        model_db.insert(0, "model_id", model_db["name"].astype(str))
-    if "name" not in model_db.columns and "model_id" in model_db.columns:
+    if "model_id" not in model_db.columns:
+        if "name" in model_db.columns:
+            model_db["model_id"] = model_db["name"].astype(str)
+        elif "hf_name" in model_db.columns:
+            model_db["model_id"] = model_db["hf_name"].astype(str)
+        else:
+            raise ValueError("basemodels.json must include either 'model_id', 'name', or 'hf_name'.")
+
+    if "name" not in model_db.columns:
         model_db["name"] = model_db["model_id"].astype(str)
-    if "hf_repo_id" not in model_db.columns and "hf_path" in model_db.columns:
-        model_db["hf_repo_id"] = model_db["hf_path"]
+
     if "hf_path" not in model_db.columns and "hf_repo_id" in model_db.columns:
         model_db["hf_path"] = model_db["hf_repo_id"]
+    if "hf_repo_id" not in model_db.columns and "hf_path" in model_db.columns:
+        model_db["hf_repo_id"] = model_db["hf_path"]
 
-    # Normalize training defaults so `model_id` is always the short internal name.
-    name_lookup: dict[str, str] = {}
+    model_db["model_id"] = model_db["model_id"].astype(str)
+
+    lookup: dict[str, str] = {}
     for _, row in model_db.iterrows():
         model_id = str(row["model_id"])
-        for key in ["model_id", "name", "hf_name", "hf_repo_id", "hf_path"]:
+        for key in ("model_id", "name", "hf_name", "hf_path", "hf_repo_id"):
             if key in model_db.columns:
                 value = row.get(key)
                 if pd.notna(value):
-                    name_lookup[str(value)] = model_id
+                    lookup[str(value)] = model_id
 
     if "model_id" not in training_defaults.columns and "basemodel" in training_defaults.columns:
-        training_defaults.insert(
-            0,
-            "model_id",
-            training_defaults["basemodel"].map(lambda x: name_lookup.get(str(x), str(x))),
+        training_defaults["model_id"] = training_defaults["basemodel"].map(
+            lambda value: lookup.get(str(value), str(value)) if pd.notna(value) else None
         )
     elif "model_id" in training_defaults.columns:
         training_defaults["model_id"] = training_defaults["model_id"].map(
-            lambda x: name_lookup.get(str(x), str(x))
+            lambda value: lookup.get(str(value), str(value)) if pd.notna(value) else None
         )
 
     if "basemodel" not in training_defaults.columns and "model_id" in training_defaults.columns:
         training_defaults["basemodel"] = training_defaults["model_id"]
 
+    numeric_columns = [
+        "learning_rate",
+        "seq_length_min",
+        "seq_length_max",
+        "max_token_length",
+        "gpu_memory",
+        "gradient_accumulation_steps",
+        "batch_size",
+        "model_complexity",
+        "max_token_scaling",
+        "tokenization_kmer",
+        "tokenization_shift",
+    ]
+    for col in numeric_columns:
+        if col in model_db.columns:
+            try:
+                model_db[col] = pd.to_numeric(model_db[col])
+            except (ValueError, TypeError):
+                pass
+        if col in training_defaults.columns:
+            try:
+                training_defaults[col] = pd.to_numeric(training_defaults[col])
+            except (ValueError, TypeError):
+                pass
+
     return model_db, training_defaults
 
 
-def sync_registry_snapshot(
-    local_dir: Union[str, Path],
-    *,
-    repo_id: str = DEFAULT_REGISTRY_REPO_ID,
-    revision: str = DEFAULT_REGISTRY_REVISION,
-    cache_dir: Optional[Union[str, Path]] = None,
-) -> str:
-    """
-    Download the current model registry snapshot from the HF dataset repository
-    into a plain local directory. Use this on an internet-enabled node, then point
-    compute nodes to the resulting directory via PROKBERT_MODEL_REGISTRY_DIR.
-    """
-    return snapshot_download(
-        repo_id=repo_id,
-        repo_type="dataset",
-        revision=revision,
-        cache_dir=str(cache_dir) if cache_dir is not None else None,
-        local_dir=str(local_dir),
-        allow_patterns=_DEFAULT_ALLOW_PATTERNS,
-    )
-
-
 def get_tokenize_function(model_name: str) -> Callable:
-    model_name_lower = model_name.lower()
+    model_name_lower = str(model_name).lower()
     if "prokbert" in model_name_lower:
         return tokenize_function_prokbert
     if "nucleotide" in model_name_lower or model_name_lower.startswith("nt"):
@@ -123,9 +182,11 @@ def _apply_attention_mask_filter(
 ) -> torch.Tensor:
     if not mask_token_ids:
         return attention_mask
+
     mask = torch.zeros_like(input_ids, dtype=torch.bool)
     for token_id in mask_token_ids:
         mask |= input_ids == token_id
+
     attention_mask = attention_mask.clone().detach()
     attention_mask[mask] = 0
     return attention_mask
@@ -139,7 +200,7 @@ def _tokenize_common(
     padding: Union[bool, str] = "longest",
     mask_token_ids: tuple[int, ...] = (2, 3),
 ):
-    kwargs = {
+    kwargs: Dict[str, Any] = {
         "padding": padding,
         "add_special_tokens": True,
         "return_tensors": "pt",
@@ -151,7 +212,11 @@ def _tokenize_common(
     encoded = tokenizer(examples["segment"], **kwargs)
     input_ids = encoded["input_ids"].clone().detach()
     attention_mask = encoded["attention_mask"].clone().detach()
-    attention_mask = _apply_attention_mask_filter(input_ids, attention_mask, mask_token_ids=mask_token_ids)
+    attention_mask = _apply_attention_mask_filter(
+        input_ids,
+        attention_mask,
+        mask_token_ids=mask_token_ids,
+    )
     labels = _extract_labels(examples)
 
     return {
@@ -205,21 +270,16 @@ class TrainingHelper:
     """
     HF-dataset-backed training helper.
 
-    Preferred load order:
-    1. explicit local registry directory
-    2. PROKBERT_MODEL_REGISTRY_DIR environment variable
-    3. HF dataset repo snapshot download
-    4. explicit Excel workbook (migration/testing)
+    This refactored helper reads only from a Hugging Face dataset repository.
+    It does not support loading a local spreadsheet or local CSV/JSON registry path.
 
-    Examples
-    --------
-    >>> helper = TrainingHelper()
-    >>> helper.get_my_training_parameters("nt50", actLs=1024)
+    Expected files in the dataset repository:
+    - basemodels.json
+    - default_training_parameters.json
 
-    For offline compute nodes:
-    - run `sync_registry_snapshot("/shared/prokbert/model_registry")` on an online node
-    - set `PROKBERT_MODEL_REGISTRY_DIR=/shared/prokbert/model_registry`
-    - use `TrainingHelper()` as usual
+    The JSON files can either be:
+    - a list of row objects
+    - or an object with a top-level ``records`` list
     """
 
     training_parameters = [
@@ -237,108 +297,77 @@ class TrainingHelper:
         "gac": "gradient_accumulation_steps",
         "mtl": "max_token_length",
     }
+
     group_mappings_to_params = {v: k for k, v in parameter_group_mappings.items()}
     parameter_group_sep = "___"
 
     def __init__(
         self,
-        excel_path: Optional[str] = None,
         *,
-        registry_dir: Optional[Union[str, Path]] = None,
         repo_id: str = DEFAULT_REGISTRY_REPO_ID,
         revision: str = DEFAULT_REGISTRY_REVISION,
-        cache_dir: Optional[Union[str, Path]] = None,
-        local_dir: Optional[Union[str, Path]] = None,
+        token: Optional[str] = None,
         local_files_only: bool = False,
     ) -> None:
-        if excel_path is not None:
-            self.load_from_excel(excel_path)
-        else:
-            effective_registry_dir = registry_dir or DEFAULT_REGISTRY_DIR
-            if effective_registry_dir is not None:
-                self.load_from_directory(effective_registry_dir)
-            else:
-                self.load_from_hf_dataset(
-                    repo_id=repo_id,
-                    revision=revision,
-                    cache_dir=cache_dir,
-                    local_dir=local_dir,
-                    local_files_only=local_files_only,
-                )
+        self.repo_id = repo_id
+        self.revision = revision
+        self.token = token
+        self.local_files_only = local_files_only
 
+        self.model_db, self.finetuning_default_params = _load_registry_from_hf_dataset(
+            repo_id=repo_id,
+            revision=revision,
+            token=token,
+            local_files_only=local_files_only,
+        )
         self._build_indexes()
 
     def _build_indexes(self) -> None:
-        self.model_db, self.finetuning_default_params = _normalize_registry_tables(
-            self.model_db,
-            self.finetuning_default_params,
-        )
         self.basemodels = set(self.model_db["model_id"].astype(str))
-        self._model_lookup_columns = [col for col in ["model_id", "name", "hf_name", "hf_repo_id", "hf_path"] if col in self.model_db.columns]
+        self._model_lookup_columns = [
+            col for col in ("model_id", "name", "hf_name", "hf_path", "hf_repo_id")
+            if col in self.model_db.columns
+        ]
 
-    @classmethod
-    def from_local_registry(cls, registry_dir: Union[str, Path]) -> "TrainingHelper":
-        return cls(registry_dir=registry_dir)
-
-    @classmethod
-    def from_hf_dataset(
-        cls,
-        repo_id: str = DEFAULT_REGISTRY_REPO_ID,
-        *,
-        revision: str = DEFAULT_REGISTRY_REVISION,
-        cache_dir: Optional[Union[str, Path]] = None,
-        local_dir: Optional[Union[str, Path]] = None,
-        local_files_only: bool = False,
-    ) -> "TrainingHelper":
-        return cls(
-            repo_id=repo_id,
-            revision=revision,
-            cache_dir=cache_dir,
-            local_dir=local_dir,
-            local_files_only=local_files_only,
-        )
-
-    def load_from_excel(self, excel_path: str) -> None:
-        self.model_db = pd.read_excel(excel_path, sheet_name="Basemodels")
-        self.finetuning_default_params = pd.read_excel(excel_path, sheet_name="DefaultTrainingParameters")
-
-    def load_from_directory(self, registry_dir: Union[str, Path]) -> None:
-        self.model_db, self.finetuning_default_params = _load_registry_from_directory(registry_dir)
-
-    def load_from_hf_dataset(
-        self,
-        *,
-        repo_id: str = DEFAULT_REGISTRY_REPO_ID,
-        revision: str = DEFAULT_REGISTRY_REVISION,
-        cache_dir: Optional[Union[str, Path]] = None,
-        local_dir: Optional[Union[str, Path]] = None,
-        local_files_only: bool = False,
-    ) -> None:
-        snapshot_dir = snapshot_download(
-            repo_id=repo_id,
-            repo_type="dataset",
-            revision=revision,
-            cache_dir=str(cache_dir) if cache_dir is not None else None,
-            local_dir=str(local_dir) if local_dir is not None else None,
-            local_files_only=local_files_only,
-            allow_patterns=_DEFAULT_ALLOW_PATTERNS,
-        )
-        self.model_db, self.finetuning_default_params = _load_registry_from_directory(snapshot_dir)
+        self._model_ref_to_id: dict[str, str] = {}
+        for _, row in self.model_db.iterrows():
+            model_id = str(row["model_id"])
+            for key in self._model_lookup_columns:
+                value = row.get(key)
+                if pd.notna(value):
+                    self._model_ref_to_id[str(value)] = model_id
 
     def list_models(self) -> pd.DataFrame:
-        cols = [c for c in ["model_id", "hf_name", "hf_repo_id", "tokenizer_short_name", "model_complexity"] if c in self.model_db.columns]
-        return self.model_db[cols].copy()
+        columns = [
+            col for col in (
+                "model_id",
+                "name",
+                "hf_name",
+                "hf_path",
+                "model_complexity",
+                "tokenizer_short_name",
+                "train_tokenizer_function",
+            )
+            if col in self.model_db.columns
+        ]
+        return self.model_db[columns].copy()
 
-    def _resolve_model_row(self, model_ref: str) -> pd.Series:
+    def _resolve_model_id(self, model_ref: str) -> str:
         model_ref = str(model_ref)
-        for col in self._model_lookup_columns:
-            matches = self.model_db[self.model_db[col].astype(str) == model_ref]
-            if not matches.empty:
-                return matches.iloc[0]
+        if model_ref in self._model_ref_to_id:
+            return self._model_ref_to_id[model_ref]
+
         raise ValueError(
             f"Unknown model reference '{model_ref}'. "
             f"Supported model ids are: {sorted(self.basemodels)}"
         )
+
+    def _resolve_model_row(self, model_ref: str) -> pd.Series:
+        model_id = self._resolve_model_id(model_ref)
+        rows = self.model_db[self.model_db["model_id"].astype(str) == model_id]
+        if rows.empty:
+            raise ValueError(f"Model '{model_ref}' resolved to '{model_id}' but no metadata row was found.")
+        return rows.iloc[0]
 
     def get_my_finetunig_model_name(
         self,
@@ -353,7 +382,6 @@ class TrainingHelper:
         max_token_length=None,
     ) -> str:
         parts = [prefix, short_name, dataset]
-
         params = {
             "Ls": Ls,
             "epochs": epochs,
@@ -370,6 +398,9 @@ class TrainingHelper:
 
         return self.parameter_group_sep.join(parts)
 
+    def get_my_finetuning_model_name(self, *args, **kwargs) -> str:
+        return self.get_my_finetunig_model_name(*args, **kwargs)
+
     def _match_training_defaults(
         self,
         model_ref: str,
@@ -380,8 +411,7 @@ class TrainingHelper:
         gpu_memory: Optional[int] = None,
         dtype: Optional[str] = None,
     ) -> pd.DataFrame:
-        model_row = self._resolve_model_row(model_ref)
-        model_id = model_row["model_id"]
+        model_id = self._resolve_model_id(model_ref)
 
         candidates = self.finetuning_default_params[
             (self.finetuning_default_params["model_id"].astype(str) == str(model_id))
@@ -400,9 +430,9 @@ class TrainingHelper:
                 candidates = system_matches
 
         if gpu_memory is not None and "gpu_memory" in candidates.columns:
-            mem_matches = candidates[candidates["gpu_memory"] == gpu_memory]
-            if not mem_matches.empty:
-                candidates = mem_matches
+            memory_matches = candidates[candidates["gpu_memory"] == gpu_memory]
+            if not memory_matches.empty:
+                candidates = memory_matches
 
         if dtype is not None and "dtype" in candidates.columns:
             dtype_matches = candidates[candidates["dtype"].astype(str) == str(dtype)]
@@ -431,30 +461,26 @@ class TrainingHelper:
 
         if data_answer.empty:
             raise ValueError(
-                f"No training parameters found for model '{model}', actLs={actLs}, "
-                f"task_type='{task_type}', system={system}, gpu_memory={gpu_memory}, dtype={dtype}"
+                f"No training parameters found for model '{model}' with actLs={actLs}, "
+                f"task_type='{task_type}', system={system}, gpu_memory={gpu_memory}, dtype={dtype}."
             )
-
-        data_answer = data_answer.sort_values(
-            by=[col for col in ["gpu_memory", "seq_length_max"] if col in data_answer.columns],
-            ascending=[False, True][: len([col for col in ["gpu_memory", "seq_length_max"] if col in data_answer.columns])],
-        )
 
         row = data_answer.iloc[0]
         params_dict = row[self.training_parameters].to_dict()
 
-        for key in ["batch_size", "gradient_accumulation_steps", "max_token_length"]:
+        for key in ("batch_size", "gradient_accumulation_steps", "max_token_length"):
             if key in params_dict and pd.notna(params_dict[key]):
                 params_dict[key] = int(params_dict[key])
 
-        if "dtype" in row and pd.notna(row["dtype"]):
-            params_dict["dtype"] = str(row["dtype"])
+        if "learning_rate" in params_dict and pd.notna(params_dict["learning_rate"]):
+            params_dict["learning_rate"] = float(params_dict["learning_rate"])
+
+        for key in ("dtype", "system", "task_type", "model_id", "basemodel"):
+            if key in row and pd.notna(row[key]):
+                params_dict[key] = str(row[key])
+
         if "gpu_memory" in row and pd.notna(row["gpu_memory"]):
             params_dict["gpu_memory"] = int(row["gpu_memory"])
-        if "system" in row and pd.notna(row["system"]):
-            params_dict["system"] = str(row["system"])
-        if "task_type" in row and pd.notna(row["task_type"]):
-            params_dict["task_type"] = str(row["task_type"])
 
         return params_dict
 
@@ -478,15 +504,18 @@ class TrainingHelper:
 
         for part in parts[3:]:
             match = pattern.match(part)
-            if match:
-                abbr = match.group("abbr").lower()
-                value_str = match.group("value")
-                if ("." in value_str) or ("e" in value_str.lower()):
-                    value = float(value_str)
-                else:
-                    value = int(value_str)
-                full_param = self.parameter_group_mappings.get(abbr, abbr)
-                result[full_param] = value
+            if not match:
+                continue
+
+            abbr = match.group("abbr").lower()
+            value_str = match.group("value")
+            if "." in value_str or "e" in value_str.lower():
+                value: Union[int, float] = float(value_str)
+            else:
+                value = int(value_str)
+
+            full_param = self.parameter_group_mappings.get(abbr, abbr)
+            result[full_param] = value
 
         return result
 
@@ -494,7 +523,7 @@ class TrainingHelper:
         if not os.path.exists(models_path) or not os.listdir(models_path):
             raise ValueError(f"The provided models_path '{models_path}' does not exist or is empty.")
 
-        records = []
+        records: list[dict[str, Any]] = []
         model_dirs = [d for d in os.listdir(models_path) if os.path.isdir(os.path.join(models_path, d))]
 
         for model_dir in model_dirs:
@@ -505,23 +534,21 @@ class TrainingHelper:
                 continue
 
             checkpoint_dirs = [
-                d for d in os.listdir(model_dir_path)
+                d
+                for d in os.listdir(model_dir_path)
                 if os.path.isdir(os.path.join(model_dir_path, d)) and "checkpoint-" in d
             ]
 
-            if not checkpoint_dirs:
-                continue
-
             for checkpoint_dir in checkpoint_dirs:
                 cp_match = re.search(r"checkpoint-(\d+)", checkpoint_dir)
-                if not cp_match:
+                if cp_match is None:
                     continue
 
-                cp = int(cp_match.group(1))
+                checkpoint_number = int(cp_match.group(1))
                 checkpoint_path = os.path.join(model_dir_path, checkpoint_dir)
 
                 record = metadata.copy()
-                record["checkpoint"] = cp
+                record["checkpoint"] = checkpoint_number
                 record["checkpoint_path"] = checkpoint_path
                 record["model_directory"] = model_dir
                 records.append(record)
@@ -536,6 +563,7 @@ class TrainingHelper:
             else:
                 selected = group.loc[group["checkpoint"].idxmax()]
             preferred_records.append(selected)
+
         return pd.DataFrame(preferred_records)
 
     def get_tokenizer_for_basemodel(
@@ -543,24 +571,28 @@ class TrainingHelper:
         basemodel: str,
         *,
         trust_remote_code: bool = True,
-        local_files_only: bool = True,
+        local_files_only: bool = False,
     ):
         model_row = self._resolve_model_row(basemodel)
-        hf_repo_id = model_row["hf_repo_id"]
+
+        if "hf_path" not in model_row or pd.isna(model_row["hf_path"]):
+            raise ValueError(f"No hf_path found for model '{basemodel}'.")
+
+        hf_path = str(model_row["hf_path"])
         from transformers import AutoTokenizer
 
         return AutoTokenizer.from_pretrained(
-            hf_repo_id,
+            hf_path,
             trust_remote_code=trust_remote_code,
             local_files_only=local_files_only,
         )
 
     def get_tokenizer_short_name(self, model_ref: str) -> str:
         model_row = self._resolve_model_row(model_ref)
-        value = model_row.get("tokenizer_short_name", None)
-        if value is None or (isinstance(value, float) and pd.isna(value)):
+        tokenizer_short_name = model_row.get("tokenizer_short_name", None)
+        if tokenizer_short_name is None or (isinstance(tokenizer_short_name, float) and pd.isna(tokenizer_short_name)):
             raise ValueError(f"No tokenizer_short_name found for model '{model_ref}'.")
-        return str(value)
+        return str(tokenizer_short_name)
 
     def get_max_token_scaling(self, base_name: str) -> float:
         model_row = self._resolve_model_row(base_name)
@@ -571,7 +603,7 @@ class TrainingHelper:
 
     def get_tokenize_function(self, model_ref: str) -> Callable:
         model_row = self._resolve_model_row(model_ref)
-        fn_name = str(model_row.get("train_tokenizer_function", "")).strip()
+        fn_name = str(model_row.get("train_tokenizer_function", "")).strip().lower()
 
         mapping = {
             "tokenize_function_prokbert": tokenize_function_prokbert,
@@ -579,13 +611,19 @@ class TrainingHelper:
             "tokenize_function_dnabert": tokenize_function_DNABERT,
             "tokenize_function_evo_metagene": tokenize_function_evo_metagene,
         }
-        key = fn_name.lower()
-        if key in mapping:
-            return mapping[key]
+
+        if fn_name in mapping:
+            return mapping[fn_name]
 
         return get_tokenize_function(str(model_ref))
 
-    def build_tokenize_callable(self, model_ref: str, tokenizer, *, max_seq_len: Optional[int] = None) -> Callable:
+    def build_tokenize_callable(
+        self,
+        model_ref: str,
+        tokenizer,
+        *,
+        max_seq_len: Optional[int] = None,
+    ) -> Callable:
         tokenize_fn = self.get_tokenize_function(model_ref)
 
         def _callable(examples):
