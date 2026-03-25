@@ -8,6 +8,8 @@ import importlib
 
 import torch
 import numpy as np
+from numpy.random import default_rng
+
 import pandas as pd
 from scipy import special
 from sklearn.metrics import balanced_accuracy_score
@@ -911,3 +913,25 @@ def pretraining_masking_tokenize_test_masking_db(tokenizer, ds,
         remove_columns=cols_to_remove,
     )
     return ds2
+
+
+def truncate_sequences_segment_database(samples: Dict,
+                       min_length: int,
+                       max_length: int,
+                       random_seed: int | None = None,
+                       truncate_probability: float = 0.2):
+
+    rng = default_rng(random_seed)
+    truncated_segments = []
+    for segment in samples['segment']:
+        if truncate_probability > rng.uniform(0,1):
+            trunc_len = min(len(segment), rng.integers(min_length, max_length))
+            truncated_segments.append(segment[:trunc_len])
+        else:
+            truncated_segments.append(segment)
+
+    samples["segment"] = truncated_segments
+
+    return samples
+
+
