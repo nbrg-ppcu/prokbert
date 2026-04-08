@@ -1,7 +1,1 @@
-
-from .modernbert import (
-    ProkBertConfig,
-    ProkBertModel,
-    ProkBertForMaskedLM,
-    ProkBertForSequenceClassification
-)
+from .megatronbert import *
