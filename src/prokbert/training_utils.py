@@ -1,937 +1,1104 @@
-from typing import List, Tuple, Dict, Optional
 
-import os
-import re
-import logging
-import pathlib
-import importlib
+"""Utilities for segment-level and sequence-level classification evaluation.
 
-import torch
+This module is designed for `ProkBertForSequenceClassification` and for the
+current Hugging Face Trainer evaluation flow.
+
+Public API
+----------
+Segment level
+    - build_segment_classification_prediction_table
+    - evaluate_segment_classification_predictions
+
+Sequence level
+    - aggregate_sequence_classification_prediction_table
+    - build_sequence_classification_prediction_table
+    - evaluate_sequence_classification_predictions
+    - build_sequence_classification_compute_metrics
+
+Trainer hooks
+    - compute_metrics
+    - preprocess_logits_for_metrics
+
+Design notes
+------------
+- Single-label classification only.
+- Binary and multiclass classification are supported.
+- Sequence aggregation requires `sequence_id` in the original segment dataset.
+- The public `evaluate_*` functions return `(prediction_table, metrics)`.
+- The public `compute_metrics` functions return metrics only, as expected by
+  `transformers.Trainer`.
+- Sequence aggregation is implemented with NumPy on factorized sequence ids,
+  which is significantly faster than building a large pandas groupby pipeline.
+"""
+
+from __future__ import annotations
+
+from typing import Any, Callable, Dict, Optional, Sequence, Tuple
+
 import numpy as np
-from numpy.random import default_rng
-
 import pandas as pd
-from scipy import special
-from sklearn.metrics import balanced_accuracy_score
-from sklearn.metrics import roc_auc_score, accuracy_score, f1_score, matthews_corrcoef, confusion_matrix
-from transformers import MegatronBertConfig, MegatronBertForMaskedLM
-from transformers import Trainer, TrainingArguments, get_linear_schedule_with_warmup, EvalPrediction
+from sklearn.metrics import (
+    accuracy_score,
+    balanced_accuracy_score,
+    confusion_matrix,
+    f1_score,
+    matthews_corrcoef,
+    precision_score,
+    recall_score,
+    roc_auc_score,
+)
 
-from . import sequtils
-from . import prok_datasets
-from . import ProkBERTDataCollator
-from .config_utils import ProkBERTConfig
-from .prokbert_tokenizer import ProkBERTTokenizer
+__all__ = [
+    "aggregate_sequence_classification_prediction_table",
+    "build_segment_classification_prediction_table",
+    "build_sequence_classification_compute_metrics",
+    "build_sequence_classification_prediction_table",
+    "compute_classification_metrics",
+    "compute_classification_metrics_from_probabilities",
+    "compute_metrics",
+    "evaluate_segment_classification_predictions",
+    "evaluate_sequence_classification_predictions",
+    "preprocess_logits_for_metrics",
+]
 
-
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-
-
-def get_training_tokenizer(prokbert_config: ProkBERTConfig) -> ProkBERTTokenizer:
-    """
-    Load a tokenizer for ProkBERT training.
-
-    This function initializes and returns a ProkBERT tokenizer suitable for tokenizing sequences during training.
-
-    :param prokbert_config: Configuration parameters for ProkBERT, an instance of :class:`ProkBERTConfig`.
-                            The parameters are typically read from `pretraining.yaml`.
-    :return: An instance of :class:`ProkBERTTokenizer`.
-    """
-
-    tokenizer = ProkBERTTokenizer(tokenization_params=prokbert_config.tokenization_params,
-                              segmentation_params=prokbert_config.segmentation_params,
-                              comp_params=prokbert_config.computation_params,
-                              operation_space='sequence')
-    return tokenizer
-
-
-def get_data_collator_for_overlapping_sequences(tokenizer, prokbert_config):
-    """
-    Load a data collator for overlapping sequences.
-
-    This function initializes and returns a ProkBERT data collator suitable for handling overlapping sequences
-    during training.
-
-    :param tokenizer: The tokenizer to be used for tokenizing sequences. It should be an instance of :class:`ProkBERTTokenizer`.
-    :param prokbert_config: Configuration parameters for ProkBERT. This should be an instance of :class:`ProkBERTConfig`
-                            and the parameters are typically read from the `pretraining.yaml` via the :class:`ProkBERTConfig`.
-    :return: An instance of the :class:`ProkBERTDataCollator`.
-    """
-
-    logging.info('Loading the datacollator class!')
-    prokbert_dc = ProkBERTDataCollator.ProkBERTDataCollator(tokenizer,
-                                    mask_to_left=prokbert_config.data_collator_params['mask_to_left'],
-                                    mask_to_right=prokbert_config.data_collator_params['mask_to_right'],
-                                    mlm_probability =   prokbert_config.data_collator_params['mlm_probability'],
-                                    replace_prob =prokbert_config.data_collator_params['replace_prob'],
-                                    random_prob = prokbert_config.data_collator_params['random_prob'])
-    prokbert_dc.set_torch_token_dtype(prokbert_config.default_torchtype)
-    logging.info(str(prokbert_dc))
-
-    return prokbert_dc
+_ALLOWED_SEQUENCE_AGGREGATION_METHODS = {
+    "mean_logits",
+    "mean_probabilities",
+    "mean_log_probabilities",
+    "weighted_mean_log_probabilities",
+    "topk_mean_logits",
+    "topk_mean_probabilities",
+    "topk_mean_log_probabilities",
+}
 
 
-def check_model_existance_and_checkpoint(model_name: str, output_path: str) -> Tuple[bool, Optional[str], Optional[int], Optional[List[int]]]:
-    """
-    Check the existence of a model and determine the latest checkpoint.
-
-    The Hugging Face models are organized into checkpoints, with the final model corresponding to the "checkpoint 0".
-    This function verifies the existence of a model in the specified output path and determines the checkpoint number
-    that represents the latest model.
-
-    :param model_name: The name of the model to check.
-    :param output_path: The path where the model checkpoints are stored.
-    :return:
-        - True if the model exists, otherwise False.
-        - Path to the largest checkpoint directory.
-        - The largest checkpoint number.
-        - A list of available checkpoint numbers.
-    """
-
-    model_path = os.path.join(output_path, model_name)
-    logging.info( 'model_path:  ' +  str(model_path))
-    path_exists = pathlib.Path.exists(pathlib.Path(model_path))
-    largest_checkpoint_dir = None
-    largest_checkpoint = None
-    chekcpoint_nr = None
-    if path_exists:
-        try:
-            subfolders = [ f for f in os.scandir(model_path) if f.is_dir() and f.name.startswith('checkpoint-')]
-            subfolders = [sf for sf in subfolders if len(os.listdir(subfolders[0])) > 1]
-            chekcpoint_nr = sorted([int(f.name[11:]) for f in subfolders if f.name.startswith('checkpoint-')])
-            largest_checkpoint = chekcpoint_nr[-1]
-            if 0 in chekcpoint_nr:
-                logging.info('   The 0 is the largest checkpoint!')
-                largest_checkpoint = 0
-
-            largest_checkpoint_dir = os.path.join(model_path, 'checkpoint-' + str(largest_checkpoint))
-
-        except IndexError:
-            logging.info('   Something is wrong, set default valies')
-            logging.info('   ' + str(subfolders))
-            path_exists =False
-            largest_checkpoint_dir = None
-            largest_checkpoint = None
-
-    return path_exists, largest_checkpoint_dir, largest_checkpoint, chekcpoint_nr
+def _to_numpy(value: Any) -> np.ndarray:
+    """Convert tensors, arrays, and sequences to a NumPy array."""
+    if isinstance(value, np.ndarray):
+        return value
+    if hasattr(value, "detach"):
+        value = value.detach()
+    if hasattr(value, "cpu"):
+        value = value.cpu()
+    return np.asarray(value)
 
 
-def check_hdf_dataset_file(prokbert_config) -> None:
-    """
-    Verify the validity of an HDF5 dataset file.
-
-    This function checks whether a given file path points to a valid HDF5 dataset used in ProkBERT's training.
-
-    :param hdf_file_path: Path to the HDF5 dataset file.
-    :return: True if the file is a valid HDF5 dataset, False otherwise.
-    """
-
-    hdf_file_path = prokbert_config.dataset_params['dataset_path']
-    dataset_class = prokbert_config.dataset_params['dataset_class']
-
-    if len(hdf_file_path) == 0:
-        raise ValueError('There is no provided dataset file!')
-
-    logging.info('Checking whether the file exists or not!')
-    assert os.path.exists(hdf_file_path), f"The provided file path '{hdf_file_path}' does not exist."
-    if dataset_class== 'IterableProkBERTPretrainingDataset':
-        logging.info('Loading and creating a IterableProkBERTPretrainingDataset')
-
-        ds_iter = prok_datasets.IterableProkBERTPretrainingDataset(hdf_file_path)
-        ds_size = len(ds_iter)
-    elif dataset_class== 'ProkBERTPretrainingHDFDataset':
-        logging.info('Loading and creating a ProkBERTPretrainingHDFDataset')
-        ds_hdf = prok_datasets.ProkBERTPretrainingHDFDataset(hdf_file_path)
-        ds_size = len(ds_hdf)
-    elif dataset_class== 'ProkBERTPretrainingDataset':
-        logging.info('Checking the input data ...')
-        ds_size = len(prokbert_config.dataset_params['pretraining_dataset_data'])
-        if ds_size == 0:
-            raise ValueError('The provided data is empty, please check the provided input.')
-    else:
-        raise ValueError(f'The required class={dataset_class} is not available')
+def _as_2d_logits_array(value: Any) -> np.ndarray:
+    """Return a validated 2D logits array."""
+    logits = _to_numpy(value)
+    if logits.ndim != 2:
+        raise ValueError(
+            "Expected logits with shape (n_samples, n_classes). "
+            f"Received {getattr(logits, 'shape', None)!r}."
+        )
+    if not np.all(np.isfinite(logits)):
+        raise ValueError("Logits contain non-finite values.")
+    return logits
 
 
-def get_the_iteration_offset(batch_size, training_steps, dataset_size,
-                             nr_gpus=1, radient_accumulation_steps=1):
-    """
-    Determine the iteration offset for ProkBERT training.
+def _as_1d_label_array(value: Any) -> np.ndarray:
+    """Return a validated 1D integer labels array."""
+    label_ids = _to_numpy(value)
 
-    This function calculates the iteration offset based on the training configuration, output path, and tokenizer.
-    It ensures that training resumes correctly from the last checkpoint or starts anew if no checkpoint is found.
+    if label_ids.ndim == 2 and label_ids.shape[1] == 1:
+        label_ids = label_ids[:, 0]
 
-    :param prokbert_config: Configuration parameters for ProkBERT, an instance of :class:`ProkBERTConfig`.
-                            The parameters are typically read from `pretraining.yaml`.
-    :param output_path: The path where the model checkpoints and other training artifacts are stored.
-    :param tokenizer: An instance of :class:`ProkBERTTokenizer` used for tokenization during training.
-    :param logger: Logger instance to log messages during the process.
-    :param kwargs: Additional keyword arguments.
-    :return: The iteration offset, indicating where the training should start or resume.
-    """
-
-
-    act_ds_offset = nr_gpus*radient_accumulation_steps*batch_size*training_steps % dataset_size
-
-    return act_ds_offset
-
-
-def get_pretrained_model(prokbert_config):
-
-    new_model_args = MegatronBertConfig(**prokbert_config.model_params)
-
-
-    [m_exists, cp_dir, cp, cps] = check_model_existance_and_checkpoint(prokbert_config.model_params['model_outputpath'],
-                                     prokbert_config.model_params['model_name'])
-    if m_exists:
-        print(f'Loading the existing model from the chekcpoint folder: {cp_dir}')
-        expected_model_dir = cp_dir
-        model = MegatronBertForMaskedLM.from_pretrained(expected_model_dir)
-    else:
-        print('Investigating whether previous model is exists')
-        [init_m_exists, init_m_cp_dir, init_m_cp, init_m_cps] = check_model_existance_and_checkpoint(prokbert_config.model_params['resume_or_initiation_model_path'],
-                                        prokbert_config.model_params['model_name'])
-        if not init_m_exists:
-            model_output_path = prokbert_config.model_params['model_outputpath']
-            print(f'The expected model does not exist at the path {model_output_path}. Creating a new modell with parameters: {new_model_args}')
-            model = MegatronBertForMaskedLM(new_model_args)
-
-        else:
-            model = MegatronBertForMaskedLM.from_pretrained(init_m_cp_dir)
-
-
-    return model
-
-
-def run_pretraining(model,tokenizer, data_collator,training_dataset, prokbert_config):
-
-    training_args = TrainingArguments(**prokbert_config.pretraining_params)
-    is_resume_training = prokbert_config.model_params['ResumeTraining']
-    [m_exists, cp_dir, cp, cps] = check_model_existance_and_checkpoint(prokbert_config.model_params['model_outputpath'],
-                                     prokbert_config.model_params['model_name'])
-
-    trainer = Trainer(
-        model=model,
-        args=training_args,
-        data_collator=data_collator,
-        train_dataset=training_dataset,
-        tokenizer=tokenizer
+    if label_ids.ndim != 1:
+        raise ValueError(
+            "Expected labels with shape (n_samples,). "
+            f"Received {getattr(label_ids, 'shape', None)!r}."
         )
 
-    if is_resume_training and m_exists:
-        trainer.train(resume_from_checkpoint = cp_dir)
+    if not np.all(np.isfinite(label_ids)):
+        raise ValueError("Labels contain non-finite values.")
 
-    else:
-        trainer.train()
-    final_model_output = os.path.join(prokbert_config.model_params['model_outputpath'], prokbert_config.model_params['model_name'])
-    model.save_pretrained(final_model_output)
+    rounded = np.rint(label_ids)
+    if not np.all(label_ids == rounded):
+        raise ValueError("Single-label classification requires integer class ids.")
+
+    return rounded.astype(np.int64, copy=False)
 
 
-def oevaluate_binary_classification_bert_build_pred_results(logits: torch.Tensor, labels: torch.Tensor) -> np.ndarray:
+def _extract_logits_and_label_ids(
+    predictions: Any,
+    label_ids: Optional[Any] = None,
+    *,
+    allow_missing_labels: bool = False,
+) -> Tuple[np.ndarray, Optional[np.ndarray]]:
+    """Extract logits and optional labels from a Trainer-style prediction object.
+
+    Accepted forms for `predictions`
+    --------------------------------
+    - `EvalPrediction`-like objects with `.predictions` and optional `.label_ids`
+    - `(logits, label_ids)` tuple
+    - raw logits array
+    - model output tuples where logits are the first element
     """
-    Build prediction results for binary classification.
+    raw_predictions = predictions
+    raw_label_ids = label_ids
 
-    Parameters:
-        logits (torch.Tensor): Raw model outputs for each class.
-        labels (torch.Tensor): True labels.
+    if hasattr(raw_predictions, "predictions"):
+        raw_predictions = raw_predictions.predictions
+        if raw_label_ids is None and hasattr(predictions, "label_ids"):
+            raw_label_ids = predictions.label_ids
+    elif isinstance(raw_predictions, (tuple, list)) and raw_label_ids is None and len(raw_predictions) == 2:
+        raw_predictions, raw_label_ids = raw_predictions
 
-    Returns:
-        np.ndarray: An array containing labels, predictions, and logits for each class.
-    """
+    while isinstance(raw_predictions, (tuple, list)):
+        if len(raw_predictions) == 0:
+            raise ValueError("Received an empty predictions tuple/list.")
+        raw_predictions = raw_predictions[0]
 
-    predictions = torch.argmax(logits, dim=-1)
-    p = predictions.detach().cpu().numpy()
-    y = labels.detach().cpu().numpy()
-    logits_np = logits.detach().cpu().numpy()
-    pred = np.stack((y, p)).T
-    pred_results = np.concatenate((pred, logits_np), axis=1)
-    return pred_results
+    logits = _as_2d_logits_array(raw_predictions)
 
-def evaluate_binary_classification_bert_build_pred_results(logits, labels):
-    """
-    Build prediction results for binary classification.
+    if raw_label_ids is None:
+        if allow_missing_labels:
+            return logits, None
+        raise ValueError("Labels are required for evaluation.")
 
-    Parameters:
-        logits: Raw model outputs (logits) as a tensor or numpy array.
-        labels: True labels as a tensor or numpy array.
+    while isinstance(raw_label_ids, (tuple, list)):
+        if len(raw_label_ids) != 1:
+            raise ValueError("Expected label_ids to contain a single array.")
+        raw_label_ids = raw_label_ids[0]
 
-    Returns:
-        np.ndarray: An array containing labels, predictions, and logits for each class.
-    """
+    labels = _as_1d_label_array(raw_label_ids)
 
-    # Ensure logits and labels are torch Tensors
-    if not isinstance(logits, torch.Tensor):
-        logits = torch.tensor(logits)
-    if not isinstance(labels, torch.Tensor):
-        labels = torch.tensor(labels)
+    if logits.shape[0] != labels.shape[0]:
+        raise ValueError(
+            "The number of predictions and labels does not match: "
+            f"{logits.shape[0]} != {labels.shape[0]}."
+        )
 
-    # Calculate predictions
-    predictions = torch.argmax(logits, dim=-1)
-
-    # Move tensors to CPU and convert to numpy for concatenation
-    predictions_np = predictions.cpu().numpy()
-    labels_np = labels.cpu().numpy()
-    logits_np = logits.cpu().numpy()
-
-    # Prepare the results
-    pred = np.stack((labels_np, predictions_np), axis=1)
-    pred_results = np.concatenate((pred, logits_np), axis=1)
-
-    return pred_results
+    return logits, labels
 
 
+def _softmax(logits: np.ndarray) -> np.ndarray:
+    """Compute a numerically stable softmax."""
+    shifted = logits - np.max(logits, axis=1, keepdims=True)
+    exp_shifted = np.exp(shifted)
+    return exp_shifted / np.sum(exp_shifted, axis=1, keepdims=True)
 
-def evaluate_binary_classification_bert(pred_results: np.ndarray) -> Tuple[Dict, List]:
-    y_true = pred_results[:, 0]
-    y_pred = pred_results[:, 1]
-    logits = pred_results[:, 2:]  # Logits for both classes
 
-    # Compute probabilities using the sigmoid function on the logits for the positive class (index 1)
-    probabilities = special.expit(logits[:, 1])
+def _log_softmax(logits: np.ndarray) -> np.ndarray:
+    """Compute a numerically stable log-softmax."""
+    shifted = logits - np.max(logits, axis=1, keepdims=True)
+    return shifted - np.log(np.sum(np.exp(shifted), axis=1, keepdims=True))
 
-    # Calculate Cross-Entropy Loss
-    cross_entropy_loss = -np.mean(y_true * np.log(probabilities) + (1 - y_true) * np.log(1 - probabilities))
 
-    try:
-        auc_class1 = roc_auc_score(y_true, logits[:, 0])
-    except ValueError:
-        auc_class1 = -1
+def _normalize_probabilities(probabilities: Any) -> np.ndarray:
+    """Return a validated probability matrix with rows summing to one."""
+    probabilities = _to_numpy(probabilities)
+    if probabilities.ndim != 2:
+        raise ValueError(
+            "Expected probabilities with shape (n_samples, n_classes). "
+            f"Received {getattr(probabilities, 'shape', None)!r}."
+        )
+    probabilities = probabilities.astype(np.float64, copy=False)
+    probabilities = np.clip(probabilities, 0.0, None)
+    row_sums = probabilities.sum(axis=1, keepdims=True)
+    if np.any(row_sums <= 0.0):
+        raise ValueError("Each probability row must have a positive sum.")
+    return probabilities / row_sums
 
-    try:
-        auc_class2 = roc_auc_score(y_true, logits[:, 1])
-    except ValueError:
-        auc_class2 = -1
 
-    acc = accuracy_score(y_true, y_pred)
-    f1 = f1_score(y_true, y_pred)
-    mcc = matthews_corrcoef(y_true, y_pred)
-    bal_acc = balanced_accuracy_score(y_true, y_pred)
+def _safe_divide(numerator: float, denominator: float) -> float:
+    """Return `numerator / denominator`, or 0.0 when the denominator is zero."""
+    if denominator == 0:
+        return 0.0
+    return float(numerator / denominator)
 
-    tn, fp, fn, tp = confusion_matrix(y_true, y_pred).ravel()
-    recall = tp / (tp + fn)
-    specificity = tn / (tn + fp)
-    precision = tp / (tp + fp)
-    negative_predicted_value = tn / (tn + fn)
 
-    Np = tp + fn
-    Nn = tn + fp
+def _validate_label_ids(label_ids: np.ndarray, num_classes: int) -> None:
+    """Validate integer class ids for single-label classification."""
+    if num_classes < 2:
+        raise ValueError(
+            "Classification evaluation requires at least 2 classes. "
+            f"Received num_classes={num_classes}."
+        )
+    if np.any(label_ids < 0) or np.any(label_ids >= num_classes):
+        raise ValueError(
+            f"Labels must be in the range [0, {num_classes - 1}]. "
+            f"Received min={label_ids.min()} and max={label_ids.max()}."
+        )
 
-    eval_results = {
-        'CE_loss': cross_entropy_loss,
-        'auc_class0': auc_class1,
-        'auc_class1': auc_class2,
-        'acc': acc,
-        'bal_acc': bal_acc,
-        'f1': f1,
-        'mcc': mcc,
-        'recall': recall,
-        'sensitivity': recall,
-        'precision' : precision,
-        'neg_pred_val' : negative_predicted_value,
-        'specificity': specificity,
-        'tn': tn,
-        'fp': fp,
-        'fn': fn,
-        'tp': tp,
-        'Np': Np,
-        'Nn': Nn
+
+def _binary_confusion_metrics(
+    label_ids: np.ndarray,
+    predicted_label_ids: np.ndarray,
+) -> Dict[str, float]:
+    """Compute binary-only confusion-matrix-derived metrics."""
+    tn, fp, fn, tp = confusion_matrix(label_ids, predicted_label_ids, labels=[0, 1]).ravel()
+
+    recall = _safe_divide(tp, tp + fn)
+    specificity = _safe_divide(tn, tn + fp)
+    precision = _safe_divide(tp, tp + fp)
+    negative_predicted_value = _safe_divide(tn, tn + fn)
+
+    return {
+        "recall": recall,
+        "sensitivity": recall,
+        "precision": precision,
+        "neg_pred_val": negative_predicted_value,
+        "specificity": specificity,
+        "tn": float(tn),
+        "fp": float(fp),
+        "fn": float(fn),
+        "tp": float(tp),
+        "Np": float(tp + fn),
+        "Nn": float(tn + fp),
     }
 
-    eval_results_ls = [cross_entropy_loss, auc_class1, auc_class2,acc,bal_acc,mcc, f1, tn, fp, fn, tp, Np, Nn]
 
-    return eval_results, eval_results_ls
+def _per_class_auc(label_ids: np.ndarray, probabilities: np.ndarray) -> Dict[str, float]:
+    """Compute one-vs-rest AUROC for each class."""
+    num_classes = probabilities.shape[1]
+    auc_results: Dict[str, float] = {}
 
+    for class_idx in range(num_classes):
+        class_targets = (label_ids == class_idx).astype(np.int64)
 
-def compute_metrics_eval_prediction(eval_preds: EvalPrediction) -> Dict:
-    eval_preds_tuple = eval_preds.predictions, eval_preds.label_ids
-    eval_results = compute_metrics(eval_preds_tuple)
+        if class_targets.min() == class_targets.max():
+            auc_results[f"auc_class{class_idx}"] = float("nan")
+            continue
 
-    return eval_results
-
-
-
-def compute_metrics(eval_preds: Tuple) -> Dict:
-    """
-    Compute metrics for binary classification evaluation.
-
-    Parameters:
-        eval_preds (Tuple): A tuple containing two elements:
-            - logits: A list or array of raw model outputs.
-            - labels: A list or array of true labels.
-
-    Returns:
-        Dict: A dictionary containing evaluation metrics.
-
-    Note:
-        This function assumes that `evaluate_binary_classification_bert_build_pred_results`
-        and `evaluate_binary_classification_bert` are available in the scope.
-    """
-
-    logits, labels = eval_preds
-    logits = torch.tensor(logits)
-    labels = torch.tensor(labels)
-    # Generate prediction results (assuming this function is available in the scope)
-    pred_results = evaluate_binary_classification_bert_build_pred_results(logits, labels)
-    # Evaluate binary classification (assuming this function is available in the scope)
-    eval_results, eval_results_ls = evaluate_binary_classification_bert(pred_results)
-
-    return eval_results
-
-
-class ProkBERTTrainer(Trainer):
-    def create_optimizer_and_scheduler(self, num_training_steps: int):
-        assert self.model is not None, "Model must be set before creating optimizer and scheduler."
-        optimizer = torch.optim.AdamW(
-            self.model.parameters(),
-            lr=self.args.learning_rate,
-            eps=self.args.adam_epsilon,
-            weight_decay=self.args.weight_decay,
+        auc_results[f"auc_class{class_idx}"] = float(
+            roc_auc_score(class_targets, probabilities[:, class_idx])
         )
 
-        scheduler = get_linear_schedule_with_warmup(
-            optimizer,
-            num_warmup_steps=0,
-            num_training_steps=num_training_steps
+    return auc_results
+
+
+def compute_classification_metrics_from_probabilities(
+    probabilities: Any,
+    label_ids: Any,
+) -> Dict[str, float]:
+    """Compute single-label classification metrics from probabilities."""
+    probabilities_np = _normalize_probabilities(probabilities)
+    label_ids_np = _as_1d_label_array(label_ids)
+    _validate_label_ids(label_ids_np, probabilities_np.shape[1])
+
+    predicted_label_ids = np.argmax(probabilities_np, axis=1)
+
+    epsilon = np.finfo(np.float64).eps
+    true_class_probabilities = probabilities_np[np.arange(label_ids_np.shape[0]), label_ids_np]
+    cross_entropy_loss = float(-np.mean(np.log(np.clip(true_class_probabilities, epsilon, 1.0))))
+
+    is_binary = probabilities_np.shape[1] == 2
+    average = "binary" if is_binary else "macro"
+
+    recall = float(
+        recall_score(
+            label_ids_np,
+            predicted_label_ids,
+            average=average,
+            zero_division=0,
         )
-        self.optimizer = optimizer
-        self.lr_scheduler = scheduler
-
-
-def get_torch_data_from_segmentdb_classification(tokenizer, segmentdb, L=None, randomize=True):
-
-    if L is None:
-        L = tokenizer.tokenization_params['token_limit']-2
-
-    tokenized_sets = sequtils.batch_tokenize_segments_with_ids(segmentdb, tokenizer.tokenization_params,
-                                                    batch_size=50000,
-                                                    num_cores=tokenizer.comp_params['cpu_cores_for_tokenization'],
-                                                    np_token_type= np.int32)
-
-    X, torchdb = sequtils.get_rectangular_array_from_tokenized_dataset(tokenized_sets,
-                                                shift=tokenizer.tokenization_params['shift'],
-                                                max_token_count=L+2,
-                                                randomize=randomize,
-                                                truncate_zeros = True,
-                                                numpy_dtype = np.int32)
-
-    torchdb_annot = torchdb.merge(segmentdb[['segment_id', 'y', 'label']], how='left', left_on = 'segment_id', right_on = 'segment_id')
-    y = torch.tensor(torchdb_annot['y'], dtype=torch.long)
-    x = torch.tensor(X, dtype=torch.long)
-    return x, y, torchdb
-
-def get_default_pretrained_model_parameters(model_name: str, model_class: str, output_hidden_states: bool = False,
-                                            output_attentions: bool = False, move_to_gpu: bool = True):
-    """
-    Load a default pretrained model along with the corresponding tokenizer based on the model name.
-
-    :param model_name: The name of the model to load. Should be a valid model stored locally or registered in the database.
-                       Can be provided with or without the 'neuralbioinfo/' prefix.
-    :type model_name: str
-    :param model_class: The class of the transformer model into which the parameters will be loaded.
-    :type model_class: str
-    :param output_hidden_states: Whether to output hidden states.
-    :type output_hidden_states: bool
-    :param output_attentions: Whether to output attentions.
-    :type output_attentions: bool
-    :param move_to_gpu: Whether to move the model to GPU if available.
-    :type move_to_gpu: bool
-    :return: The loaded model (moved to GPU or CPU as specified) and the tokenizer with its default parameters.
-    :rtype: tuple
-
-    Raises:
-        ValueError: If the model name does not match the expected pattern and is not found in predefined exceptions.
-    """
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-    # Normalize the model name by removing the 'neuralbioinfo/' prefix if present
-    normalized_model_name = model_name.replace('neuralbioinfo/', '')
-
-    print(f'normalized_model_name: {normalized_model_name}, model name_ {model_name}')
-    # Predefined exceptions for model names and their tokenization parameters
-    model_tokenization_params = {
-        'prokbert-mini': {'kmer': 6, 'shift': 1},
-        'prokbert-mini-long': {'kmer': 6, 'shift': 2},
-        'prokbert-mini-c': {'kmer': 1, 'shift': 1},
-    }
-
-    # Check for predefined exceptions first
-    if normalized_model_name in model_tokenization_params:
-        tokenization_params = model_tokenization_params[normalized_model_name]
-    else:
-        # If not found, try to parse using regex
-        match = re.search(r'k(\d+)s(\d+)', normalized_model_name)
-        if match:
-            kmer, shift = map(int, match.groups())
-            tokenization_params = {'kmer': kmer, 'shift': shift}
-        else:
-            print('fdsgfdgfgfggfgfgf')
-            raise ValueError(f"Model name '{model_name}' does not match the expected pattern and is not a predefined exception.")
-
-    tokenizer = ProkBERTTokenizer(tokenization_params=tokenization_params, operation_space='sequence')
-    model = load_pretrained_model(
-        model_path=model_name,  # Use original model_name here to preserve 'neuralbioinfo/' if it was included
-        model_class=model_class,
-        device=device,
-        output_hidden_states=output_hidden_states,
-        output_attentions=output_attentions,
-        move_to_gpu=move_to_gpu
+    )
+    precision = float(
+        precision_score(
+            label_ids_np,
+            predicted_label_ids,
+            average=average,
+            zero_division=0,
+        )
     )
 
-    return model, tokenizer
-
-
-def load_pretrained_model(model_path, model_class, device, output_hidden_states=False, output_attentions=False, move_to_gpu=False):
-    """
-    Load Megatron BERT model and prepare for evaluation.
-
-    Parameters:
-    model_path (str): Path to the model.
-    device (str): Device to load the model onto.
-
-    Returns:
-    MegatronBertForMaskedLM: Loaded model.
-    """
-    torch.cuda.empty_cache()
-    ModelClass = getattr(importlib.import_module('transformers'), model_class)
-    model = ModelClass.from_pretrained(model_path, output_attentions=output_attentions,output_hidden_states=output_hidden_states)
-
-    if move_to_gpu:
-        model.to(device)
-        num_gpus = torch.cuda.device_count()
-        print('num_gpus: ', num_gpus)
-        print('No of parameters: ', model.num_parameters()/1000000)
-        if num_gpus > 1 and torch.cuda.device_count() >= num_gpus:
-            model = torch.nn.DataParallel(model, device_ids=list(range(num_gpus)))
-    return model
-
-
-def check_nvidia_gpu():
-    """
-    Check if NVIDIA GPU is available for PyTorch and print an appropriate message.
-    """
-    if torch.cuda.is_available():
-        gpu_count = torch.cuda.device_count()
-        gpu_names = ', '.join(torch.cuda.get_device_name(i) for i in range(gpu_count))
-        print(f"NVIDIA GPU is available. Total GPUs: {gpu_count}, Names: {gpu_names}")
-    else:
-        print("NVIDIA GPU is not available.")
-
-
-def check_amd_gpu():
-    """
-    Check if AMD GPU is available for PyTorch (ROCm) and print an appropriate message.
-    """
-    # This is a placeholder function. PyTorch does not natively support AMD GPUs as of now.
-    # Checking for AMD GPU support requires specific setup and installation of PyTorch with ROCm.
-    print("Checking for AMD GPU is not directly supported in PyTorch as of now.")
-    print("For AMD GPU support, ensure PyTorch is installed with ROCm and consult the ROCm documentation.")
-
-def weighted_voting(df):
-    """
-    Performs weighted voting based on probabilities for each segment within the same sequence.
-
-    Parameters:
-    - df: DataFrame expected to contain at least the following columns:
-          'sequence_id' and probability columns.
-          The probability columns can be named either as 'p_class_0' and 'p_class_1'
-          or as 'p_class0' and 'p_class1'. They will be normalized to 'p_class_0' and 'p_class_1'.
-          Optionally, the DataFrame may contain a 'y' column representing the true label.
-
-    Returns:
-    - DataFrame with columns ['sequence_id', 'y_true', 'y_pred', 'score_class_0', 'score_class_1'].
-      If the input DataFrame does not contain a 'y' column, the 'y_true' column in the output will be NaN.
-    """
-    # Normalize probability column names if needed.
-    rename_dict = {}
-    if 'p_class0' in df.columns and 'p_class_0' not in df.columns:
-        rename_dict['p_class0'] = 'p_class_0'
-    if 'p_class1' in df.columns and 'p_class_1' not in df.columns:
-        rename_dict['p_class1'] = 'p_class_1'
-    if rename_dict:
-        df = df.rename(columns=rename_dict)
-
-    # Determine required columns based on whether 'y' is available.
-    required_cols = ['sequence_id', 'p_class_0', 'p_class_1']
-    missing_cols = [col for col in required_cols if col not in df.columns]
-    if missing_cols:
-        raise ValueError(f"Missing required columns: {missing_cols}")
-
-    # Step 1: Calculate mean probabilities for each class by sequence_id.
-    mean_probs = df.groupby('sequence_id')[['p_class_0', 'p_class_1']].mean()
-
-    # Step 2: Determine predicted class based on higher mean probability.
-    mean_probs['y_pred'] = mean_probs.idxmax(axis=1).map({'p_class_0': 0, 'p_class_1': 1})
-
-    # Step 3: Check if 'y' column is provided. If yes, join with the true labels.
-    if 'y' in df.columns:
-        # Assuming 'y' is consistent for all segments within the same sequence.
-        y_true = df[['sequence_id', 'y']].drop_duplicates().set_index('sequence_id')
-        result_df = mean_probs.join(y_true)
-        # Rename 'y' column to 'y_true'.
-        result_df.rename(columns={'y': 'y_true'}, inplace=True)
-    else:
-        # If no 'y' column, add a column of NaNs.
-        result_df = mean_probs.copy()
-        result_df['y_true'] = np.nan
-
-    # Step 4: Rename probability columns to score columns and reorder.
-    result_df.rename(columns={
-        'p_class_0': 'score_class_0',
-        'p_class_1': 'score_class_1'
-    }, inplace=True)
-
-    result_df = result_df.reset_index()[['sequence_id', 'y_true', 'y_pred', 'score_class_0', 'score_class_1']]
-
-    return result_df
-
-
-
-
-def prevweighted_voting(df):
-    """
-    Performs weighted voting based on probabilities for each segment within the same sequence.
-
-    Parameters:
-    - df: DataFrame with columns ['sequence_id', 'y', 'p_class_0', 'p_class1']
-
-    Returns:
-    - DataFrame with columns ['sequence_id', 'y_true', 'y_pred', 'score_class_0', 'score_class_1']
-    """
-    # Step 1: Calculate mean probabilities for each class by sequence_id
-    mean_probs = df.groupby('sequence_id')[['p_class_0', 'p_class1']].mean()
-
-    # Step 2: Determine predicted class based on higher mean probability
-    mean_probs['y_pred'] = mean_probs.idxmax(axis=1).map({'p_class_0': 0, 'p_class1': 1})
-
-    # Step 3: Join with original labels to get y_true for each sequence_id
-    # Assuming 'y' is the same for all segments within the same sequence
-    y_true = df[['sequence_id', 'y']].drop_duplicates().set_index('sequence_id')
-    result_df = mean_probs.join(y_true)
-
-    # Step 4: Rename and reorder columns to match required output
-    result_df.rename(columns={'y': 'y_true', 'p_class_0': 'score_class_0', 'p_class1': 'score_class_1'}, inplace=True)
-    result_df = result_df.reset_index()[['sequence_id', 'y_true', 'y_pred', 'score_class_0', 'score_class_1']]
-
-    return result_df
-
-
-
-def logits_to_sequence_predictions(df):
-    # Calculate the mean logits for each class by sequence_id
-    mean_logits = df.groupby('sequence_id')[['logit_y0', 'logit_y1']].mean().reset_index()
-
-    # Convert the mean logits to a numpy array for softmax computation
-    logits_array = mean_logits[['logit_y0', 'logit_y1']].to_numpy()
-    # Apply softmax to the mean logits to get probabilities
-    probabilities = torch.nn.functional.softmax(logits_array, dim=1)
-
-    # Get the sequence-level label (y_true) by taking the first occurrence since it should be the same for all segments of a sequence
-    y_true = df.groupby('sequence_id')['y'].first().reset_index()['y']
-
-    # Determine sequence-level prediction (y_pred) based on the highest probability
-    y_pred = np.argmax(probabilities, axis=1)
-
-    # Create a results DataFrame
-    results_df = pd.DataFrame({
-        'sequence_id': mean_logits['sequence_id'],
-        'y_true': y_true,
-        'y_pred': y_pred,
-        'score_class_0': probabilities[:, 0],
-        'score_class_1': probabilities[:, 1]
-    })
-
-    return results_df
-
-
-def evaluate_binary_sequence_predictions(predictions, segment_dataset):
-
-
-    final_cols = ['sequence_id', 'predicted_label', 'p_class_0', 'p_class_1']
-
-    logits = predictions.predictions
-    labels = predictions.label_ids
-
-    if labels is None:
-        labels = [0] * len(logits)
-
-    # Convert logits and labels to tensors
-    logits_tensor = torch.tensor(logits)
-    labels_tensor = torch.tensor(labels)
-
-    print('Building predictions...')
-    pred_results = evaluate_binary_classification_bert_build_pred_results(logits_tensor, labels_tensor)
-    logits = pred_results[:, 2:]
-    probabilities = np.exp(logits) / np.sum(np.exp(logits), axis=1, keepdims=True)
-    combined_results = np.concatenate([pred_results, probabilities], axis=1)
-    combined_results = pd.DataFrame(combined_results,
-                                    columns=['y_true', 'y_pred', 'logit_y0', 'logit_y1', 'p_class_0', 'p_class_1'])
-
-    segment_dataset_df = segment_dataset.select_columns(['sequence_id', 'y']).to_pandas()
-
-    merged_results = segment_dataset_df.merge(combined_results, left_index=True, right_index=True)
-    merged_results.rename({'p_class_1' : 'p_class1',
-                        'p_class_0' : 'p_class_0'}, axis=1, inplace=True)
-    print('Applying weighted voting...')
-    sequence_predictions = weighted_voting(merged_results)
-    sequence_predictions.rename({'score_class_0': 'p_class_0', 'score_class_1' : 'p_class_1'}, axis=1, inplace=True)
-    sequence_predictions['predicted_label'] = np.where(sequence_predictions['y_pred'] == 1, 'class_1', 'class_0')
-
-    seq_pred_results =sequence_predictions[['y_true', 'y_pred', 'p_class_0', 'p_class_1']].to_numpy()
-    probabilities = seq_pred_results[:, 2:]
-    logits = np.log(probabilities)
-    seq_pred_results[:,2:]=logits
-    seq_eval_results, seq_eval_results_ls = evaluate_binary_classification_bert(seq_pred_results)
-
-    final_table = sequence_predictions[final_cols]
-
-    return final_table, seq_eval_results
-
-
-
-def inference_binary_sequence_predictions(predictions, segment_dataset):
-    """
-    Inference-only version that aggregates binary classification predictions for sequences.
-
-    Args:
-        predictions: An object with an attribute 'predictions' containing the model logits.
-                     (No true labels are expected.)
-        segment_dataset: A dataset with a 'sequence_id' column (and no ground truth label column).
-
-    Returns:
-        final_table: A DataFrame with columns ['sequence_id', 'predicted_label', 'p_class_0', 'p_class_1']
-                     that holds the aggregated, sequence-level predictions.
-    """
-    # Final output columns
-    final_cols = ['sequence_id', 'predicted_label', 'p_class_0', 'p_class_1']
-
-    # Extract logits (shape: [n_samples, 2]) from predictions.
-    logits = predictions.predictions
-
-    print('Building predictions...')
-    # For inference, we simply compute the predicted label as the argmax over logits.
-    pred_labels = np.argmax(logits, axis=1)
-
-    # Calculate probabilities via softmax.
-    probabilities = np.exp(logits) / np.sum(np.exp(logits), axis=1, keepdims=True)
-
-    # Create a DataFrame for segment-level predictions.
-    # Here, we include the predicted label, logits, and computed probabilities.
-    combined_results = pd.DataFrame({
-        'y_pred': pred_labels,
-        'logit_y0': logits[:, 0],
-        'logit_y1': logits[:, 1],
-        'p_class_0': probabilities[:, 0],
-        'p_class_1': probabilities[:, 1]
-    })
-
-    # Get the segment dataset with sequence_id (no ground truth column).
-    # Adjust the select_columns call if your dataset API is different.
-    segment_dataset_df = segment_dataset.select_columns(['sequence_id']).to_pandas()
-    #segment_dataset_df['y'] = np.random.randint(0, 2, size=L)
-
-    # Merge the predictions with the segment identifiers.
-    # Assumes that the indices of segment_dataset_df and combined_results correspond to each other.
-    merged_results = pd.concat([segment_dataset_df.reset_index(drop=True),
-                                combined_results.reset_index(drop=True)], axis=1)
-
-    print('Applying weighted voting...')
-    # Aggregate segment-level predictions into sequence-level predictions using weighted voting.
-    # Make sure that weighted_voting only depends on the columns available in merged_results.
-    sequence_predictions = weighted_voting(merged_results)
-
-    # Rename the aggregated probability columns if necessary.
-    # (Assumes weighted_voting returns columns named 'score_class_0' and 'score_class_1'.)
-    sequence_predictions.rename({'score_class_0': 'p_class_0', 'score_class_1': 'p_class_1'}, axis=1, inplace=True)
-
-    # Map the aggregated numeric predictions to string labels.
-    sequence_predictions['predicted_label'] = np.where(sequence_predictions['y_pred'] == 1, 'class_1', 'class_0')
-
-    # Build the final table with just the desired columns.
-    final_table = sequence_predictions[final_cols]
-
-    return final_table
-
-
-
-def compute_metrics_masked(p: EvalPrediction):
-    # p.predictions: np.ndarray of shape (batch, seq_len, vocab_size)
-    # p.label_ids:   np.ndarray of shape (batch, seq_len)
-    return evaluate_masked_lm(p.predictions, p.label_ids) # type: ignore[arg-type]
-
-
-def evaluate_masked_lm(logits: np.ndarray,
-                       label_ids: np.ndarray,
-                       ks: list[int] = [1,5,10,100]):
-    """
-    logits:    np.array of shape (batch_size, seq_len, vocab_size)
-    label_ids: np.array of shape (batch_size, seq_len) with -100 for non-masked
-
-    Returns a dict of metrics.
-    """
-    mask_positions = label_ids != -100               # boolean mask (batch, seq)
-    true_ids       = label_ids[mask_positions]       # shape (N,)
-    flat_logits    = logits[mask_positions]          # shape (N, vocab_size)
-
-    if true_ids.size == 0:
-        # no masked tokens at all
-        return {
-            "avg_rank":   None,
-            "median_rank": None,
-            "mrr":        None,
-            "loss":       None,
-            "perplexity": None,
-            **{f"hit@{k}": None for k in ks}
-        }
-
-
-    sorted_indices = np.argsort(-flat_logits, axis=1)  # descending sort
-    ranks = np.empty_like(true_ids, dtype=int)
-    for i, true_id in enumerate(true_ids):
-        # np.where returns a tuple, take first element of the array
-        ranks[i] = np.where(sorted_indices[i] == true_id)[0][0] + 1
-
-    avg_rank = ranks.mean()
-    med_rank = np.median(ranks)
-    mrr      = np.mean(1.0 / ranks)
-
-    hits = {f"hit@{k}": np.mean(ranks <= k) for k in ks}
-
-
-    flattened_logits = torch.tensor(flat_logits)            # (N, V)
-    flattened_labels = torch.tensor(true_ids, dtype=torch.long)  # (N,)
-    loss_fct = torch.nn.CrossEntropyLoss(reduction="mean")
-    loss = loss_fct(flattened_logits, flattened_labels).item()
-
-    ppl = float(np.exp(loss))
-
-    metrics = {
-        "avg_rank":   float(avg_rank),
-        "median_rank":int(med_rank),
-        "mrr":        float(mrr),
-        "loss":       loss,
-        "perplexity": ppl,
+    metrics: Dict[str, float] = {
+        "CE_loss": cross_entropy_loss,
+        "acc": float(accuracy_score(label_ids_np, predicted_label_ids)),
+        "bal_acc": float(balanced_accuracy_score(label_ids_np, predicted_label_ids)),
+        "f1": float(
+            f1_score(
+                label_ids_np,
+                predicted_label_ids,
+                average=average,
+                zero_division=0,
+            )
+        ),
+        "mcc": float(matthews_corrcoef(label_ids_np, predicted_label_ids)),
+        "recall": recall,
+        "sensitivity": recall,
+        "precision": precision,
     }
-    metrics.update(hits)
+
+    metrics.update(_per_class_auc(label_ids_np, probabilities_np))
+
+    if is_binary:
+        metrics.update(_binary_confusion_metrics(label_ids_np, predicted_label_ids))
+
     return metrics
 
 
+def compute_classification_metrics(
+    logits: Any,
+    label_ids: Any,
+) -> Dict[str, float]:
+    """Compute single-label classification metrics from logits."""
+    logits_np = _as_2d_logits_array(logits)
+    label_ids_np = _as_1d_label_array(label_ids)
 
-def get_token_position(seq_position, tokenizer, Ls, shift=0):
+    if logits_np.shape[0] != label_ids_np.shape[0]:
+        raise ValueError(
+            "The number of prediction rows and label_ids does not match: "
+            f"{logits_np.shape[0]} != {label_ids_np.shape[0]}."
+        )
 
-    token_start_pos, token_end_pos = sequtils.get_token_coordinates(seq_position,
-                                                           tokenizer.kmer,
-                                                           tokenizer.shift,
-                                                           shift,
-                                                           Ls)
-    token_middle = int((token_start_pos + token_end_pos)/2)
-
-    return token_middle
+    _validate_label_ids(label_ids_np, logits_np.shape[1])
+    probabilities_np = _softmax(logits_np)
+    return compute_classification_metrics_from_probabilities(probabilities_np, label_ids_np)
 
 
-def repretraining_masking_preprocess_function(sample, tokenizer, max_length=200, mask_to_left=3, mask_to_right=3):
+def _get_dataset_columns(dataset: Any) -> list[str]:
+    """Return the column names of a pandas or Hugging Face dataset."""
+    if isinstance(dataset, pd.DataFrame):
+        return list(dataset.columns)
+    return list(dataset.column_names)
+
+
+def _select_dataset_columns(dataset: Any, columns: Sequence[str]) -> pd.DataFrame:
+    """Select columns from a pandas or Hugging Face dataset."""
+    if isinstance(dataset, pd.DataFrame):
+        return dataset.loc[:, list(columns)].reset_index(drop=True).copy()
+    return dataset.select_columns(list(columns)).to_pandas().reset_index(drop=True)
+
+
+def _maybe_get_dataset_labels(
+    segment_dataset: Optional[Any],
+    label_col: str,
+    expected_length: int,
+) -> Optional[np.ndarray]:
+    """Extract labels from the dataset when available."""
+    if segment_dataset is None:
+        return None
+
+    dataset_columns = set(_get_dataset_columns(segment_dataset))
+    if label_col not in dataset_columns:
+        return None
+
+    label_df = _select_dataset_columns(segment_dataset, [label_col])
+    if len(label_df) != expected_length:
+        raise ValueError(
+            "Prediction row count and segment_dataset row count must match: "
+            f"{expected_length} != {len(label_df)}."
+        )
+
+    return _as_1d_label_array(label_df[label_col].to_numpy())
+
+
+def build_segment_classification_prediction_table(
+    predictions: Any,
+    segment_dataset: Optional[Any] = None,
+    label_ids: Optional[Any] = None,
+    *,
+    segment_id_col: str = "segment_id",
+    sequence_id_col: str = "sequence_id",
+    label_col: str = "labels",
+    extra_metadata_cols: Optional[Sequence[str]] = None,
+    include_probabilities: bool = True,
+) -> pd.DataFrame:
+    """Build a segment-level classification prediction table.
+
+    Notes
+    -----
+    - This function is row-order based. When `predictions` comes from
+      `trainer.predict(eval_dataset)`, pass the same `eval_dataset` as
+      `segment_dataset`.
+    - `segment_id_col` and `sequence_id_col` are optional. They are included only
+      when present in `segment_dataset`.
     """
-    Tokenizes the sample's 'segment' field. Adjust max_length and padding strategy as needed.
-    """
-    tokenized = tokenizer(
-        sample["sample_seq"],
-        padding="longest",
-        truncation=True,
-        max_length=max_length,
-
+    logits_np, label_ids_np = _extract_logits_and_label_ids(
+        predictions,
+        label_ids,
+        allow_missing_labels=True,
     )
-    input_ids = tokenized["input_ids"]
-    mask_token_id = getattr(tokenizer, "mask_token_id", 4) or 4
+    num_segments, num_classes = logits_np.shape
 
-    for i, pos in enumerate(sample["pos2mask"]):
-        to_mask = list(range(pos - mask_to_left,
-                             pos + mask_to_right + 1))
-        for mp in to_mask:
-            if 0 <= mp < len(input_ids[i]):
-                input_ids[i][mp] = mask_token_id
-        #1/0
-    results = {}
-    results['input_ids'] = input_ids
-    return results
+    if label_ids_np is None:
+        label_ids_np = _maybe_get_dataset_labels(segment_dataset, label_col, num_segments)
 
-def pretraining_masking_preprocess_function(sample, tokenizer, max_length=200, mask_to_left=3, mask_to_right=3):
-    """
-    Tokenizes the sample's 'sample_seq' field, applies a sliding mask window
-    around each position in sample['pos2mask'], and builds labels for MLM.
-    Returns dict with input_ids, attention_mask, and labels.
-    """
-    tokenized = tokenizer(
-        sample["sample_seq"],
-        padding="longest",
-        truncation=True,
-        max_length=max_length,
+    if label_ids_np is not None:
+        _validate_label_ids(label_ids_np, num_classes)
+
+    predicted_label_ids = np.argmax(logits_np, axis=1)
+
+    columns: Dict[str, Any] = {}
+
+    if segment_dataset is not None:
+        dataset_columns = set(_get_dataset_columns(segment_dataset))
+        metadata_columns: list[str] = []
+
+        for column_name in (segment_id_col, sequence_id_col):
+            if column_name in dataset_columns and column_name not in metadata_columns:
+                metadata_columns.append(column_name)
+
+        if extra_metadata_cols is not None:
+            for column_name in extra_metadata_cols:
+                if column_name in dataset_columns and column_name not in metadata_columns:
+                    metadata_columns.append(column_name)
+
+        if metadata_columns:
+            metadata_df = _select_dataset_columns(segment_dataset, metadata_columns)
+            if len(metadata_df) != num_segments:
+                raise ValueError(
+                    "Prediction row count and segment_dataset row count must match: "
+                    f"{num_segments} != {len(metadata_df)}."
+                )
+            for column_name in metadata_columns:
+                columns[column_name] = metadata_df[column_name].to_numpy()
+
+    if label_ids_np is not None:
+        columns["label_id"] = label_ids_np
+
+    columns["predicted_label_id"] = predicted_label_ids.astype(np.int64)
+
+    for class_idx in range(num_classes):
+        columns[f"logit_class_{class_idx}"] = logits_np[:, class_idx]
+
+    if include_probabilities:
+        probabilities_np = _softmax(logits_np)
+        for class_idx in range(num_classes):
+            columns[f"prob_class_{class_idx}"] = probabilities_np[:, class_idx]
+
+    return pd.DataFrame(columns)
+
+
+def evaluate_segment_classification_predictions(
+    predictions: Any,
+    segment_dataset: Optional[Any] = None,
+    label_ids: Optional[Any] = None,
+    *,
+    segment_id_col: str = "segment_id",
+    sequence_id_col: str = "sequence_id",
+    label_col: str = "labels",
+    extra_metadata_cols: Optional[Sequence[str]] = None,
+) -> Tuple[pd.DataFrame, Dict[str, float]]:
+    """Evaluate segment-level single-label classification predictions."""
+    segment_prediction_table = build_segment_classification_prediction_table(
+        predictions=predictions,
+        segment_dataset=segment_dataset,
+        label_ids=label_ids,
+        segment_id_col=segment_id_col,
+        sequence_id_col=sequence_id_col,
+        label_col=label_col,
+        extra_metadata_cols=extra_metadata_cols,
+        include_probabilities=True,
     )
-    input_ids = tokenized["input_ids"]
-    attention_mask = tokenized["attention_mask"]
 
-    mask_token_id = getattr(tokenizer, "mask_token_id", 4)
+    if "label_id" not in segment_prediction_table.columns:
+        raise ValueError(
+            "Labels are required for segment-level evaluation. Provide them via "
+            "`predictions.label_ids`, the `label_ids` argument, or `segment_dataset`."
+        )
 
-    batch_size = len(input_ids)
-    seq_len = len(input_ids[0])
+    logits_np = segment_prediction_table[
+        [column for column in segment_prediction_table.columns if column.startswith("logit_class_")]
+    ].to_numpy(dtype=np.float64, copy=False)
+    label_ids_np = segment_prediction_table["label_id"].to_numpy(dtype=np.int64, copy=False)
 
-    labels = [[-100] * seq_len for _ in range(batch_size)]
+    metrics = compute_classification_metrics(logits_np, label_ids_np)
+    return segment_prediction_table, metrics
 
-    for i, pos_list in enumerate(sample["pos2mask"]):
 
-        positions = pos_list if isinstance(pos_list, (list, tuple)) else [pos_list]
+def _validate_aggregation_method(aggregation_method: str) -> str:
+    """Validate the sequence aggregation method."""
+    if aggregation_method not in _ALLOWED_SEQUENCE_AGGREGATION_METHODS:
+        allowed = ", ".join(sorted(_ALLOWED_SEQUENCE_AGGREGATION_METHODS))
+        raise ValueError(
+            f"Unsupported aggregation_method={aggregation_method!r}. "
+            f"Supported values: {allowed}."
+        )
+    return aggregation_method
 
-        for pos in positions:
-            pos = get_token_position(pos, tokenizer, max_length, shift=0)
 
-            to_mask = range(pos - mask_to_left, pos + mask_to_right + 1)
-            for mp in to_mask:
-                if 0 <= mp < seq_len:
-                    labels[i][mp] = input_ids[i][mp]
-                    input_ids[i][mp] = mask_token_id
+def _get_class_columns(frame: pd.DataFrame, prefix: str) -> list[str]:
+    """Return sorted class columns with names like `{prefix}{i}`."""
+    indexed_columns: list[tuple[int, str]] = []
 
-    return {
-        "input_ids": input_ids,
-        "attention_mask": attention_mask,
-        "labels": labels,
+    for column_name in frame.columns:
+        if not column_name.startswith(prefix):
+            continue
+        suffix = column_name[len(prefix) :]
+        if suffix.isdigit():
+            indexed_columns.append((int(suffix), column_name))
+
+    indexed_columns.sort(key=lambda item: item[0])
+    return [column_name for _, column_name in indexed_columns]
+
+
+def _factorize_sequence_ids(sequence_ids: Any) -> Tuple[np.ndarray, np.ndarray]:
+    """Factorize sequence ids while preserving first-seen order."""
+    codes, unique_values = pd.factorize(sequence_ids, sort=False)
+
+    if np.any(codes < 0):
+        raise ValueError("sequence_id contains missing values, which are not supported.")
+
+    return codes.astype(np.int64, copy=False), np.asarray(unique_values)
+
+
+def _group_counts(codes: np.ndarray, num_groups: int) -> np.ndarray:
+    """Count the number of rows in each group."""
+    return np.bincount(codes, minlength=num_groups).astype(np.int64, copy=False)
+
+
+def _group_mean(
+    values: np.ndarray,
+    codes: np.ndarray,
+    num_groups: int,
+    *,
+    weights: Optional[np.ndarray] = None,
+) -> np.ndarray:
+    """Compute a grouped mean for a 2D array.
+
+    This implementation is optimized for a relatively small number of classes and
+    a large number of rows. It loops over the class axis and uses `np.bincount`
+    for the group reduction.
+    """
+    num_classes = values.shape[1]
+    out = np.empty((num_groups, num_classes), dtype=np.float64)
+
+    if weights is None:
+        denom = np.bincount(codes, minlength=num_groups).astype(np.float64)
+        for class_idx in range(num_classes):
+            out[:, class_idx] = (
+                np.bincount(codes, weights=values[:, class_idx], minlength=num_groups) / denom
+            )
+        return out
+
+    denom = np.bincount(codes, weights=weights, minlength=num_groups).astype(np.float64)
+    if np.any(denom <= 0.0):
+        raise ValueError("All sequence weights must sum to a positive value.")
+
+    for class_idx in range(num_classes):
+        out[:, class_idx] = (
+            np.bincount(
+                codes,
+                weights=values[:, class_idx] * weights,
+                minlength=num_groups,
+            )
+            / denom
+        )
+
+    return out
+
+
+def _group_first_and_validate_constant(
+    values: np.ndarray,
+    codes: np.ndarray,
+    num_groups: int,
+    *,
+    value_name: str,
+) -> np.ndarray:
+    """Return the first value per group and validate that all values in a group match."""
+    if values.shape[0] != codes.shape[0]:
+        raise ValueError(f"{value_name} length does not match the number of rows.")
+
+    order = np.argsort(codes, kind="stable")
+    codes_sorted = codes[order]
+    values_sorted = values[order]
+
+    starts = np.flatnonzero(np.r_[True, codes_sorted[1:] != codes_sorted[:-1]])
+    mins = np.minimum.reduceat(values_sorted, starts)
+    maxs = np.maximum.reduceat(values_sorted, starts)
+
+    inconsistent_mask = mins != maxs
+    if np.any(inconsistent_mask):
+        bad_positions = np.flatnonzero(inconsistent_mask)[:10]
+        raise ValueError(
+            f"Each sequence must have exactly one {value_name} value. "
+            f"Found conflicting values for {bad_positions.size} sequence(s); "
+            f"first failing group index examples: {bad_positions.tolist()}"
+        )
+
+    if starts.shape[0] != num_groups:
+        raise ValueError("Internal grouping error: number of groups does not match the starts array.")
+
+    return values_sorted[starts]
+
+
+def _group_topk_mean(
+    values: np.ndarray,
+    codes: np.ndarray,
+    num_groups: int,
+    *,
+    top_k: int,
+) -> np.ndarray:
+    """Compute the mean of the top-k values within each group for each class."""
+    if top_k < 1:
+        raise ValueError(f"top_k must be >= 1, received top_k={top_k}.")
+
+    order = np.argsort(codes, kind="stable")
+    codes_sorted = codes[order]
+    values_sorted = values[order]
+
+    starts = np.flatnonzero(np.r_[True, codes_sorted[1:] != codes_sorted[:-1]])
+    ends = np.r_[starts[1:], len(codes_sorted)]
+
+    if starts.shape[0] != num_groups:
+        raise ValueError("Internal grouping error: number of groups does not match the starts array.")
+
+    out = np.empty((num_groups, values.shape[1]), dtype=np.float64)
+
+    for group_idx, (start, end) in enumerate(zip(starts, ends)):
+        block = values_sorted[start:end]
+        k = min(top_k, end - start)
+
+        if k == block.shape[0]:
+            out[group_idx] = block.mean(axis=0)
+            continue
+
+        partitioned = np.partition(block, kth=block.shape[0] - k, axis=0)
+        out[group_idx] = partitioned[-k:].mean(axis=0)
+
+    return out
+
+
+def _aggregate_sequence_probabilities_from_arrays(
+    sequence_ids: Any,
+    *,
+    logits: Optional[np.ndarray] = None,
+    probabilities: Optional[np.ndarray] = None,
+    label_ids: Optional[np.ndarray] = None,
+    aggregation_method: str,
+    weights: Optional[np.ndarray] = None,
+    top_k: Optional[int] = None,
+) -> Dict[str, np.ndarray]:
+    """Aggregate segment predictions into sequence-level probabilities.
+
+    This is the fast internal path used by the public sequence-level helpers.
+    """
+    aggregation_method = _validate_aggregation_method(aggregation_method)
+
+    if logits is None and probabilities is None:
+        raise ValueError("At least one of `logits` or `probabilities` is required.")
+
+    if logits is not None:
+        logits = _as_2d_logits_array(logits)
+        num_rows = logits.shape[0]
+        num_classes = logits.shape[1]
+    else:
+        probabilities = _normalize_probabilities(probabilities)
+        num_rows = probabilities.shape[0]
+        num_classes = probabilities.shape[1]
+
+    if probabilities is not None and probabilities.shape != (num_rows, num_classes):
+        raise ValueError("Probabilities shape does not match logits shape.")
+
+    sequence_ids_np = _to_numpy(sequence_ids)
+    if sequence_ids_np.shape[0] != num_rows:
+        raise ValueError(
+            "The number of sequence ids and prediction rows does not match: "
+            f"{sequence_ids_np.shape[0]} != {num_rows}."
+        )
+
+    codes, unique_sequence_ids = _factorize_sequence_ids(sequence_ids_np)
+    num_groups = unique_sequence_ids.shape[0]
+    segment_counts = _group_counts(codes, num_groups)
+
+    if label_ids is not None:
+        label_ids = _as_1d_label_array(label_ids)
+        if label_ids.shape[0] != num_rows:
+            raise ValueError(
+                "The number of label_ids and prediction rows does not match: "
+                f"{label_ids.shape[0]} != {num_rows}."
+            )
+        _validate_label_ids(label_ids, num_classes)
+        sequence_label_ids = _group_first_and_validate_constant(
+            label_ids,
+            codes,
+            num_groups,
+            value_name="label_id",
+        ).astype(np.int64, copy=False)
+    else:
+        sequence_label_ids = None
+
+    if weights is not None:
+        weights = _to_numpy(weights).reshape(-1)
+        if weights.shape[0] != num_rows:
+            raise ValueError(
+                "The number of weights and prediction rows does not match: "
+                f"{weights.shape[0]} != {num_rows}."
+            )
+        if not np.all(np.isfinite(weights)):
+            raise ValueError("Weights contain non-finite values.")
+        if np.any(weights < 0.0):
+            raise ValueError("Weights must be non-negative.")
+
+    # Prepare the score matrix required by the selected method.
+    if aggregation_method == "mean_logits":
+        if logits is None:
+            raise ValueError("mean_logits aggregation requires logits.")
+        sequence_probabilities = _softmax(_group_mean(logits, codes, num_groups))
+
+    elif aggregation_method == "mean_probabilities":
+        if probabilities is None:
+            if logits is None:
+                raise ValueError("mean_probabilities aggregation requires logits or probabilities.")
+            probabilities = _softmax(logits)
+        sequence_probabilities = _group_mean(probabilities, codes, num_groups)
+        sequence_probabilities = _normalize_probabilities(sequence_probabilities)
+
+    elif aggregation_method == "mean_log_probabilities":
+        if logits is None:
+            raise ValueError("mean_log_probabilities aggregation requires logits.")
+        log_probabilities = _log_softmax(logits)
+        sequence_probabilities = _softmax(_group_mean(log_probabilities, codes, num_groups))
+
+    elif aggregation_method == "weighted_mean_log_probabilities":
+        if logits is None:
+            raise ValueError("weighted_mean_log_probabilities aggregation requires logits.")
+        if weights is None:
+            raise ValueError("weighted_mean_log_probabilities aggregation requires `weights`.")
+        log_probabilities = _log_softmax(logits)
+        sequence_probabilities = _softmax(
+            _group_mean(log_probabilities, codes, num_groups, weights=weights)
+        )
+
+    elif aggregation_method == "topk_mean_logits":
+        if logits is None:
+            raise ValueError("topk_mean_logits aggregation requires logits.")
+        if top_k is None:
+            raise ValueError("topk_mean_logits aggregation requires `top_k`.")
+        sequence_probabilities = _softmax(
+            _group_topk_mean(logits, codes, num_groups, top_k=top_k)
+        )
+
+    elif aggregation_method == "topk_mean_probabilities":
+        if top_k is None:
+            raise ValueError("topk_mean_probabilities aggregation requires `top_k`.")
+        if probabilities is None:
+            if logits is None:
+                raise ValueError("topk_mean_probabilities aggregation requires logits or probabilities.")
+            probabilities = _softmax(logits)
+        sequence_probabilities = _group_topk_mean(probabilities, codes, num_groups, top_k=top_k)
+        sequence_probabilities = _normalize_probabilities(sequence_probabilities)
+
+    elif aggregation_method == "topk_mean_log_probabilities":
+        if logits is None:
+            raise ValueError("topk_mean_log_probabilities aggregation requires logits.")
+        if top_k is None:
+            raise ValueError("topk_mean_log_probabilities aggregation requires `top_k`.")
+        log_probabilities = _log_softmax(logits)
+        sequence_probabilities = _softmax(
+            _group_topk_mean(log_probabilities, codes, num_groups, top_k=top_k)
+        )
+
+    else:
+        raise RuntimeError(f"Unhandled aggregation_method={aggregation_method!r}.")
+
+    predicted_label_ids = np.argmax(sequence_probabilities, axis=1).astype(np.int64, copy=False)
+
+    result: Dict[str, np.ndarray] = {
+        "sequence_id": unique_sequence_ids,
+        "segment_count": segment_counts,
+        "predicted_label_id": predicted_label_ids,
+        "sequence_probabilities": sequence_probabilities,
     }
 
+    if sequence_label_ids is not None:
+        result["label_id"] = sequence_label_ids
+
+    return result
 
 
+def aggregate_sequence_classification_prediction_table(
+    segment_prediction_table: pd.DataFrame,
+    *,
+    sequence_id_col: str = "sequence_id",
+    aggregation_method: str = "mean_logits",
+    weight_col: Optional[str] = None,
+    top_k: Optional[int] = None,
+) -> pd.DataFrame:
+    """Aggregate a segment-level prediction table to sequence level.
 
-def pretraining_masking_tokenize_test_masking_db(tokenizer, ds,
-                                                 max_token_length,
-                                                 mask_to_left=3,
-                                                 mask_to_right=3 ):
+    Expected segment-level columns
+    ------------------------------
+    Required
+        - `sequence_id`
+        - either `logit_class_{i}` columns or `prob_class_{i}` columns,
+          depending on `aggregation_method`
 
+    Optional
+        - `label_id`
+        - `weight_col`, for `weighted_mean_log_probabilities`
 
-    print('Tokenizing the dataset: ')
-    cols_to_remove = []
-    cols_to_remove = [c for c in ds.column_names if c != "sample_id"]
+    Notes
+    -----
+    This function is meant for post-hoc aggregation of externally constructed
+    segment prediction tables. For predictions coming directly from
+    `trainer.predict(...)`, use `build_sequence_classification_prediction_table`,
+    which avoids building a large intermediate segment table.
+    """
+    aggregation_method = _validate_aggregation_method(aggregation_method)
 
-    ds2 = ds.map(
-        lambda sample: pretraining_masking_preprocess_function(sample, tokenizer, max_token_length, mask_to_left, mask_to_right),
-        batched=True,
-        num_proc=8,
-        remove_columns=cols_to_remove,
+    if not isinstance(segment_prediction_table, pd.DataFrame):
+        raise TypeError("segment_prediction_table must be a pandas DataFrame.")
+
+    if sequence_id_col not in segment_prediction_table.columns:
+        raise ValueError(
+            f"{sequence_id_col!r} is required for sequence aggregation, but it is missing."
+        )
+
+    logit_columns = _get_class_columns(segment_prediction_table, "logit_class_")
+    prob_columns = _get_class_columns(segment_prediction_table, "prob_class_")
+
+    logits_np = None
+    probabilities_np = None
+
+    if logit_columns:
+        logits_np = segment_prediction_table[logit_columns].to_numpy(dtype=np.float64, copy=False)
+
+    if prob_columns:
+        probabilities_np = segment_prediction_table[prob_columns].to_numpy(dtype=np.float64, copy=False)
+
+    if aggregation_method in {
+        "mean_logits",
+        "mean_log_probabilities",
+        "weighted_mean_log_probabilities",
+        "topk_mean_logits",
+        "topk_mean_log_probabilities",
+    } and logits_np is None:
+        raise ValueError(
+            f"{aggregation_method} aggregation requires columns named 'logit_class_{{i}}'."
+        )
+
+    if aggregation_method in {
+        "mean_probabilities",
+        "topk_mean_probabilities",
+    } and logits_np is None and probabilities_np is None:
+        raise ValueError(
+            f"{aggregation_method} aggregation requires either 'prob_class_{{i}}' "
+            "or 'logit_class_{i}' columns."
+        )
+
+    label_ids_np = None
+    if "label_id" in segment_prediction_table.columns:
+        label_ids_np = segment_prediction_table["label_id"].to_numpy(dtype=np.int64, copy=False)
+
+    weights_np = None
+    if aggregation_method == "weighted_mean_log_probabilities":
+        if weight_col is None:
+            raise ValueError("weighted_mean_log_probabilities aggregation requires `weight_col`.")
+        if weight_col not in segment_prediction_table.columns:
+            raise ValueError(f"{weight_col!r} is missing from segment_prediction_table.")
+        weights_np = _to_numpy(segment_prediction_table[weight_col].to_numpy()).reshape(-1)
+
+    aggregated = _aggregate_sequence_probabilities_from_arrays(
+        segment_prediction_table[sequence_id_col].to_numpy(),
+        logits=logits_np,
+        probabilities=probabilities_np,
+        label_ids=label_ids_np,
+        aggregation_method=aggregation_method,
+        weights=weights_np,
+        top_k=top_k,
     )
-    return ds2
+
+    sequence_prediction_table = {
+        sequence_id_col: aggregated["sequence_id"],
+        "segment_count": aggregated["segment_count"],
+    }
+
+    if "label_id" in aggregated:
+        sequence_prediction_table["label_id"] = aggregated["label_id"]
+
+    sequence_prediction_table["predicted_label_id"] = aggregated["predicted_label_id"]
+
+    for class_idx in range(aggregated["sequence_probabilities"].shape[1]):
+        sequence_prediction_table[f"prob_class_{class_idx}"] = aggregated["sequence_probabilities"][
+            :, class_idx
+        ]
+
+    return pd.DataFrame(sequence_prediction_table)
 
 
-def truncate_sequences_segment_database(samples: Dict,
-                       min_length: int,
-                       max_length: int,
-                       random_seed: int | None = None,
-                       truncate_probability: float = 0.2):
+def build_sequence_classification_prediction_table(
+    predictions: Any,
+    segment_dataset: Any,
+    label_ids: Optional[Any] = None,
+    *,
+    sequence_id_col: str = "sequence_id",
+    label_col: str = "labels",
+    aggregation_method: str = "mean_logits",
+    weight_col: Optional[str] = None,
+    top_k: Optional[int] = None,
+) -> pd.DataFrame:
+    """Build a sequence-level prediction table from Trainer-style predictions.
 
-    rng = default_rng(random_seed)
-    truncated_segments = []
-    for segment in samples['segment']:
-        if truncate_probability > rng.uniform(0,1):
-            trunc_len = min(len(segment), rng.integers(min_length, max_length))
-            truncated_segments.append(segment[:trunc_len])
-        else:
-            truncated_segments.append(segment)
+    This is the recommended fast path for `trainer.predict(eval_dataset)` outputs.
+    It aggregates directly from arrays and only builds a pandas DataFrame at the end.
+    """
+    aggregation_method = _validate_aggregation_method(aggregation_method)
 
-    samples["segment"] = truncated_segments
+    dataset_columns = set(_get_dataset_columns(segment_dataset))
+    if sequence_id_col not in dataset_columns:
+        raise ValueError(
+            f"{sequence_id_col!r} is required in segment_dataset for sequence aggregation."
+        )
 
-    return samples
+    logits_np, label_ids_np = _extract_logits_and_label_ids(
+        predictions,
+        label_ids,
+        allow_missing_labels=True,
+    )
+
+    num_segments = logits_np.shape[0]
+
+    if label_ids_np is None:
+        label_ids_np = _maybe_get_dataset_labels(segment_dataset, label_col, num_segments)
+
+    sequence_df = _select_dataset_columns(segment_dataset, [sequence_id_col])
+    if len(sequence_df) != num_segments:
+        raise ValueError(
+            "Prediction row count and segment_dataset row count must match: "
+            f"{num_segments} != {len(sequence_df)}."
+        )
+
+    weights_np = None
+    if aggregation_method == "weighted_mean_log_probabilities":
+        if weight_col is None:
+            raise ValueError("weighted_mean_log_probabilities aggregation requires `weight_col`.")
+        if weight_col not in dataset_columns:
+            raise ValueError(
+                f"{weight_col!r} is required in segment_dataset for weighted aggregation."
+            )
+        weight_df = _select_dataset_columns(segment_dataset, [weight_col])
+        if len(weight_df) != num_segments:
+            raise ValueError(
+                "Prediction row count and segment_dataset row count must match: "
+                f"{num_segments} != {len(weight_df)}."
+            )
+        weights_np = _to_numpy(weight_df[weight_col].to_numpy()).reshape(-1)
+
+    aggregated = _aggregate_sequence_probabilities_from_arrays(
+        sequence_df[sequence_id_col].to_numpy(),
+        logits=logits_np,
+        label_ids=label_ids_np,
+        aggregation_method=aggregation_method,
+        weights=weights_np,
+        top_k=top_k,
+    )
+
+    sequence_prediction_table = {
+        sequence_id_col: aggregated["sequence_id"],
+        "segment_count": aggregated["segment_count"],
+    }
+
+    if "label_id" in aggregated:
+        sequence_prediction_table["label_id"] = aggregated["label_id"]
+
+    sequence_prediction_table["predicted_label_id"] = aggregated["predicted_label_id"]
+
+    for class_idx in range(aggregated["sequence_probabilities"].shape[1]):
+        sequence_prediction_table[f"prob_class_{class_idx}"] = aggregated["sequence_probabilities"][
+            :, class_idx
+        ]
+
+    return pd.DataFrame(sequence_prediction_table)
 
 
+def evaluate_sequence_classification_predictions(
+    predictions: Any,
+    segment_dataset: Any,
+    label_ids: Optional[Any] = None,
+    *,
+    sequence_id_col: str = "sequence_id",
+    label_col: str = "labels",
+    aggregation_method: str = "mean_logits",
+    weight_col: Optional[str] = None,
+    top_k: Optional[int] = 5,
+) -> Tuple[pd.DataFrame, Dict[str, float]]:
+    """Evaluate sequence-level single-label classification predictions.
+
+    Returns
+    -------
+    tuple[pandas.DataFrame, dict[str, float]]
+        `sequence_prediction_table, metrics`
+    """
+    sequence_prediction_table = build_sequence_classification_prediction_table(
+        predictions=predictions,
+        segment_dataset=segment_dataset,
+        label_ids=label_ids,
+        sequence_id_col=sequence_id_col,
+        label_col=label_col,
+        aggregation_method=aggregation_method,
+        weight_col=weight_col,
+        top_k=top_k,
+    )
+
+    if "label_id" not in sequence_prediction_table.columns:
+        raise ValueError(
+            "Labels are required for sequence-level evaluation. Provide them via "
+            "`predictions.label_ids`, the `label_ids` argument, or `segment_dataset`."
+        )
+
+    probabilities_np = sequence_prediction_table[
+        _get_class_columns(sequence_prediction_table, "prob_class_")
+    ].to_numpy(dtype=np.float64, copy=False)
+    label_ids_np = sequence_prediction_table["label_id"].to_numpy(dtype=np.int64, copy=False)
+
+    metrics = compute_classification_metrics_from_probabilities(probabilities_np, label_ids_np)
+    return sequence_prediction_table, metrics
+
+
+def build_sequence_classification_compute_metrics(
+    segment_dataset: Any,
+    *,
+    sequence_id_col: str = "sequence_id",
+    label_col: str = "labels",
+    aggregation_method: str = "mean_logits",
+    weight_col: Optional[str] = None,
+    top_k: Optional[int] = None,
+) -> Callable[[Any], Dict[str, float]]:
+    """Build a Trainer-compatible `compute_metrics` for sequence-level evaluation.
+
+    Notes
+    -----
+    - Pass the same dataset to this builder that you use in `trainer.evaluate(...)`
+      or `trainer.predict(...)`.
+    - `sequence_id` must be present in that dataset.
+    """
+    _validate_aggregation_method(aggregation_method)
+
+    def compute_metrics_fn(
+        eval_prediction: Any,
+        compute_result: bool = True,
+    ) -> Dict[str, float]:
+        if not compute_result:
+            return {}
+
+        _, metrics = evaluate_sequence_classification_predictions(
+            predictions=eval_prediction,
+            segment_dataset=segment_dataset,
+            sequence_id_col=sequence_id_col,
+            label_col=label_col,
+            aggregation_method=aggregation_method,
+            weight_col=weight_col,
+            top_k=top_k,
+        )
+        return metrics
+
+    return compute_metrics_fn
+
+
+def compute_metrics(
+    eval_prediction: Any,
+    compute_result: bool = True,
+) -> Dict[str, float]:
+    """Trainer-compatible metrics function for segment-level classification."""
+    if not compute_result:
+        return {}
+
+    _, metrics = evaluate_segment_classification_predictions(eval_prediction)
+    return metrics
+
+
+def preprocess_logits_for_metrics(logits: Any, labels: Any) -> Any:
+    """Keep only the logits before Hugging Face caches predictions for metrics."""
+    del labels
+
+    while isinstance(logits, (tuple, list)):
+        if len(logits) == 0:
+            raise ValueError("Received an empty logits tuple/list.")
+        logits = logits[0]
+
+    return logits
