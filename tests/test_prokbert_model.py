@@ -7,7 +7,7 @@ from transformers.testing_utils import (
     torch_device,
 )
 
-from src.prokbert.models import (
+from src.prokbert.models.modernbert import (
     ProkBertConfig,
     ProkBertModel,
     ProkBertForMaskedLM,
