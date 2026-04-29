@@ -6,6 +6,10 @@ current Hugging Face Trainer evaluation flow.
 
 Public API
 ----------
+Table-first / external models
+    - compute_classification_metrics_from_predictions
+    - evaluate_classification_prediction_table
+
 Segment level
     - build_segment_classification_prediction_table
     - evaluate_segment_classification_predictions
@@ -24,6 +28,8 @@ Design notes
 ------------
 - Single-label classification only.
 - Binary and multiclass classification are supported.
+- Table-first evaluation supports externally generated predictions, including
+  non-Transformer models that already provide `predicted_label_id`.
 - Sequence aggregation requires `sequence_id` in the original segment dataset.
 - The public `evaluate_*` functions return `(prediction_table, metrics)`.
 - The public `compute_metrics` functions return metrics only, as expected by
@@ -55,8 +61,10 @@ __all__ = [
     "build_sequence_classification_compute_metrics",
     "build_sequence_classification_prediction_table",
     "compute_classification_metrics",
+    "compute_classification_metrics_from_predictions",
     "compute_classification_metrics_from_probabilities",
     "compute_metrics",
+    "evaluate_classification_prediction_table",
     "evaluate_segment_classification_predictions",
     "evaluate_sequence_classification_predictions",
     "preprocess_logits_for_metrics",
@@ -269,28 +277,117 @@ def _per_class_auc(label_ids: np.ndarray, probabilities: np.ndarray) -> Dict[str
     return auc_results
 
 
-def compute_classification_metrics_from_probabilities(
-    probabilities: Any,
+def _validate_predicted_label_ids(predicted_label_ids: np.ndarray, num_classes: int) -> None:
+    """Validate predicted integer class ids for single-label classification."""
+    _validate_label_ids(predicted_label_ids, num_classes)
+
+
+def _infer_num_classes(
+    label_ids: np.ndarray,
+    predicted_label_ids: np.ndarray,
+    probabilities: Optional[np.ndarray] = None,
+    *,
+    num_classes: Optional[int] = None,
+) -> int:
+    """Infer the number of classes from explicit input or observed arrays."""
+    if probabilities is not None:
+        inferred_num_classes = int(probabilities.shape[1])
+    elif num_classes is not None:
+        inferred_num_classes = int(num_classes)
+    else:
+        inferred_num_classes = int(
+            max(
+                label_ids.max(initial=0),
+                predicted_label_ids.max(initial=0),
+            )
+        ) + 1
+
+    if num_classes is not None and int(num_classes) != inferred_num_classes:
+        raise ValueError(
+            "num_classes does not match the provided probability matrix: "
+            f"{int(num_classes)} != {inferred_num_classes}."
+        )
+
+    if inferred_num_classes < 2:
+        raise ValueError(
+            "Classification evaluation requires at least 2 classes. "
+            f"Received num_classes={inferred_num_classes}."
+        )
+
+    return inferred_num_classes
+
+
+def compute_classification_metrics_from_predictions(
+    predicted_label_ids: Any,
     label_ids: Any,
+    probabilities: Optional[Any] = None,
+    *,
+    num_classes: Optional[int] = None,
 ) -> Dict[str, float]:
-    """Compute single-label classification metrics from probabilities."""
-    probabilities_np = _normalize_probabilities(probabilities)
+    """Compute single-label classification metrics from class predictions.
+
+    Parameters
+    ----------
+    predicted_label_ids
+        Predicted single-label class ids. These are used for all discrete
+        metrics such as accuracy, balanced accuracy, F1, MCC, recall, and
+        precision.
+    label_ids
+        Ground-truth single-label class ids.
+    probabilities
+        Optional class probabilities or non-negative class scores with shape
+        `(n_samples, n_classes)`. When provided, they are used for probability-
+        dependent metrics (`CE_loss` and per-class AUROC). The predicted labels
+        are *not* recomputed from these probabilities; this keeps externally
+        supplied `predicted_label_id` values intact.
+    num_classes
+        Optional explicit class count. This is only needed when probabilities
+        are not provided and the observed labels do not span all classes.
+
+    Notes
+    -----
+    - When `probabilities` is omitted, `CE_loss` and per-class AUROC values are
+      returned as `NaN`.
+    - This function is intended for table-first evaluation and external models
+      that already provide `predicted_label_id`.
+    """
     label_ids_np = _as_1d_label_array(label_ids)
-    _validate_label_ids(label_ids_np, probabilities_np.shape[1])
+    predicted_label_ids_np = _as_1d_label_array(predicted_label_ids)
 
-    predicted_label_ids = np.argmax(probabilities_np, axis=1)
+    if label_ids_np.shape[0] == 0:
+        raise ValueError("At least one row is required for evaluation.")
 
-    epsilon = np.finfo(np.float64).eps
-    true_class_probabilities = probabilities_np[np.arange(label_ids_np.shape[0]), label_ids_np]
-    cross_entropy_loss = float(-np.mean(np.log(np.clip(true_class_probabilities, epsilon, 1.0))))
+    if label_ids_np.shape[0] != predicted_label_ids_np.shape[0]:
+        raise ValueError(
+            "The number of label_ids and predicted_label_ids does not match: "
+            f"{label_ids_np.shape[0]} != {predicted_label_ids_np.shape[0]}."
+        )
 
-    is_binary = probabilities_np.shape[1] == 2
+    probabilities_np = None
+    if probabilities is not None:
+        probabilities_np = _normalize_probabilities(probabilities)
+        if probabilities_np.shape[0] != label_ids_np.shape[0]:
+            raise ValueError(
+                "The number of probability rows and label_ids does not match: "
+                f"{probabilities_np.shape[0]} != {label_ids_np.shape[0]}."
+            )
+
+    num_classes_np = _infer_num_classes(
+        label_ids_np,
+        predicted_label_ids_np,
+        probabilities_np,
+        num_classes=num_classes,
+    )
+    _validate_label_ids(label_ids_np, num_classes_np)
+    _validate_predicted_label_ids(predicted_label_ids_np, num_classes_np)
+
+    is_binary = num_classes_np == 2
     average = "binary" if is_binary else "macro"
 
     recall = float(
         recall_score(
             label_ids_np,
-            predicted_label_ids,
+            predicted_label_ids_np,
             average=average,
             zero_division=0,
         )
@@ -298,36 +395,66 @@ def compute_classification_metrics_from_probabilities(
     precision = float(
         precision_score(
             label_ids_np,
-            predicted_label_ids,
+            predicted_label_ids_np,
             average=average,
             zero_division=0,
         )
     )
 
+    if probabilities_np is None:
+        cross_entropy_loss = float("nan")
+    else:
+        epsilon = np.finfo(np.float64).eps
+        true_class_probabilities = probabilities_np[np.arange(label_ids_np.shape[0]), label_ids_np]
+        cross_entropy_loss = float(
+            -np.mean(np.log(np.clip(true_class_probabilities, epsilon, 1.0)))
+        )
+
     metrics: Dict[str, float] = {
         "CE_loss": cross_entropy_loss,
-        "acc": float(accuracy_score(label_ids_np, predicted_label_ids)),
-        "bal_acc": float(balanced_accuracy_score(label_ids_np, predicted_label_ids)),
+        "acc": float(accuracy_score(label_ids_np, predicted_label_ids_np)),
+        "bal_acc": float(balanced_accuracy_score(label_ids_np, predicted_label_ids_np)),
         "f1": float(
             f1_score(
                 label_ids_np,
-                predicted_label_ids,
+                predicted_label_ids_np,
                 average=average,
                 zero_division=0,
             )
         ),
-        "mcc": float(matthews_corrcoef(label_ids_np, predicted_label_ids)),
+        "mcc": float(matthews_corrcoef(label_ids_np, predicted_label_ids_np)),
         "recall": recall,
         "sensitivity": recall,
         "precision": precision,
     }
 
-    metrics.update(_per_class_auc(label_ids_np, probabilities_np))
+    if probabilities_np is not None:
+        metrics.update(_per_class_auc(label_ids_np, probabilities_np))
+    else:
+        for class_idx in range(num_classes_np):
+            metrics[f"auc_class{class_idx}"] = float("nan")
 
     if is_binary:
-        metrics.update(_binary_confusion_metrics(label_ids_np, predicted_label_ids))
+        metrics.update(_binary_confusion_metrics(label_ids_np, predicted_label_ids_np))
 
     return metrics
+
+
+def compute_classification_metrics_from_probabilities(
+    probabilities: Any,
+    label_ids: Any,
+) -> Dict[str, float]:
+    """Compute single-label classification metrics from probabilities."""
+    probabilities_np = _normalize_probabilities(probabilities)
+    label_ids_np = _as_1d_label_array(label_ids)
+    predicted_label_ids = np.argmax(probabilities_np, axis=1).astype(np.int64, copy=False)
+
+    return compute_classification_metrics_from_predictions(
+        predicted_label_ids=predicted_label_ids,
+        label_ids=label_ids_np,
+        probabilities=probabilities_np,
+        num_classes=probabilities_np.shape[1],
+    )
 
 
 def compute_classification_metrics(
@@ -463,6 +590,89 @@ def build_segment_classification_prediction_table(
     return pd.DataFrame(columns)
 
 
+def evaluate_classification_prediction_table(
+    prediction_table: pd.DataFrame,
+    *,
+    label_col: str = "label_id",
+    predicted_label_col: str = "predicted_label_id",
+    probability_col_prefix: str = "prob_class_",
+    use_probability_metrics: bool = True,
+    num_classes: Optional[int] = None,
+) -> Tuple[pd.DataFrame, Dict[str, float]]:
+    """Evaluate a precomputed classification prediction table.
+
+    This is the table-first entry point for externally generated predictions and
+    non-Transformer models. The table may already be segment-level or
+    sequence-level.
+
+    Required columns
+    ----------------
+    - `label_col`
+    - either `predicted_label_col`, probability columns named
+      `f"{probability_col_prefix}{i}"`, or both
+
+    Notes
+    -----
+    - When `predicted_label_col` is present, it is used as-is for all discrete
+      metrics; predictions are not recomputed from the probability columns.
+    - When `use_probability_metrics=False`, probability columns are ignored even
+      if they are present. In that case `CE_loss` and AUROC metrics are
+      returned as `NaN`.
+    """
+    if not isinstance(prediction_table, pd.DataFrame):
+        raise TypeError("prediction_table must be a pandas DataFrame.")
+
+    if label_col not in prediction_table.columns:
+        raise ValueError(f"{label_col!r} is required in prediction_table.")
+
+    evaluation_table = prediction_table.reset_index(drop=True).copy()
+    label_ids_np = _as_1d_label_array(evaluation_table[label_col].to_numpy())
+
+    predicted_label_ids_np: Optional[np.ndarray]
+    if predicted_label_col in evaluation_table.columns:
+        predicted_label_ids_np = _as_1d_label_array(
+            evaluation_table[predicted_label_col].to_numpy()
+        )
+    else:
+        predicted_label_ids_np = None
+
+    num_classes_hint = num_classes
+    if predicted_label_ids_np is not None and num_classes_hint is None:
+        num_classes_hint = int(
+            max(
+                label_ids_np.max(initial=0),
+                predicted_label_ids_np.max(initial=0),
+            )
+        ) + 1
+
+    probabilities_np = None
+    if use_probability_metrics:
+        probabilities_np = _extract_probability_matrix_from_prediction_table(
+            evaluation_table,
+            probability_col_prefix=probability_col_prefix,
+            num_classes=num_classes_hint,
+        )
+        if probabilities_np is not None and num_classes_hint is None:
+            num_classes_hint = int(probabilities_np.shape[1])
+
+    if predicted_label_ids_np is None:
+        if probabilities_np is None:
+            raise ValueError(
+                f"{predicted_label_col!r} is required when probability columns are absent "
+                "or when use_probability_metrics=False."
+            )
+        predicted_label_ids_np = np.argmax(probabilities_np, axis=1).astype(np.int64, copy=False)
+        evaluation_table[predicted_label_col] = predicted_label_ids_np
+
+    metrics = compute_classification_metrics_from_predictions(
+        predicted_label_ids=predicted_label_ids_np,
+        label_ids=label_ids_np,
+        probabilities=probabilities_np,
+        num_classes=num_classes_hint,
+    )
+    return evaluation_table, metrics
+
+
 def evaluate_segment_classification_predictions(
     predictions: Any,
     segment_dataset: Optional[Any] = None,
@@ -491,13 +701,7 @@ def evaluate_segment_classification_predictions(
             "`predictions.label_ids`, the `label_ids` argument, or `segment_dataset`."
         )
 
-    logits_np = segment_prediction_table[
-        [column for column in segment_prediction_table.columns if column.startswith("logit_class_")]
-    ].to_numpy(dtype=np.float64, copy=False)
-    label_ids_np = segment_prediction_table["label_id"].to_numpy(dtype=np.int64, copy=False)
-
-    metrics = compute_classification_metrics(logits_np, label_ids_np)
-    return segment_prediction_table, metrics
+    return evaluate_classification_prediction_table(segment_prediction_table)
 
 
 def _validate_aggregation_method(aggregation_method: str) -> str:
@@ -511,8 +715,8 @@ def _validate_aggregation_method(aggregation_method: str) -> str:
     return aggregation_method
 
 
-def _get_class_columns(frame: pd.DataFrame, prefix: str) -> list[str]:
-    """Return sorted class columns with names like `{prefix}{i}`."""
+def _get_indexed_class_columns(frame: pd.DataFrame, prefix: str) -> list[tuple[int, str]]:
+    """Return sorted `(class_index, column_name)` pairs for class score columns."""
     indexed_columns: list[tuple[int, str]] = []
 
     for column_name in frame.columns:
@@ -523,7 +727,70 @@ def _get_class_columns(frame: pd.DataFrame, prefix: str) -> list[str]:
             indexed_columns.append((int(suffix), column_name))
 
     indexed_columns.sort(key=lambda item: item[0])
-    return [column_name for _, column_name in indexed_columns]
+    return indexed_columns
+
+
+def _get_class_columns(frame: pd.DataFrame, prefix: str) -> list[str]:
+    """Return sorted class columns with names like `{prefix}{i}`."""
+    return [column_name for _, column_name in _get_indexed_class_columns(frame, prefix)]
+
+
+def _extract_probability_matrix_from_prediction_table(
+    prediction_table: pd.DataFrame,
+    *,
+    probability_col_prefix: str,
+    num_classes: Optional[int] = None,
+) -> Optional[np.ndarray]:
+    """Extract probability columns from a prediction table.
+
+    Supported layouts
+    -----------------
+    - `prob_class_0`, `prob_class_1`, ..., `prob_class_{n-1}`
+    - binary-only shorthand with a single `prob_class_1` or `prob_class_0`
+      column, which is expanded to two columns by complementing to one
+    """
+    indexed_prob_columns = _get_indexed_class_columns(prediction_table, probability_col_prefix)
+    if not indexed_prob_columns:
+        return None
+
+    class_indices = [class_idx for class_idx, _ in indexed_prob_columns]
+
+    if class_indices == [1] and (num_classes is None or num_classes == 2):
+        positive_probabilities = prediction_table[indexed_prob_columns[0][1]].to_numpy(
+            dtype=np.float64,
+            copy=False,
+        )
+        if not np.all(np.isfinite(positive_probabilities)):
+            raise ValueError("Probability columns contain non-finite values.")
+        if np.any((positive_probabilities < 0.0) | (positive_probabilities > 1.0)):
+            raise ValueError(
+                "A single `prob_class_1` column must contain values in the range [0, 1]."
+            )
+        return np.column_stack([1.0 - positive_probabilities, positive_probabilities])
+
+    if class_indices == [0] and (num_classes is None or num_classes == 2):
+        negative_probabilities = prediction_table[indexed_prob_columns[0][1]].to_numpy(
+            dtype=np.float64,
+            copy=False,
+        )
+        if not np.all(np.isfinite(negative_probabilities)):
+            raise ValueError("Probability columns contain non-finite values.")
+        if np.any((negative_probabilities < 0.0) | (negative_probabilities > 1.0)):
+            raise ValueError(
+                "A single `prob_class_0` column must contain values in the range [0, 1]."
+            )
+        return np.column_stack([negative_probabilities, 1.0 - negative_probabilities])
+
+    expected_indices = list(range(class_indices[-1] + 1))
+    if class_indices != expected_indices:
+        raise ValueError(
+            "Probability columns must be consecutive from class 0. "
+            f"Received class indices {class_indices!r}."
+        )
+
+    return prediction_table[
+        [column_name for _, column_name in indexed_prob_columns]
+    ].to_numpy(dtype=np.float64, copy=False)
 
 
 def _factorize_sequence_ids(sequence_ids: Any) -> Tuple[np.ndarray, np.ndarray]:
@@ -1031,13 +1298,7 @@ def evaluate_sequence_classification_predictions(
             "`predictions.label_ids`, the `label_ids` argument, or `segment_dataset`."
         )
 
-    probabilities_np = sequence_prediction_table[
-        _get_class_columns(sequence_prediction_table, "prob_class_")
-    ].to_numpy(dtype=np.float64, copy=False)
-    label_ids_np = sequence_prediction_table["label_id"].to_numpy(dtype=np.int64, copy=False)
-
-    metrics = compute_classification_metrics_from_probabilities(probabilities_np, label_ids_np)
-    return sequence_prediction_table, metrics
+    return evaluate_classification_prediction_table(sequence_prediction_table)
 
 
 def build_sequence_classification_compute_metrics(
