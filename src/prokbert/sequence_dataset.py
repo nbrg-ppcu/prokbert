@@ -3,13 +3,14 @@ import typing as t
 import os
 import time
 import bisect
+import logging
 
 import torch
 import datasets
 import pandas as pd
 
-from src.prokbert import helper
-from src.prokbert.types import (
+from prokbert import helper
+from prokbert.types import (
     Contig,
     ContigMetaData,
     Orientation,
@@ -17,7 +18,10 @@ from src.prokbert.types import (
     SequenceId,
     SequenceInterval,
 )
-from src.prokbert.constants import RC_TABLE, FORWARD, BACKWARD
+from prokbert.constants import RC_TABLE, FORWARD, BACKWARD
+
+
+logger = logging.getLogger(__name__)
 
 
 class SequenceDataset(object):
@@ -94,7 +98,7 @@ class SequenceDataset(object):
         self.metadata = metadata
         self._starts = [contig["coordinate"][0] for contig in self.metadata]
 
-        print(f"Dataset created in {time.perf_counter() - t0:.2f} seconds.")
+        logging.info(f"Dataset created in {time.perf_counter() - t0:.2f} seconds.")
 
         if save_dir is not None:
             os.makedirs(save_dir, exist_ok=True)
@@ -102,15 +106,15 @@ class SequenceDataset(object):
             helper.save_sequence(self.sequence, save_dir, "sequence.npy")
             helper.save_json(self.metadata, save_dir, "metadata.json")
 
-            print(f"Dataset saved to '{save_dir}'.")
+            logging.info(f"Dataset saved to '{save_dir}'.")
 
-    def load_dataset(self, dir_path: str) -> None:
+    def load_dataset(self, dir_path: str, to_string: bool = False) -> None:
 
-        self.sequence = helper.load_sequence(os.path.join(dir_path, "sequence.npy"))
+        self.sequence = helper.load_sequence(os.path.join(dir_path, "sequence.npy"), to_string=to_string)
         self.metadata = helper.read_json(os.path.join(dir_path, "metadata.json"))
         self._starts = [contig["coordinate"][0] for contig in self.metadata]
 
-        print(f"Dataset loaded from '{dir_path}'.")
+        logging.info(f"Dataset loaded from '{dir_path}'.")
 
     def get_coordinates_from_sequence_id(self, sequence_id: int) -> SequenceInterval:
 
@@ -139,17 +143,19 @@ class SequenceDataset(object):
     ) -> Sequence:
 
         # the (start, end) coordinates are saves as cumulative coordinates in the concatenated sequence (self.sequence)
-        start, _ = self.get_coordinates_from_sequence_id(sequence_id)
-        start_coor, end_coor = start + start_coor, start + end_coor
+        start, end = self.get_coordinates_from_sequence_id(sequence_id)
+        s, e = start + start_coor, start + end_coor
 
         if start_coor >= end_coor:
             raise ValueError(f"Start coordinate {start_coor} must be less than end coordinate {end_coor}.")
-        if start_coor < 0 or end_coor > len(self.sequence):
+        if start_coor < 0 or end_coor > end - start:
             raise ValueError(
                 f"Coordinates {start_coor}-{end_coor} are out of bounds for "
-                f"sequence ID {sequence_id} with sequence length {len(self.sequence)}.")
+                f"sequence ID {sequence_id} with sequence length {end - start}. "
+                f"(The coordinates were mapped to {s}-{e} with full sequence length {len(self.sequence)}.)"
+            )
 
-        seq = self.sequence[start_coor:end_coor]
+        seq = self.sequence[s:e]
         if orientation == FORWARD:
             return seq
         elif orientation == BACKWARD:
@@ -166,21 +172,16 @@ class EmbeddingDataset(object):
         self,
         sequence_dataset: SequenceDataset,
         config_path: str,
-        embedding_file_forward: str,
-        embedding_file_reverse: str | None = None,
+        embedding_file: str,
     ) -> None:
         super().__init__()
 
         self.sequence_dataset = sequence_dataset
         self.config = self.load_config(config_path)
         # tokenized len of self.sequence_dataset.sequence // pooling_length x dim (prokbert-mini-long: 384, mini2-c: 1024)
-        self.embedding_forward = torch.load(
-            embedding_file_forward, map_location="cpu", mmap=True, weights_only=True
+        self.embedding = torch.load(
+            embedding_file, map_location="cpu", mmap=True, weights_only=True
         )
-        if embedding_file_reverse is not None:
-            self.embedding_reverse = torch.load(
-                embedding_file_reverse, map_location="cpu", mmap=True, weights_only=True
-            )
 
     def load_config(self, config_path: str) -> dict:
         config = helper.load_yaml(config_path)
@@ -200,7 +201,6 @@ class EmbeddingDataset(object):
         sequence_id: int,
         start_coor: int,
         end_coor: int,
-        orientation: Orientation
     ) -> torch.Tensor:
         # (start_coor, end_coor) is relative to the contig / sequence,
         # not the concatenated sequence, which are cumulative coordinates
@@ -211,6 +211,8 @@ class EmbeddingDataset(object):
                 f"Coordinates {start_coor}-{end_coor} are out of bounds for "
                 f"sequence ID {sequence_id} with sequence length {end_coor_seq - start_coor_seq}."
             )
+
+        logging.debug(f"Sequence ID {sequence_id} with requested coordinates {start_coor}-{end_coor}.")
 
         start_coor_in_tokens = self.calculate_lca_num_tokens(
             start_coor + start_coor_seq,
@@ -224,26 +226,25 @@ class EmbeddingDataset(object):
             self.config["shift"],
             special_tokens=len(self.config["special_tokens"])
         )
+        logging.debug(
+            f"Start token: {start_coor_in_tokens}, End token: {end_coor_in_tokens} "
+            f"(in tokenised sequence with kmer={self.config['kmer']} and shift={self.config['shift']}"
+        )
 
         start = start_coor_in_tokens // self.config["pooling_length"]
         end  = end_coor_in_tokens // self.config["pooling_length"]
 
-        if orientation == BACKWARD and not hasattr(self, "embedding_reverse"):
-            raise ValueError(
-                "Reverse embedding is not available. Please provide a "
-                "reverse embedding file when initializing the EmbeddingDataset."
-            )
+        logging.debug(f"Start index in embedding: {start}, End index in embedding: {end} with embedding shape {self.embedding.shape}")
 
-        embedding = self.embedding_forward if orientation == FORWARD else self.embedding_reverse
         # safaty check to ensure the coordinates are within the bounds of the embedding tensor
-        if start < 0 or end > embedding.shape[0] or start >= end:
+        if start < 0 or end > self.embedding.shape[0] or start >= end:
             raise ValueError(
                 f"Coordinates {start}-{end} are out of bounds for sequence ID {sequence_id} "
-                "with embedding shape {embedding.shape}. Please note that these coordinates are "
+                f"with embedding shape {self.embedding.shape}. Please note that these coordinates are "
                 "calculated based on the kmer and shift parameters, i.e. the tokenised sequences,"
                 "and may not directly correspond to the original (untokenised) sequence coordinates."
             )
-        return embedding[start:end]
+        return self.embedding[start:end]
 
     @staticmethod
     def calculate_lca_num_tokens(

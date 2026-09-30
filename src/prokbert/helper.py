@@ -76,8 +76,11 @@ def save_sequence(sequence, dir_path: str, file_name: str) -> None:
     np.save(path, arr)
 
 
-def load_sequence(path: str) -> t.Any:
-    return np.load(path, mmap_mode="r")
+def load_sequence(path: str, to_string: bool = False) -> np.ndarray:
+    arr = np.load(path, mmap_mode="r")
+    if to_string:
+        return arr.tobytes().decode("ascii")
+    return arr
 
 
 def download(
