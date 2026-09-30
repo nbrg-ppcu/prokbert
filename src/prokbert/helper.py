@@ -1,13 +1,19 @@
-from typing import Optional
+import typing as t
 
 import os
-import zipfile
+import gzip
+import yaml
+import json
 import random
+import zipfile
+import pathlib
 import urllib.request
+from functools import partial
+from mimetypes import guess_type
 
 import torch
 import numpy as np
-from tqdm import tqdm
+from Bio import SeqIO
 
 
 def set_seed(seed: int = 43) -> None:
@@ -17,10 +23,67 @@ def set_seed(seed: int = 43) -> None:
     torch.cuda.manual_seed_all(seed)
 
 
+def load_yaml(path: str) -> t.Any:
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"File {path} does not exist.")
+    with open(path) as f:
+        return yaml.safe_load(f)
+
+
+def load_file(path: str) -> t.List[t.Any]:
+
+    if not isinstance(path, str):
+        raise ValueError(f"Expected file_path to be a string, got {type(file_path)}")
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"File {path} does not exist.")
+    if not path.endswith(('.fasta', '.fa', '.fna', '.fasta.gz', '.fa.gz', '.fna.gz')):
+        raise ValueError(
+                f"Invalid file extension for {path}. "
+                "Supported extensions are .fasta, .fa, .fna, .fasta.gz, .fa.gz, .fna.gz"
+        )
+    _, encoding = guess_type(path)
+    o = partial(gzip.open, mode='rt') if encoding == 'gzip' else open
+    with o(path) as f:
+        data = list(SeqIO.parse(f, "fasta"))
+    return data
+
+
+def read_json(file_path):
+    file_path = pathlib.Path(file_path)
+    try:
+        with file_path.open("r", encoding="utf-8") as file:
+            return json.load(file)
+    except FileNotFoundError as e:
+        raise FileNotFoundError(f"File not found: {file_path}") from e
+    except json.JSONDecodeError as e:
+        raise ValueError(f"Invalid JSON format in file: {file_path}") from e
+
+
+def save_json(data, dir_path, file_name: str) -> None:
+    dir_path = pathlib.Path(dir_path)
+    file_path = dir_path / file_name
+    try:
+        dir_path.mkdir(parents=True, exist_ok=True)
+        with file_path.open("w", encoding="utf-8") as file:
+            json.dump(data, file, ensure_ascii=False, indent=4, default=str)
+    except OSError as e:
+        raise OSError(f"Could not save file: {file_path}") from e
+
+
+def save_sequence(sequence, dir_path: str, file_name: str) -> None:
+    arr = np.frombuffer(sequence.encode("ascii"), dtype=np.uint8)
+    path = os.path.join(dir_path, file_name)
+    np.save(path, arr)
+
+
+def load_sequence(path: str) -> t.Any:
+    return np.load(path, mmap_mode="r")
+
+
 def download(
     url: str,
     target_dir: str,
-    file_name: Optional[str] = None,
+    file_name: t.Optional[str] = None,
     unzip: bool = False,
     remove_download: bool = False
 ) -> None:
