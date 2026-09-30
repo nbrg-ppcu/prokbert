@@ -4,6 +4,7 @@ import os
 import time
 import bisect
 
+import torch
 import datasets
 import pandas as pd
 
@@ -16,7 +17,7 @@ from src.prokbert.types import (
     SequenceId,
     SequenceInterval,
 )
-from src.prokbert.constants import RC_TABLE
+from src.prokbert.constants import RC_TABLE, FORWARD, BACKWARD
 
 
 class SequenceDataset(object):
@@ -41,7 +42,7 @@ class SequenceDataset(object):
         return data
 
     def _create_contig(self, contig, reverse_complement: bool = True) -> Contig:
-        orientation: Orientation = "backward" if reverse_complement else "forward"
+        orientation: Orientation = BACKWARD if reverse_complement else FORWARD
         seq = contig.seq.reverse_complement() if reverse_complement else contig.seq
         return {
             "contig_id": contig.id,
@@ -149,13 +150,138 @@ class SequenceDataset(object):
                 f"sequence ID {sequence_id} with sequence length {len(self.sequence)}.")
 
         seq = self.sequence[start_coor:end_coor]
-        if orientation == "forward":
+        if orientation == FORWARD:
             return seq
-        elif orientation == "backward":
+        elif orientation == BACKWARD:
             return self.reverse_complement(seq)
         else:
-            raise ValueError(f"Invalid orientation: {orientation}. Must be 'forward' or 'backward'.")
+            raise ValueError(f"Invalid orientation: {orientation}. Must be '{FORWARD}' or '{BACKWARD}'.")
 
     def reverse_complement(self, sequence: Sequence) -> str: # revcomp from https://github.com/nbrg-ppcu/prokbert/blob/development/src/prokbert/sequtils.py
         return sequence.translate(RC_TABLE)[::-1] # translate then reverse
+
+
+class EmbeddingDataset(object):
+    def __init__(
+        self,
+        sequence_dataset: SequenceDataset,
+        config_path: str,
+        embedding_file_forward: str,
+        embedding_file_reverse: str | None = None,
+    ) -> None:
+        super().__init__()
+
+        self.sequence_dataset = sequence_dataset
+        self.config = self.load_config(config_path)
+        # tokenized len of self.sequence_dataset.sequence // pooling_length x dim (prokbert-mini-long: 384, mini2-c: 1024)
+        self.embedding_forward = torch.load(
+            embedding_file_forward, map_location="cpu", mmap=True, weights_only=True
+        )
+        if embedding_file_reverse is not None:
+            self.embedding_reverse = torch.load(
+                embedding_file_reverse, map_location="cpu", mmap=True, weights_only=True
+            )
+
+    def load_config(self, config_path: str) -> dict:
+        config = helper.load_yaml(config_path)
+        return {
+            "dataset": config["dataset"], # e.g. huggingface dataset name
+            "tokenizer": config["tokenizer"],
+            "kmer": config["kmer"],
+            "shift": config["shift"],
+            "model": config["model"],
+            "pooling_strategy": config["pooling_strategy"],
+            "pooling_length": config["pooling_length"],
+            "special_tokens": config["special_tokens"], # e.g. (CLS, EOS)
+        }
+
+    def get_embedding_from_sequence_id_with_coordinates(
+        self,
+        sequence_id: int,
+        start_coor: int,
+        end_coor: int,
+        orientation: Orientation
+    ) -> torch.Tensor:
+        # (start_coor, end_coor) is relative to the contig / sequence,
+        # not the concatenated sequence, which are cumulative coordinates
+
+        start_coor_seq, end_coor_seq = self.sequence_dataset.get_coordinates_from_sequence_id(sequence_id)
+        if (start_coor < 0 or end_coor < start_coor) or end_coor > (end_coor_seq - start_coor_seq):
+            raise ValueError(
+                f"Coordinates {start_coor}-{end_coor} are out of bounds for "
+                f"sequence ID {sequence_id} with sequence length {end_coor_seq - start_coor_seq}."
+            )
+
+        start_coor_in_tokens = self.calculate_lca_num_tokens(
+            start_coor + start_coor_seq,
+            self.config["kmer"],
+            self.config["shift"],
+            special_tokens=len(self.config["special_tokens"])
+        )
+        end_coor_in_tokens  = self.calculate_lca_num_tokens(
+            end_coor + start_coor_seq,
+            self.config["kmer"],
+            self.config["shift"],
+            special_tokens=len(self.config["special_tokens"])
+        )
+
+        start = start_coor_in_tokens // self.config["pooling_length"]
+        end  = end_coor_in_tokens // self.config["pooling_length"]
+
+        if orientation == BACKWARD and not hasattr(self, "embedding_reverse"):
+            raise ValueError(
+                "Reverse embedding is not available. Please provide a "
+                "reverse embedding file when initializing the EmbeddingDataset."
+            )
+
+        embedding = self.embedding_forward if orientation == FORWARD else self.embedding_reverse
+        # safaty check to ensure the coordinates are within the bounds of the embedding tensor
+        if start < 0 or end > embedding.shape[0] or start >= end:
+            raise ValueError(
+                f"Coordinates {start}-{end} are out of bounds for sequence ID {sequence_id} "
+                "with embedding shape {embedding.shape}. Please note that these coordinates are "
+                "calculated based on the kmer and shift parameters, i.e. the tokenised sequences,"
+                "and may not directly correspond to the original (untokenised) sequence coordinates."
+            )
+        return embedding[start:end]
+
+    @staticmethod
+    def calculate_lca_num_tokens(
+        seq_len: int,
+        kmer: int,
+        shift: int,
+        special_tokens: int = 2 # e.g. (CLS, EOS)
+    ) -> int:
+        """
+        Number of LCA tokens for a single segment (offset 0).
+
+        K-mers start at positions 0, shift, 2*shift, ... and must fit entirely
+        in the sequence, giving floor((seq_len - kmer) / shift) + 1 k-mers.
+        Special tokens are added once per segment. For a whole contig split
+        into segments, sum this over the segments.
+
+        Derived from the LCA tokenization in ProkBERT (Ligeti et al., 2024, Sec. 2.1.1)
+        and matches lca_tokenize_segment in prokbert/sequtils.py for offset 0.
+
+        Args:
+            seq_len: Length of the segment in nucleotides.
+            kmer: K-mer size.
+            shift: Step between consecutive k-mer start positions.
+            special_tokens: Number of special tokens added per segment.
+
+        Returns:
+            Number of tokens, including special tokens.
+
+        Example:
+            'AAGTCCAGGATC' (length 12), kmer=6, shift=2 gives the k-mers AAGTCC, GTCCAG, CCAGGA, AGGATC:
+
+            >>> SequenceDataset.calculate_lca_num_tokens(12, 6, 2, special_tokens=0)
+            4
+            >>> SequenceDataset.calculate_lca_num_tokens(12, 6, 2)
+            6
+        """
+        # see 2 Materials and methods in https://pmc.ncbi.nlm.nih.gov/articles/PMC10810988/
+        if seq_len < kmer:
+            return special_tokens
+        return (seq_len - kmer) // shift + 1 + special_tokens
 

@@ -1,5 +1,7 @@
 
 
+FORWARD = "forward"
+BACKWARD = "backward"
 RC_TABLE = str.maketrans({
     "A":"T","C":"G","G":"C","T":"A","U":"A",
     "R":"Y","Y":"R","S":"S","W":"W","K":"M","M":"K",
