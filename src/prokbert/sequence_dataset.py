@@ -228,7 +228,7 @@ class EmbeddingDataset(object):
         )
         logging.debug(
             f"Start token: {start_coor_in_tokens}, End token: {end_coor_in_tokens} "
-            f"(in tokenised sequence with kmer={self.config['kmer']} and shift={self.config['shift']}"
+            f"(in tokenised sequence with kmer={self.config['kmer']} and shift={self.config['shift']})"
         )
 
         start = start_coor_in_tokens // self.config["pooling_length"]
