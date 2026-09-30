@@ -124,3 +124,14 @@ def unzip_file(download_path: str, target_dir: str) -> None:
             for zip_info in zip_info_list:
                 zip_ref.extract(zip_info, target_dir)
                 progress_bar.update(1)
+
+
+def estimate_tensor_memory(x, dtype=None, unit="GB"):
+    if dtype is None:
+        dtype = x.dtype
+    dtype_bytes = torch.tensor([], dtype=dtype).element_size()
+    bytes_used = x.numel() * dtype_bytes
+    units = { "B": 1, "KB": 1024, "MB": 1024**2, "GB": 1024**3}
+    if unit not in units:
+        raise ValueError(f"Unknown unit {unit}")
+    return bytes_used / units[unit]
