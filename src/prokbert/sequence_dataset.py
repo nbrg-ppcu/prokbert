@@ -1,13 +1,10 @@
-import typing as t
-
 import os
 import time
 import bisect
 import logging
 
 import torch
-import datasets
-import pandas as pd
+import numpy as np
 
 from prokbert import helper
 from prokbert.types import (
@@ -26,18 +23,18 @@ logger = logging.getLogger(__name__)
 
 class SequenceDataset(object):
     def __init__(self) -> None:
-        self.sequence: Sequence = ""
-        self.metadata: t.List[ContigMetaData] = []
-        self._starts: t.List[int] = []
+        self.sequence: Sequence | np.ndarray = ""
+        self.metadata: list[ContigMetaData] = []
+        self._starts: list[int] = []
 
-    def load_contigs(self, file_paths: t.List[str]) -> t.List[Contig]:
+    def load_contigs(self, file_paths: list[str]) -> list[Contig]:
         data = []
         for file_path in file_paths:
             contigs = self.load_contig(file_path)
             data.extend(contigs)
         return data
 
-    def load_contig(self, file_path: str) -> t.List[Contig]:
+    def load_contig(self, file_path: str) -> list[Contig]:
         data = []
         contigs = helper.load_file(file_path)
         for contig in contigs:
@@ -48,49 +45,34 @@ class SequenceDataset(object):
     def _create_contig(self, contig, reverse_complement: bool = True) -> Contig:
         orientation: Orientation = BACKWARD if reverse_complement else FORWARD
         seq = contig.seq.reverse_complement() if reverse_complement else contig.seq
-        return {
-            "contig_id": contig.id,
-            "sequence": str(seq).upper(),
-            "orientation": orientation,
-            "description": contig.description,
-        }
+        return Contig(
+            genome_id = None, # TODO later
+            contig_id = contig.id,
+            sequence = str(seq).upper(),
+            orientation = orientation,
+            description = contig.description,
+        )
 
-    @staticmethod
-    def convert_to(
-        data: t.List[Contig],
-        return_as: str = "list"
-    ) -> t.Union[t.List[Contig], pd.DataFrame, datasets.Dataset]:
-        if return_as == "list":
-            return data
-        elif return_as == "pandas":
-            return pd.DataFrame(data)
-        elif return_as == "datasets":
-            return datasets.Dataset.from_list(data)
-        else:
-            raise ValueError(
-                    f"Invalid value for return_as: {return_as}. "
-                    f"Supported values are 'list', 'pandas', 'datasets'."
-                )
-
-    def create_dataset(self, file_paths: t.List[str], save_dir: str | None = None) -> None:
+    def create_dataset(self, file_paths: list[str], save_dir: str | None = None) -> None:
 
         t0 = time.perf_counter()
 
         dataset = self.load_contigs(file_paths)
 
         offset = 0
-        sequences: t.List[Sequence] = []
-        metadata: t.List[ContigMetaData] = []
+        sequences = []
+        metadata  = []
 
         for i, record in enumerate(dataset):
             end = offset + len(record["sequence"])
-            metadata.append({
-                "contig_id": record["contig_id"],
-                "sequence_id": i,
-                "coordinate": (offset, end),
-                "orientation": record["orientation"],
-                "description": record["description"],
-            })
+            metadata.append(ContigMetaData(
+                genome_id = record["genome_id"],
+                contig_id = record["contig_id"],
+                sequence_id = i,
+                coordinate = (offset, end),
+                orientation = record["orientation"],
+                description = record["description"],
+            ))
             sequences.append(record["sequence"])
             offset = end
 
@@ -116,7 +98,13 @@ class SequenceDataset(object):
 
         logging.info(f"Dataset loaded from '{dir_path}'.")
 
-    def get_coordinates_from_sequence_id(self, sequence_id: int) -> SequenceInterval:
+
+    def get_contig_metadata_from_sequence_id(self, sequence_id: SequenceId) -> ContigMetaData:
+        if sequence_id >= len(self.metadata) or sequence_id < 0:
+            raise ValueError(f"Sequence ID {sequence_id} is out of bounds.")
+        return self.metadata[sequence_id]
+
+    def get_coordinates_from_sequence_id(self, sequence_id: SequenceId) -> SequenceInterval:
 
         if sequence_id >= len(self.metadata) or sequence_id < 0:
             raise ValueError(f"Sequence ID {sequence_id} is out of bounds.")
@@ -136,7 +124,7 @@ class SequenceDataset(object):
 
     def get_sequence_from_metadata(
         self,
-        sequence_id: int,
+        sequence_id: SequenceId,
         start_coor: int,
         end_coor: int,
         orientation: Orientation
@@ -166,6 +154,8 @@ class SequenceDataset(object):
     def reverse_complement(self, sequence: Sequence) -> str: # revcomp from https://github.com/nbrg-ppcu/prokbert/blob/development/src/prokbert/sequtils.py
         return sequence.translate(RC_TABLE)[::-1] # translate then reverse
 
+    def get_sequence_len(self) -> int:
+        return len(self.sequence) if isinstance(self.sequence, str) else self.sequence.shape[0]
 
 class EmbeddingDataset(object):
     def __init__(

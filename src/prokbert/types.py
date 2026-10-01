@@ -1,30 +1,47 @@
-import typing as t
+from typing import Literal, TypedDict, TYPE_CHECKING
 
-Id = t.Union[int, str]
-GenomeId = Id
+import numpy as np
+
+
+Id = int
+GenomeId = Id | None
 ContigId = Id
-SequenceId = Id
 SegmentId = Id
+SequenceId = Id
 
-Sequence = t.AnyStr
-Segment = t.AnyStr
-Segments = t.List[Sequence]
-Orientation = t.Literal["forward", "backward"]
-SequenceInterval = t.Tuple[int, int] # (start, end) coordinate pair
-Description = t.Optional[str]
+Sequence = str | np.ndarray
 
-class Contig(t.TypedDict):
+Segments = list[str]
+Orientation = Literal["forward", "backward"]
+SequenceInterval = tuple[int, int] # (start, end) coordinate pair
+Description = str | None
+
+SegmentationType = Literal["contiguous", "random"]
+
+
+class Contig(TypedDict):
     """A contig as read from the file, before building the dataset."""
+    genome_id: GenomeId
     contig_id: ContigId
     sequence: Sequence
     orientation: Orientation
     description: Description
 
-
-class ContigMetaData(t.TypedDict):
+class ContigMetaData(TypedDict):
     """Metadata for a contig inside the concatenated sequence."""
+    genome_id: GenomeId
     contig_id: ContigId
     sequence_id: SequenceId
     coordinate: SequenceInterval
     orientation: Orientation
     description: Description
+
+
+class Segment(TypedDict):
+    """A segment of a contig. Coordinates are contig-relative, half-open [start, end)."""
+    genome_id: GenomeId
+    segment_id: SegmentId
+    contig_id: ContigId
+    sequence_id: SequenceId
+    coordinate: SequenceInterval
+    orientation: Orientation

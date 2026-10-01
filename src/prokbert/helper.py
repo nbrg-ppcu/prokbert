@@ -1,4 +1,4 @@
-import typing as t
+from typing import Literal, Any
 
 import os
 import gzip
@@ -12,8 +12,11 @@ from functools import partial
 from mimetypes import guess_type
 
 import torch
+import datasets
 import numpy as np
+import pandas as pd
 from Bio import SeqIO
+from tqdm import tqdm
 
 
 def set_seed(seed: int = 43) -> None:
@@ -23,14 +26,14 @@ def set_seed(seed: int = 43) -> None:
     torch.cuda.manual_seed_all(seed)
 
 
-def load_yaml(path: str) -> t.Any:
+def load_yaml(path: str) -> Any:
     if not os.path.exists(path):
         raise FileNotFoundError(f"File {path} does not exist.")
     with open(path) as f:
         return yaml.safe_load(f)
 
 
-def load_file(path: str) -> t.List[t.Any]:
+def load_file(path: str) -> list[Any]:
 
     if not isinstance(path, str):
         raise ValueError(f"Expected file_path to be a string, got {type(file_path)}")
@@ -48,7 +51,7 @@ def load_file(path: str) -> t.List[t.Any]:
     return data
 
 
-def read_json(file_path):
+def read_json(file_path) -> Any:
     file_path = pathlib.Path(file_path)
     try:
         with file_path.open("r", encoding="utf-8") as file:
@@ -83,10 +86,25 @@ def load_sequence(path: str, to_string: bool = False) -> np.ndarray:
     return arr
 
 
+def convert_to(
+    data: list[dict],
+    return_as: Literal["pandas", "datasets"] = "pandas",
+) -> pd.DataFrame | datasets.Dataset:
+    if return_as == "pandas":
+        return pd.DataFrame(data)
+    elif return_as == "datasets":
+        return datasets.Dataset.from_list(data)
+    else:
+        raise ValueError(
+                f"Invalid value for return_as: {return_as}. "
+                f"Supported values are 'pandas', 'datasets'."
+            )
+
+
 def download(
     url: str,
     target_dir: str,
-    file_name: t.Optional[str] = None,
+    file_name: str | None = None,
     unzip: bool = False,
     remove_download: bool = False
 ) -> None:
