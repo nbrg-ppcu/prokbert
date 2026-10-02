@@ -1,5 +1,6 @@
 import typing as t
-
+import os
+import time
 import random
 
 from prokbert.constants import CONTIGUOUS
@@ -40,8 +41,12 @@ class Sampler(object):
 
     def __iter__(self) -> t.Iterator[Segment]:
         if self.segmentation_type == CONTIGUOUS:
-            return self.contiguous_segmentation()
-        return self.random_segmentation()
+            segment = self.contiguous_segmentation()
+        else:
+            segment = self.random_segmentation()
+        if int(os.environ.get("PROKBERT_PROFILE", 0)) >= 1:
+            return self._measure_perf(segment)
+        return segment
 
     def random_segmentation(self) -> t.Generator[Segment, int, None]:
 
@@ -99,3 +104,29 @@ class Sampler(object):
                     orientation = contig["orientation"]
                 )
 
+    def _measure_perf(self, segments) -> t.Generator[Segment, int, None]:
+        seconds, nbytes, n_segments = 0.0, 0, 0
+        return_seq = int(os.environ.get("PROKBERT_PROFILE", 0)) >= 2
+        try:
+            while True:
+                t0 = time.perf_counter()
+                segment = next(segments)
+                if return_seq:
+                    seq = self.sequence_dataset.get_sequence_by_absolute_coordinates(
+                        start=segment["coordinate"][0], end=segment["coordinate"][1]
+                    )
+                seconds += time.perf_counter() - t0
+                if segment is None:
+                    return
+                start, end = segment["coordinate"]
+                nbytes += end - start
+                n_segments += 1
+                yield seq if return_seq else segment
+        finally:  # runs when the consumer stops early (break, islice)
+            segments.close()
+            if n_segments:
+                print(
+                    f"{self.segmentation_type} segmentation: {n_segments} segments, "
+                    f"{nbytes / 1e6:.1f} MB in {seconds:.2f} s -> "
+                    f"{nbytes / 1e6 / seconds:.1f} MB/s, {n_segments / seconds:.0f} segments/s"
+                )

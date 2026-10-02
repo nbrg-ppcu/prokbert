@@ -1,4 +1,5 @@
 import os
+import sys
 import time
 import bisect
 import logging
@@ -6,7 +7,7 @@ import logging
 import torch
 import numpy as np
 
-from prokbert import helper
+from prokbert import helper, utils
 from prokbert.types import (
     Contig,
     ContigMetaData,
@@ -35,26 +36,31 @@ class SequenceDataset(object):
         return data
 
     def load_contig(self, file_path: str) -> list[Contig]:
-        data = []
+
+        t0 = time.perf_counter()
+
         contigs = helper.load_file(file_path)
-        for contig in contigs:
-            contig_forward = self._create_contig(contig, reverse_complement=False)
-            data.append(contig_forward)
+
+        data = [self._create_contig(contig) for contig in contigs]
+
+        if utils.profiling_enabled():
+            seconds = time.perf_counter() - t0
+            mb = sum(utils.get_dict_size(c) for c in data) / 1e6
+            print(f"Loaded contigs from {file_path}, {mb:.1f} MB in {seconds:.2f} s -> {mb / seconds:.1f} MB/s")
         return data
 
-    def _create_contig(self, contig, reverse_complement: bool = True) -> Contig:
-        orientation: Orientation = BACKWARD if reverse_complement else FORWARD
-        seq = contig.seq.reverse_complement() if reverse_complement else contig.seq
+    def _create_contig(self, contig) -> Contig:
         return Contig(
             genome_id = None, # TODO later
             contig_id = contig.id,
-            sequence = str(seq).upper(),
-            orientation = orientation,
+            sequence = str(contig.seq).upper(),
+            orientation = FORWARD,
             description = contig.description,
         )
 
     def create_dataset(self, file_paths: list[str], save_dir: str | None = None) -> None:
 
+        nbytes = 0
         t0 = time.perf_counter()
 
         dataset = self.load_contigs(file_paths)
@@ -73,30 +79,52 @@ class SequenceDataset(object):
                 orientation = record["orientation"],
                 description = record["description"],
             ))
-            sequences.append(record["sequence"])
+            sequences.append(record["sequence"]) # .encode("ascii")
             offset = end
 
         self.sequence = "".join(sequences)
         self.metadata = metadata
         self._starts = [contig["coordinate"][0] for contig in self.metadata]
 
-        logging.info(f"Dataset created in {time.perf_counter() - t0:.2f} seconds.")
+        if utils.profiling_enabled():
+            secs = time.perf_counter() - t0
+            nbytes = sys.getsizeof(self.sequence) + sum(utils.get_dict_size(m) for m in self.metadata)
+            print(f"Created dataset, {nbytes / 1e6:.1f} MB in {secs:.2f} s -> {nbytes / 1e6 / secs:.1f} MB/s")
 
         if save_dir is not None:
-            os.makedirs(save_dir, exist_ok=True)
+            self.save_dataset(save_dir)
 
-            helper.save_sequence(self.sequence, save_dir, "sequence.npy")
-            helper.save_json(self.metadata, save_dir, "metadata.json")
+    def save_dataset(self, save_dir: str) -> None:
+        os.makedirs(save_dir, exist_ok=True)
 
-            logging.info(f"Dataset saved to '{save_dir}'.")
+        t0 = time.perf_counter()
+
+        helper.save_sequence(self.sequence, save_dir, "sequence.npy")
+        helper.save_json(self.metadata, save_dir, "metadata.json")
+
+        if utils.profiling_enabled():
+            seconds = time.perf_counter() - t0
+            file_sizes = utils.file_size(os.path.join(save_dir, "sequence.npy"), os.path.join(save_dir, "metadata.json"))
+            print(
+                f"Saved dataset to '{save_dir}' ({file_sizes / 1e6:.1f} MB) in {seconds:.2f} s -> {file_sizes / 1e6 / seconds:.1f} MB/s"
+            )
+
+        logging.info(f"Dataset saved to '{save_dir}'.")
 
     def load_dataset(self, dir_path: str, to_string: bool = False) -> None:
+
+        t0 = time.perf_counter()
 
         self.sequence = helper.load_sequence(os.path.join(dir_path, "sequence.npy"), to_string=to_string)
         self.metadata = helper.read_json(os.path.join(dir_path, "metadata.json"))
         self._starts = [contig["coordinate"][0] for contig in self.metadata]
 
-        logging.info(f"Dataset loaded from '{dir_path}'.")
+        if utils.profiling_enabled():
+            seconds = time.perf_counter() - t0
+            file_sizes = utils.file_size(os.path.join(dir_path, "sequence.npy"), os.path.join(dir_path, "metadata.json"))
+            print(
+                f"Loaded dataset from '{dir_path}' ({file_sizes / 1e6:.1f} MB) in {seconds:.2f} s -> {file_sizes / 1e6 / seconds:.1f} MB/s"
+            )
 
 
     def get_contig_metadata_from_sequence_id(self, sequence_id: SequenceId) -> ContigMetaData:
@@ -125,7 +153,7 @@ class SequenceDataset(object):
     def get_sequence_from_metadata(
         self,
         sequence_id: SequenceId,
-        start_coor: int,
+        start_coor: int, # start, end are relative to the sequence_id
         end_coor: int,
         orientation: Orientation
     ) -> Sequence:
@@ -137,6 +165,7 @@ class SequenceDataset(object):
         if start_coor >= end_coor:
             raise ValueError(f"Start coordinate {start_coor} must be less than end coordinate {end_coor}.")
         if start_coor < 0 or end_coor > end - start:
+
             raise ValueError(
                 f"Coordinates {start_coor}-{end_coor} are out of bounds for "
                 f"sequence ID {sequence_id} with sequence length {end - start}. "
@@ -152,10 +181,20 @@ class SequenceDataset(object):
             raise ValueError(f"Invalid orientation: {orientation}. Must be '{FORWARD}' or '{BACKWARD}'.")
 
     def reverse_complement(self, sequence: Sequence) -> str: # revcomp from https://github.com/nbrg-ppcu/prokbert/blob/development/src/prokbert/sequtils.py
+        if isinstance(sequence, np.ndarray):
+            sequence = sequence.tobytes().decode("ascii")
         return sequence.translate(RC_TABLE)[::-1] # translate then reverse
 
     def get_sequence_len(self) -> int:
         return len(self.sequence) if isinstance(self.sequence, str) else self.sequence.shape[0]
+
+    def get_sequence_by_absolute_coordinates(self, start: int, end: int) -> Sequence:
+        """Slice of the concatenated sequence; coordinates are absolute, half-open [start, end)."""
+        if not 0 <= start < end <= self.get_sequence_len():
+            raise ValueError(
+                f"Coordinates {start}-{end} are out of bounds for sequence length {self.get_sequence_len()}."
+            )
+        return self.sequence[start:end]
 
 class EmbeddingDataset(object):
     def __init__(
