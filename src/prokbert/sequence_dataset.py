@@ -126,7 +126,6 @@ class SequenceDataset(object):
                 f"Loaded dataset from '{dir_path}' ({file_sizes / 1e6:.1f} MB) in {seconds:.2f} s -> {file_sizes / 1e6 / seconds:.1f} MB/s"
             )
 
-
     def get_contig_metadata_from_sequence_id(self, sequence_id: SequenceId) -> ContigMetaData:
         if sequence_id >= len(self.metadata) or sequence_id < 0:
             raise ValueError(f"Sequence ID {sequence_id} is out of bounds.")
@@ -314,4 +313,3 @@ class EmbeddingDataset(object):
         if seq_len < kmer:
             return special_tokens
         return (seq_len - kmer) // shift + 1 + special_tokens
-
