@@ -18,5 +18,3 @@ def get_dict_size(d: dict) -> int:
     strings it points to.
     """
     return sys.getsizeof(d) + sum(sys.getsizeof(value) for value in d.values())
-
-

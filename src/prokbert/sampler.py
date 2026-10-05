@@ -2,10 +2,12 @@ import typing as t
 import os
 import time
 import random
+import numpy as np
 
 from prokbert.constants import CONTIGUOUS
 from prokbert.types import Segment, SegmentationType
 from prokbert.sequence_dataset import SequenceDataset
+
 
 class Sampler(object):
     def __init__(
@@ -57,15 +59,15 @@ class Sampler(object):
 
             seq_id = self.sequence_dataset.get_sequence_id_from_start_coordinate(pos)
             contig = self.sequence_dataset.get_contig_metadata_from_sequence_id(seq_id)
-            contig_start, contig_end = contig["coordinate"] # absolute coordinates
-            contig_len = contig_end - contig_start
+            contig_coor_abs_start, contig_coor_abs_end = contig["coordinate"]
+            contig_len = contig_coor_abs_end - contig_coor_abs_start
 
             if contig_len < self.min_length:
                 continue # too short for a segment, draw again
             if contig_len <= self.max_length:
-                start, end = contig_start, contig_end # whole contig
+                start, end = contig_coor_abs_start, contig_coor_abs_end # whole contig
             else:
-                start = random.randint(contig_start, contig_end - self.max_length) # inclusive
+                start = random.randint(contig_coor_abs_start, contig_coor_abs_end - self.max_length) # inclusive
                 end = start + self.max_length
 
             yield Segment(
@@ -73,7 +75,8 @@ class Sampler(object):
                 contig_id = contig["contig_id"],
                 genome_id = contig.get("genome_id"),
                 sequence_id = contig["sequence_id"],
-                coordinate  = (start, end), # absolute position
+                absolute_coordinate  = (start, end),
+                relative_coordinate  = (start  - contig_coor_abs_start, end - contig_coor_abs_start),
                 orientation = contig["orientation"]
                 )
 
@@ -84,45 +87,51 @@ class Sampler(object):
 
     def contiguous_segmentation(self, sequence_id: int | None = None) -> t.Generator[Segment, int, None]:
 
-        if sequence_id is None: # ez így jó
+        if sequence_id is None:
             contigs = self.sequence_dataset.metadata
         else:
             contigs = [self.sequence_dataset.get_contig_metadata_from_sequence_id(sequence_id)]
 
         for contig in contigs:
-            start, end = contig["coordinate"]
-            for idx, segment_start in enumerate(range(start, end, self.max_length)):
-                segment_end = min(segment_start + self.max_length, end)
+            coor_abs_start, coor_abs_end = contig["coordinate"]
+
+            for segment_start in range(coor_abs_start, coor_abs_end, self.max_length):
+
+                segment_end = min(segment_start + self.max_length, coor_abs_end)
+                # draw again if segment len is smaller then min_length param
                 if segment_end - segment_start < self.min_length:
                     continue
+
                 yield Segment(
                     segment_id = self._increase_segment_id(),
                     contig_id = contig["contig_id"],
                     genome_id = contig.get("genome_id"),
                     sequence_id = contig["sequence_id"],
-                    coordinate = (segment_start, segment_end),
+                    absolute_coordinate  = (segment_start, segment_end),
+                    relative_coordinate  = (segment_start - coor_abs_start, segment_end - coor_abs_start),
                     orientation = contig["orientation"]
                 )
 
-    def _measure_perf(self, segments) -> t.Generator[Segment, int, None]:
+    def _measure_perf(self, segments) -> t.Generator[Segment | str, int, None]:
         seconds, nbytes, n_segments = 0.0, 0, 0
         return_seq = int(os.environ.get("PROKBERT_PROFILE", 0)) >= 2
         try:
             while True:
                 t0 = time.perf_counter()
-                segment = next(segments)
-                if return_seq:
+                segment = next(segments, None)
+                if return_seq and segment is not None:
                     seq = self.sequence_dataset.get_sequence_by_absolute_coordinates(
-                        start=segment["coordinate"][0], end=segment["coordinate"][1]
+                        start=segment["absolute_coordinate"][0], end=segment["absolute_coordinate"][1]
                     )
+                    seq = seq.tobytes().decode("ascii") if isinstance(seq, np.ndarray) else seq
                 seconds += time.perf_counter() - t0
                 if segment is None:
                     return
-                start, end = segment["coordinate"]
+                start, end = segment["absolute_coordinate"]
                 nbytes += end - start
                 n_segments += 1
                 yield seq if return_seq else segment
-        finally:  # runs when the consumer stops early (break, islice)
+        finally:
             segments.close()
             if n_segments:
                 print(

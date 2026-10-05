@@ -195,6 +195,7 @@ class SequenceDataset(object):
             )
         return self.sequence[start:end]
 
+
 class EmbeddingDataset(object):
     def __init__(
         self,
