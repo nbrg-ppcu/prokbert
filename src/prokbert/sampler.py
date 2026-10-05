@@ -96,7 +96,7 @@ class Sampler(object):
                 if segment_end - segment_start < self.min_length:
                     continue
                 yield Segment(
-                    segment_id = idx,
+                    segment_id = self._increase_segment_id(),
                     contig_id = contig["contig_id"],
                     genome_id = contig.get("genome_id"),
                     sequence_id = contig["sequence_id"],
