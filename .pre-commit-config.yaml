@@ -1,0 +1,31 @@
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-added-large-files
+
+  - repo: local
+    hooks:
+      - id: ruff
+        name: ruff
+        entry: ruff check src/
+        language: system
+        types: [python]
+        pass_filenames: false
+
+      - id: mypy
+        name: mypy
+        entry: mypy src/ --strict-equality
+        language: system
+        types: [python]
+        pass_filenames: false
+
+      - id: pylint
+        name: pylint
+        entry: env PYTHONPATH=. python -m pylint src/
+        language: system
+        types: [python]
+        pass_filenames: false
