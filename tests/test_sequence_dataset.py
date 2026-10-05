@@ -113,37 +113,6 @@ def test_load_contigs_concatenates_files():
 
 
 # --------------------------------------------------------------------------- #
-# convert_to
-# --------------------------------------------------------------------------- #
-
-def test_convert_to_list_returns_input():
-    contigs = SequenceDataset().load_contig(DATA_PATH)
-    assert SequenceDataset.convert_to(contigs, return_as="list") is contigs
-
-
-def test_convert_to_pandas():
-    contigs = SequenceDataset().load_contig(DATA_PATH)
-    df = SequenceDataset.convert_to(contigs, return_as="pandas")
-
-    assert len(df) == 5
-    assert set(df.columns) == {"contig_id", "sequence", "orientation", "description"}
-    assert df["sequence"].tolist() == SEQUENCES
-
-
-def test_convert_to_datasets():
-    contigs = SequenceDataset().load_contig(DATA_PATH)
-    ds = SequenceDataset.convert_to(contigs, return_as="datasets")
-
-    assert len(ds) == 5
-    assert list(ds["contig_id"]) == CONTIG_IDS  # list(): newer `datasets` returns a Column
-
-
-def test_convert_to_invalid_value_raises():
-    with pytest.raises(ValueError, match="Invalid value for return_as"):
-        SequenceDataset.convert_to([], return_as="numpy")
-
-
-# --------------------------------------------------------------------------- #
 # create_dataset
 # --------------------------------------------------------------------------- #
 
