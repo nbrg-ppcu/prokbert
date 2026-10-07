@@ -51,6 +51,7 @@ class SegmentDataset(IterableDataset):
             absolute_coordinate=(coor_abs_start, coor_abs_end),
             relative_coordinate=(coor_rel_start, coor_rel_end),
             orientation=contig["orientation"],
+            label=contig.get("label"),
         )
         if self.return_sequence:
             segment["sequence"] = self.read_sequence(coor_abs_start, coor_abs_end)

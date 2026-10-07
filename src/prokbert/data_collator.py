@@ -38,13 +38,10 @@ class SegmentDataCollator:
                 add_special_tokens = self.add_special_tokens,
             )
         )
+        if "label" in features[0]:
+            batch["labels"] = torch.tensor([feature["label"] for feature in features])
         if self.return_metadata:
             batch[SEGMENT_ID] = torch.tensor([feature[SEGMENT_ID] for feature in features])
             batch[SEQUENCE_ID] = torch.tensor([feature[SEQUENCE_ID] for feature in features])
             batch[ABSOLUTE_COORDINATE] = torch.tensor([feature[ABSOLUTE_COORDINATE] for feature in features])
         return batch
-
-
-
-
-

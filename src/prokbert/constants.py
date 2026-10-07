@@ -1,7 +1,7 @@
 
 
 FORWARD = "forward"
-BACKWARD = "backward"
+REVERSE = "reverse"
 RANDOM = "random"
 CONTIGUOUS = "contiguous"
 SEQUENCE = "sequence"
