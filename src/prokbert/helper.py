@@ -10,6 +10,7 @@ import pathlib
 import urllib.request
 from functools import partial
 from mimetypes import guess_type
+from pydantic import TypeAdapter
 
 import torch
 import datasets
@@ -17,6 +18,11 @@ import numpy as np
 import pandas as pd
 from Bio import SeqIO
 from tqdm import tqdm
+
+from prokbert.types import Contig, ContigMetaData
+
+
+FASTA_EXTENSIONS = ('.fasta', '.fa', '.fna', '.fasta.gz', '.fa.gz', '.fna.gz')
 
 
 def set_seed(seed: int = 43) -> None:
@@ -36,14 +42,34 @@ def load_yaml(path: str) -> Any:
 def load_file(path: str) -> list[Any]:
 
     if not isinstance(path, str):
-        raise ValueError(f"Expected file_path to be a string, got {type(file_path)}")
+        raise ValueError(f"Expected file_path to be a string, got '{type(path)}'")
     if not os.path.exists(path):
         raise FileNotFoundError(f"File {path} does not exist.")
-    if not path.endswith(('.fasta', '.fa', '.fna', '.fasta.gz', '.fa.gz', '.fna.gz')):
+
+    panda_readers = {
+        '.csv': pd.read_csv,
+        '.parquet': pd.read_parquet,
+        '.jsonl': partial(pd.read_json, lines=True),
+    }
+
+    if path.endswith(FASTA_EXTENSIONS):
+        return load_fasta(path)
+    elif os.path.isdir(path):
+        ds = datasets.load_from_disk(path)
+        if isinstance(ds, datasets.DatasetDict):
+            raise TypeError(f"{path} contains a DatasetDict with splits {list(ds)}, expected a single Dataset.")
+        return convert_from(ds, format="datasets")
+    elif reader := next((r for ext, r in panda_readers.items() if path.endswith(ext)), None):
+        rows = reader(path).to_dict(orient="records")
+        return convert_from(rows, format="pandas")
+    else:
         raise ValueError(
-                f"Invalid file extension for {path}. "
-                "Supported extensions are .fasta, .fa, .fna, .fasta.gz, .fa.gz, .fna.gz"
+            f"Invalid file extension for {path}. "
+            f"Supported extensions are fasta, pandas and hugginface extensions."
         )
+
+
+def load_fasta(path: str):
     _, encoding = guess_type(path)
     o = partial(gzip.open, mode='rt') if encoding == 'gzip' else open
     with o(path) as f:
@@ -87,18 +113,42 @@ def load_sequence(path: str, to_string: bool = False) -> np.ndarray:
 
 
 def convert_to(
-    data: list[dict],
-    return_as: Literal["pandas", "datasets"] = "pandas",
+    data: list[dict] | list[Contig] | list[ContigMetaData],
+    format: Literal["pandas", "datasets"] = "pandas",
 ) -> pd.DataFrame | datasets.Dataset:
-    if return_as == "pandas":
+    if format == "pandas":
         return pd.DataFrame(data)
-    elif return_as == "datasets":
+    elif format == "datasets":
         return datasets.Dataset.from_list(data)
     else:
         raise ValueError(
-                f"Invalid value for return_as: {return_as}. "
+                f"Invalid value for return_as: {format}. "
                 f"Supported values are 'pandas', 'datasets'."
             )
+
+
+def convert_from(
+    data: pd.DataFrame | datasets.Dataset,
+    format: Literal["pandas", "datasets"] = "pandas",
+    return_as: str = "contig"
+) -> list[Contig] | list[ContigMetaData]:
+    if format == "pandas" and isinstance(data, pd.DataFrame):
+        metadata = data.to_dict(orient="records")
+    elif format == "datasets" and isinstance(data, datasets.Dataset):
+        metadata =  data.to_list()
+    else:
+        raise ValueError(
+            f"Invalid value for format: {format}. "
+            f"Supported values are 'pandas', 'datasets'."
+        )
+    if return_as == "contig":
+        contig_adapter = TypeAdapter(list[Contig])
+    elif return_as == "contigmetadata":
+        contig_adapter = TypeAdapter(list[ContigMetaData])
+    else:
+        raise ValueError(f"Invalid value for return_as param. Got '{return_as}'. ")
+
+    return contig_adapter.validate_python(metadata)
 
 
 def download(

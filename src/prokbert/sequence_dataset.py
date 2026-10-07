@@ -1,3 +1,4 @@
+from typing import Literal
 import os
 import sys
 import time
@@ -5,9 +6,13 @@ import bisect
 import logging
 
 import torch
+import datasets
 import numpy as np
+import pandas as pd
+from Bio import SeqRecord
 
-from prokbert import helper, utils
+from prokbert import utils
+from prokbert import helper
 from prokbert.types import (
     Contig,
     ContigMetaData,
@@ -41,7 +46,7 @@ class SequenceDataset(object):
 
         contigs = helper.load_file(file_path)
 
-        data = [self._create_contig(contig) for contig in contigs]
+        data = [self._create_contig(contig) if isinstance(contig, SeqRecord) else contig for contig in contigs]
 
         if utils.profiling_enabled():
             seconds = time.perf_counter() - t0
@@ -57,6 +62,19 @@ class SequenceDataset(object):
             orientation = FORWARD,
             description = contig.description,
         )
+
+    def convert_to(
+        self,
+        format: Literal["pandas", "datasets"]
+    ) -> pd.DataFrame | datasets.Dataset:
+        return helper.convert_to(self.metadata, format)
+
+    def convert_from(
+            self,
+            data: pd.DataFrame | datasets.Dataset,
+            format: Literal["pandas", "datasets"],
+        ):
+        self.metadata = helper.convert_from(data, format, return_as="contigmetadata")
 
     def create_dataset(self, file_paths: list[str], save_dir: str | None = None) -> None:
 
