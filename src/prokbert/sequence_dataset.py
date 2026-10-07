@@ -9,7 +9,7 @@ import torch
 import datasets
 import numpy as np
 import pandas as pd
-from Bio import SeqRecord
+from Bio.SeqRecord import SeqRecord
 
 from prokbert import utils
 from prokbert import helper
