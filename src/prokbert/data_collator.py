@@ -16,7 +16,7 @@ class SegmentDataCollator:
     created with ``return_sequence=True``. By default only model inputs are
     returned, because the Hugging Face Trainer passes every key to
     ``model.forward``. Set ``return_metadata=True`` to also get segment and
-    coordinate information, e.g. for embedding extraction in a custom loop.
+    coordinate information.
     """
 
     tokenizer: LCATokenizer
