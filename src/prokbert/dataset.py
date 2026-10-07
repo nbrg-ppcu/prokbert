@@ -101,6 +101,7 @@ class RandomSegmentDataset(SegmentDataset):
             segment_id += 1
 
 
+# TODO shuffling is not implemented. Do we need it here?
 class ContiguousSegmentDataset(SegmentDataset):
 
     def __init__(self, *args, **kwargs) -> None:
