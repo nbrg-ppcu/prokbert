@@ -1,4 +1,4 @@
-from typing import Literal, TypedDict
+from typing import Literal, TypedDict, NotRequired
 
 import numpy as np
 
@@ -46,3 +46,4 @@ class Segment(TypedDict):
     absolute_coordinate: SequenceInterval
     relative_coordinate: SequenceInterval
     orientation: Orientation
+    sequence: NotRequired[str]
