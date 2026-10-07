@@ -4,6 +4,10 @@ FORWARD = "forward"
 BACKWARD = "backward"
 RANDOM = "random"
 CONTIGUOUS = "contiguous"
+SEQUENCE = "sequence"
+SEGMENT_ID = "segment_id"
+SEQUENCE_ID = "sequence_id"
+ABSOLUTE_COORDINATE = "absolute_coordinate"
 
 RC_TABLE = str.maketrans({
     "A":"T","C":"G","G":"C","T":"A","U":"A",

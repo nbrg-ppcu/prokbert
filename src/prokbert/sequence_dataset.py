@@ -26,7 +26,7 @@ from prokbert.constants import RC_TABLE, FORWARD, BACKWARD
 
 logger = logging.getLogger(__name__)
 
-
+# TODO should be renamed the SequenceDatabase, also rename the file to database.py
 class SequenceDataset(object):
     def __init__(self) -> None:
         self.sequence: Sequence | np.ndarray = ""
@@ -214,6 +214,7 @@ class SequenceDataset(object):
         return self.sequence[start:end]
 
 
+# TODO should be renamed the EmbeddingDatabase, also rename the file to database.py
 class EmbeddingDataset(object):
     def __init__(
         self,
