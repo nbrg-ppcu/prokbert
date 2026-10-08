@@ -17,7 +17,6 @@ from transformers.modeling_outputs import (
     MaskedLMOutput,
     SequenceClassifierOutput,
 )
-from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss
 from transformers.modeling_utils import PreTrainedModel
 from transformers.generation import GenerationMixin
 from dataclasses import dataclass
@@ -431,7 +430,7 @@ def _autocast_disabled(device_type: str):
         if device_type == "cpu" and hasattr(torch, "cpu") and hasattr(torch.cpu, "amp"):
             return torch.cpu.amp.autocast(enabled=False)
         return nullcontext()
-    
+
 
 class _SafeFromPretrainedMixin:
     """
@@ -795,7 +794,7 @@ class MegatronBertEmbeddings(nn.Module):
             embeddings = embeddings + self.position_embeddings(position_ids)
 
         return self.dropout(embeddings)
-    
+
 # Copied from transformers.models.bert.modeling_bert.BertSelfAttention with Bert->MegatronBert
 
 class MegatronBertSelfAttention(nn.Module):
@@ -1585,10 +1584,10 @@ class ProkBertConfig(MegatronBertConfig):
         if legacy_num_class_labels is not None:
             num_labels = legacy_num_class_labels
         if legacy_curricular_num_labels is not None:
-            num_labels = legacy_curricular_num_labels            
+            num_labels = legacy_curricular_num_labels
         loaded_id2label = kwargs.get("id2label")
         if loaded_id2label is not None:
-            num_labels = len(loaded_id2label)                        
+            num_labels = len(loaded_id2label)
         if classifier_dropout is None and legacy_dropout is not None:
             classifier_dropout = legacy_dropout
         if curricular_embedding_size is None and legacy_proj not in (None, -1):
@@ -1617,7 +1616,7 @@ class ProkBertConfig(MegatronBertConfig):
         if self.classifier_head_type not in {"linear", "mlp", "curricular"}:
             raise ValueError(f"Unsupported classifier_head_type={self.classifier_head_type}")
 
-        
+
 class ProkBertPreTrainedModel(MegatronBertPreTrainedModel):
     """
     An abstract class to handle weights initialization and a simple interface for downloading and loading pretrained
@@ -1816,7 +1815,7 @@ class ProkBertForSequenceClassification(_SafeFromPretrainedMixin, ProkBertPreTra
             hidden_states=getattr(outputs, "hidden_states", None),
             attentions=getattr(outputs, "attentions", None),
         )
-    
+
 @dataclass
 class CurricularSequenceClassifierOutput(ModelOutput):
     loss: Optional[torch.FloatTensor] = None
@@ -1903,8 +1902,8 @@ class CurricularFace(nn.Module):
     ) -> torch.Tensor:
         cos_theta = self.cosine(embeddings)
         return self.margin_logits_from_cosine(cos_theta, labels, update_t=update_t)
-    
-    
+
+
 
 class ProkBertForCurricularClassification(_SafeFromPretrainedMixin, ProkBertPreTrainedModel):
     config_class = ProkBertConfig
@@ -2031,7 +2030,7 @@ class ProkBertForCurricularClassification(_SafeFromPretrainedMixin, ProkBertPreT
         kernel_norm = l2_norm(self.curricular_face.kernel, axis=0)
         cos_theta = torch.mm(embeddings, kernel_norm).clamp(-1.0, 1.0)
         return cos_theta * self.curricular_face.s
-    
+
 
     def _curricular_inference_logits(self, embeddings: torch.Tensor) -> torch.Tensor:
         return self.curricular_face.inference_logits(embeddings)
