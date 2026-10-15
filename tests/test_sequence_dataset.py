@@ -16,7 +16,7 @@ import pytest
 import torch
 import yaml
 
-from prokbert.constants import BACKWARD, FORWARD
+from prokbert.constants import REVERSE, FORWARD
 from prokbert.sequence_dataset import EmbeddingDataset, SequenceDataset
 
 
@@ -208,7 +208,7 @@ def test_loaded_dataset_supports_queries(tmp_path):
 
     assert tuple(loaded.get_coordinates_from_sequence_id(1)) == (30, 54)
     assert loaded.get_sequence_id_from_start_coordinate(60) == 2
-    assert loaded.get_sequence_from_metadata(0, 0, 10, BACKWARD) == "CGGGTCGAGA"
+    assert loaded.get_sequence_from_metadata(0, 0, 10, REVERSE) == "CGGGTCGAGA"
 
 
 # --------------------------------------------------------------------------- #
@@ -290,7 +290,7 @@ def test_get_sequence_from_metadata_full_contig(seq_ds, sequence_id):
     length = len(SEQUENCES[sequence_id])
 
     forward = seq_ds.get_sequence_from_metadata(sequence_id, 0, length, FORWARD)
-    backward = seq_ds.get_sequence_from_metadata(sequence_id, 0, length, BACKWARD)
+    backward = seq_ds.get_sequence_from_metadata(sequence_id, 0, length, REVERSE)
 
     assert forward == SEQUENCES[sequence_id]
     assert backward == seq_ds.reverse_complement(SEQUENCES[sequence_id])
@@ -298,8 +298,8 @@ def test_get_sequence_from_metadata_full_contig(seq_ds, sequence_id):
 
 def test_get_sequence_from_metadata_region(seq_ds):
     assert seq_ds.get_sequence_from_metadata(0, 0, 10, FORWARD) == "TCTCGACCCG"
-    assert seq_ds.get_sequence_from_metadata(0, 0, 10, BACKWARD) == "CGGGTCGAGA"
-    assert seq_ds.get_sequence_from_metadata(0, 20, 30, BACKWARD) == "TGGGGGCGAT"
+    assert seq_ds.get_sequence_from_metadata(0, 0, 10, REVERSE) == "CGGGTCGAGA"
+    assert seq_ds.get_sequence_from_metadata(0, 20, 30, REVERSE) == "TGGGGGCGAT"
 
 
 def test_get_sequence_from_metadata_uses_contig_relative_coordinates(seq_ds):
@@ -310,7 +310,7 @@ def test_get_sequence_from_metadata_uses_contig_relative_coordinates(seq_ds):
 
 def test_get_sequence_from_metadata_single_base(seq_ds):
     assert seq_ds.get_sequence_from_metadata(3, 4, 5, FORWARD) == "N"
-    assert seq_ds.get_sequence_from_metadata(3, 0, 1, BACKWARD) == "T"  # complement of A
+    assert seq_ds.get_sequence_from_metadata(3, 0, 1, REVERSE) == "T"  # complement of A
 
 
 @pytest.mark.parametrize(

@@ -1,18 +1,17 @@
-from typing import Literal, TypedDict
+from typing import Literal, TypedDict, NotRequired
 
 import numpy as np
 
 
-Id = int
-GenomeId = Id | None
-ContigId = Id
-SegmentId = Id
-SequenceId = Id
+GenomeId = str | None
+ContigId = str
+SegmentId = int
+SequenceId = int
 
 Sequence = str | np.ndarray
 
 Segments = list[str]
-Orientation = Literal["forward", "backward"]
+Orientation = Literal["forward", "reverse"] # vars are not allowed in type expression
 SequenceInterval = tuple[int, int] # (start, end) coordinate pair
 Description = str | None
 
@@ -21,20 +20,23 @@ SegmentationType = Literal["contiguous", "random"]
 
 class Contig(TypedDict):
     """A contig as read from the file, before building the dataset."""
-    genome_id: GenomeId
+    genome_id: NotRequired[GenomeId]
     contig_id: ContigId
-    sequence: Sequence
+    sequence: str
     orientation: Orientation
-    description: Description
+    description: NotRequired[Description]
+    label: NotRequired[int | None]
 
 class ContigMetaData(TypedDict):
     """Metadata for a contig inside the concatenated sequence."""
-    genome_id: GenomeId
+
+    genome_id: NotRequired[GenomeId]
     contig_id: ContigId
     sequence_id: SequenceId
     coordinate: SequenceInterval
     orientation: Orientation
-    description: Description
+    description: NotRequired[Description]
+    label: NotRequired[int | None]
 
 
 class Segment(TypedDict):
@@ -46,3 +48,5 @@ class Segment(TypedDict):
     absolute_coordinate: SequenceInterval
     relative_coordinate: SequenceInterval
     orientation: Orientation
+    sequence: NotRequired[str]
+    label: NotRequired[int | None]

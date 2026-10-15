@@ -21,12 +21,12 @@ from prokbert.types import (
     SequenceId,
     SequenceInterval,
 )
-from prokbert.constants import RC_TABLE, FORWARD, BACKWARD
+from prokbert.constants import RC_TABLE, FORWARD, REVERSE
 
 
 logger = logging.getLogger(__name__)
 
-
+# TODO should be renamed the SequenceDatabase, also rename the file to database.py
 class SequenceDataset(object):
     def __init__(self) -> None:
         self.sequence: Sequence | np.ndarray = ""
@@ -90,12 +90,13 @@ class SequenceDataset(object):
         for i, record in enumerate(dataset):
             end = offset + len(record["sequence"])
             metadata.append(ContigMetaData(
-                genome_id = record["genome_id"],
+                genome_id = record.get("genome_id"),
                 contig_id = record["contig_id"],
                 sequence_id = i,
                 coordinate = (offset, end),
                 orientation = record["orientation"],
-                description = record["description"],
+                description = record.get("description"),
+                label = record.get("label"),
             ))
             sequences.append(record["sequence"]) # .encode("ascii")
             offset = end
@@ -192,10 +193,10 @@ class SequenceDataset(object):
         seq = self.sequence[s:e]
         if orientation == FORWARD:
             return seq
-        elif orientation == BACKWARD:
+        elif orientation == REVERSE:
             return self.reverse_complement(seq)
         else:
-            raise ValueError(f"Invalid orientation: {orientation}. Must be '{FORWARD}' or '{BACKWARD}'.")
+            raise ValueError(f"Invalid orientation: {orientation}. Must be '{FORWARD}' or '{REVERSE}'.")
 
     def reverse_complement(self, sequence: Sequence) -> str: # revcomp from https://github.com/nbrg-ppcu/prokbert/blob/development/src/prokbert/sequtils.py
         if isinstance(sequence, np.ndarray):
@@ -214,6 +215,7 @@ class SequenceDataset(object):
         return self.sequence[start:end]
 
 
+# TODO should be renamed the EmbeddingDatabase, also rename the file to database.py
 class EmbeddingDataset(object):
     def __init__(
         self,
