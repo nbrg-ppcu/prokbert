@@ -2,6 +2,7 @@ from typing import Literal
 import os
 import sys
 import time
+import math
 import bisect
 import logging
 
@@ -25,6 +26,7 @@ from prokbert.constants import RC_TABLE, FORWARD, REVERSE
 
 
 logger = logging.getLogger(__name__)
+
 
 # TODO should be renamed the SequenceDatabase, also rename the file to database.py
 class SequenceDataset(object):
@@ -217,25 +219,27 @@ class SequenceDataset(object):
 
 # TODO should be renamed the EmbeddingDatabase, also rename the file to database.py
 class EmbeddingDataset(object):
-    def __init__(
-        self,
-        sequence_dataset: SequenceDataset,
-        config_path: str,
-        embedding_file: str,
-    ) -> None:
+    def __init__(self, sequence_dataset, config_path, embedding_file, seq_tokens_file) -> None:
         super().__init__()
-
         self.sequence_dataset = sequence_dataset
         self.config = self.load_config(config_path)
-        # tokenized len of self.sequence_dataset.sequence // pooling_length x dim (prokbert-mini-long: 384, mini2-c: 1024)
-        self.embedding = torch.load(
-            embedding_file, map_location="cpu", mmap=True, weights_only=True
+        self.embedding = torch.load(embedding_file, map_location="cpu", mmap=True, weights_only=True)
+        self.seq_tokens = torch.load(seq_tokens_file, map_location="cpu", mmap=True, weights_only=True)
+
+        pool = self.config["pooling_length"]
+        # hány sort foglal egy contig: felfelé kerekítünk, mert a részben kitöltött utolsó blokk is egy sor
+        self.seq_rows = torch.ceil(self.seq_tokens.double() / pool).long()
+        # a contig kezdősora: az előtte lévő contigok sorainak összege
+        self.row_offsets = torch.cumsum(self.seq_rows, dim=0) - self.seq_rows
+
+        assert self.seq_rows.sum() == self.embedding.shape[0], (
+            f"A tokenszámokból {int(self.seq_rows.sum())} sor jön ki, "
+            f"de az embedding {self.embedding.shape[0]} soros"
         )
 
     def load_config(self, config_path: str) -> dict:
         config = helper.load_yaml(config_path)
         return {
-            "dataset": config["dataset"], # e.g. huggingface dataset name
             "tokenizer": config["tokenizer"],
             "kmer": config["kmer"],
             "shift": config["shift"],
@@ -245,55 +249,71 @@ class EmbeddingDataset(object):
             "special_tokens": config["special_tokens"], # e.g. (CLS, EOS)
         }
 
-    def get_embedding_from_sequence_id_with_coordinates(
+    def get_embedding_from_sequence_id_with_relative_coordinates(
         self,
         sequence_id: int,
-        start_coor: int,
-        end_coor: int,
+        coor_rel_start: int,
+        coor_rel_end: int,
     ) -> torch.Tensor:
-        # (start_coor, end_coor) is relative to the contig / sequence,
-        # not the concatenated sequence, which are cumulative coordinates
+        """
+        Pooled embedding rows overlapping the half-open region [coor_rel_start, coor_rel_end)
+        of a contig. Coordinates are relative to the contig, 0-based, like Python slicing.
+        """
+        coor_abs_start, coor_abs_end = self.sequence_dataset.get_coordinates_from_sequence_id(sequence_id)
+        contig_len = coor_abs_end - coor_abs_start
 
-        start_coor_seq, end_coor_seq = self.sequence_dataset.get_coordinates_from_sequence_id(sequence_id)
-        if (start_coor < 0 or end_coor < start_coor) or end_coor > (end_coor_seq - start_coor_seq):
+        if coor_rel_start < 0 or coor_rel_end <= coor_rel_start:
             raise ValueError(
-                f"Coordinates {start_coor}-{end_coor} are out of bounds for "
-                f"sequence ID {sequence_id} with sequence length {end_coor_seq - start_coor_seq}."
+                f"Coordinates {coor_rel_start}-{coor_rel_end} are incorrect. "
+                f"The start coordinate must be non-negative and strictly less than the end coordinate "
+                f"(the region is half-open: [start, end))."
+            )
+        if coor_rel_end > contig_len:
+            raise ValueError(
+                f"Coordinates {coor_rel_start}-{coor_rel_end} are incorrect. "
+                f"The requested end coordinate {coor_rel_end} exceeds the length of "
+                f"sequence ID {sequence_id} ({contig_len})."
+            )
+        logging.debug(f"Sequence ID {sequence_id}: absolute {coor_abs_start}-{coor_abs_end}, "
+                    f"requested relative {coor_rel_start}-{coor_rel_end}")
+
+        kmer = self.config["kmer"]
+        shift = self.config["shift"]
+        pool = self.config["pooling_length"]
+
+        n_tokens = int(self.seq_tokens[sequence_id])     # number of tokens in the contig
+        n_rows   = int(self.seq_rows[sequence_id])       # number of pooled rows of the contig
+        offset   = int(self.row_offsets[sequence_id])    # first row of the contig in the embedding tensor
+
+        # hány token van az első olyan token előtt, ami a kért relatív kezdő koordinátát tartalmazza
+        # (0-tól indexelve ez egyben ennek a tokennek a kezdő indexe)
+        coor_start_in_tokens = self.calculate_lca_num_tokens(coor_rel_start, kmer, shift, special_tokens=0)
+        # az első olyan token indexe, amely már a kért szakasz vége után kezdődik
+        # (mivel félig nyitott tartomány, ezért ez az utolsó átfedő token indexe + 1)
+        # (itt állunk meg: ez a tokentartomány nyitott jobb vége)
+        coor_end_in_tokens = min(n_tokens, math.ceil(coor_rel_end / shift)) # round up
+        logging.debug(f"Tokens within contig: {coor_start_in_tokens}-{coor_end_in_tokens} (of {n_tokens} tokens)")
+
+        # hány teljes poolozott beágyazásokból álló sor van az első szükséges token előtt
+        # (0-tól indexelve ez egyben annak a sornak az indexe, amely az első szükséges tokent tartalmazza)
+        start = math.floor(coor_start_in_tokens / pool)
+
+        # az első olyan poolozott beágyazásokból álló sor indexe, amely már a szükséges tokenek után kezdődik
+        # (mivel félig nyitott tartomány, ezért ez az utolsó szükséges sor indexe + 1)
+        # (felfelé kerekítünk, mert a részben szükséges sort is vissza kell adni: egy sort nem lehet félbevágni)
+        # (a min biztonsági háló: legfeljebb a contig sorainak száma)
+        end = min(math.ceil(coor_end_in_tokens / pool), n_rows)     # round up: include the partially filled block
+        logging.debug(f"Rows within contig: {start}-{end} (of {n_rows}), "
+                    f"rows in embedding tensor: {offset + start}-{offset + end} (offset {offset})")
+
+        if start >= end:
+            raise ValueError(
+                f"No embedding row overlaps the region {coor_rel_start}-{coor_rel_end} of sequence ID {sequence_id}. "
+                f"Either the contig is shorter than one k-mer (kmer={kmer}), or the region lies in the "
+                f"last few nucleotides that no k-mer covers (shift={shift})."
             )
 
-        logging.debug(f"Sequence ID {sequence_id} with requested coordinates {start_coor}-{end_coor}.")
-
-        start_coor_in_tokens = self.calculate_lca_num_tokens(
-            start_coor + start_coor_seq,
-            self.config["kmer"],
-            self.config["shift"],
-            special_tokens=len(self.config["special_tokens"])
-        )
-        end_coor_in_tokens  = self.calculate_lca_num_tokens(
-            end_coor + start_coor_seq,
-            self.config["kmer"],
-            self.config["shift"],
-            special_tokens=len(self.config["special_tokens"])
-        )
-        logging.debug(
-            f"Start token: {start_coor_in_tokens}, End token: {end_coor_in_tokens} "
-            f"(in tokenised sequence with kmer={self.config['kmer']} and shift={self.config['shift']})"
-        )
-
-        start = start_coor_in_tokens // self.config["pooling_length"]
-        end  = end_coor_in_tokens // self.config["pooling_length"]
-
-        logging.debug(f"Start index in embedding: {start}, End index in embedding: {end} with embedding shape {self.embedding.shape}")
-
-        # safaty check to ensure the coordinates are within the bounds of the embedding tensor
-        if start < 0 or end > self.embedding.shape[0] or start >= end:
-            raise ValueError(
-                f"Coordinates {start}-{end} are out of bounds for sequence ID {sequence_id} "
-                f"with embedding shape {self.embedding.shape}. Please note that these coordinates are "
-                "calculated based on the kmer and shift parameters, i.e. the tokenised sequences,"
-                "and may not directly correspond to the original (untokenised) sequence coordinates."
-            )
-        return self.embedding[start:end]
+        return self.embedding[offset + start : offset + end]
 
     @staticmethod
     def calculate_lca_num_tokens(
