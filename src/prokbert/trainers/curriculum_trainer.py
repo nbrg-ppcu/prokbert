@@ -11,20 +11,20 @@ class CustomTrainer(Trainer):
             # Separate parameters
             bert_params = [p for n, p in self.model.named_parameters() if "model" in n] #bert
             head_params = [p for n, p in self.model.named_parameters() if "model" not in n]
-            
+
             self.optimizer = AdamW([
                 {"params": bert_params, "lr": self.args.backbone_lr_rate},
                 {"params": head_params, "lr": self.args.head_lr_rate}
             ],
             betas=(self.args.beta_1, self.args.beta_2))
         return self.optimizer
-    
+
     def create_scheduler(self, num_training_steps: int, optimizer=None):
         optimizer = optimizer or self.optimizer
         self.lr_scheduler = ReduceLROnPlateau(
             optimizer,
-            mode="min",    
-            factor=0.5,  
+            mode="min",
+            factor=0.5,
             patience=5
             )
         return self.lr_scheduler
@@ -37,8 +37,8 @@ class CustomTrainer(Trainer):
     def evaluate(self, eval_dataset=None, **kwargs):
         eval_dataset = eval_dataset or self.eval_dataset
         result = super().evaluate(eval_dataset=eval_dataset, **kwargs)
-        emb_dataset = get_embedding(self.model, eval_dataset, self.data_collator, self.model.device)
-        score = evaluate_embeddings(emb_dataset, eval_dataset["labels"])
+        emb_dataset = get_embedding(self.model, eval_dataset, self.data_collator, self.model.device) # noqa: F821  # fix later: define get_embedding
+        score = evaluate_embeddings(emb_dataset, eval_dataset["labels"])  # noqa: F821  # fix later: define evaluate_embeddings
         metrics = {"eval_silhouette_score":  score}
         result["eval_silhouette_score"] = score
         self.log(metrics)

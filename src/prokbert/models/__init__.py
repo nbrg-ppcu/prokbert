@@ -1,1 +1,1 @@
-from .megatronbert import *
+from .megatronbert import * # noqa
