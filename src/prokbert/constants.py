@@ -8,6 +8,9 @@ SEQUENCE = "sequence"
 SEGMENT_ID = "segment_id"
 SEQUENCE_ID = "sequence_id"
 ABSOLUTE_COORDINATE = "absolute_coordinate"
+EMBEDDING = "embedding"
+LABEL = "label"
+LABELS = "labels"
 
 RC_TABLE = str.maketrans({
     "A":"T","C":"G","G":"C","T":"A","U":"A",

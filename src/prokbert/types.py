@@ -1,5 +1,6 @@
 from typing import Literal, TypedDict, NotRequired
 
+import torch
 import numpy as np
 
 
@@ -49,4 +50,5 @@ class Segment(TypedDict):
     relative_coordinate: SequenceInterval
     orientation: Orientation
     sequence: NotRequired[str]
+    embedding: NotRequired[torch.Tensor]
     label: NotRequired[int | None]

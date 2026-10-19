@@ -7,7 +7,7 @@ import numpy as np
 from torch.utils.data import IterableDataset, get_worker_info
 
 from prokbert.types import SegmentId, Segment, ContigMetaData, SequenceId
-from prokbert.sequence_dataset import SequenceDataset
+from prokbert.sequence_dataset import SequenceDataset, EmbeddingDataset
 
 
 __all__ = ["RandomSegmentDataset", "ContiguousSegmentDataset"]
@@ -19,7 +19,9 @@ class SegmentDataset(IterableDataset):
         sequence_dataset: SequenceDataset,
         min_segment_length: int,
         max_segment_length: int,
-        return_sequence: bool = False
+        embedding_dataset: EmbeddingDataset | None = None,
+        return_sequence: bool = False,
+        return_embedding: bool = False
     ) -> None:
         super().__init__()
 
@@ -28,10 +30,17 @@ class SegmentDataset(IterableDataset):
                 f"Expected 0 < min_segment_length <= max_segment_length, "
                 f"got {min_segment_length} and {max_segment_length}."
             )
+        if embedding_dataset is None and return_embedding:
+            raise ValueError(
+                f"Cannot return embedding when embedding_dataset is not provided. "
+                f"Got embedding_dataset={embedding_dataset} and return_embedding={return_embedding}."
+            )
         self.min_segment_length = min_segment_length
         self.max_segment_length = max_segment_length
         self.sequence_dataset = sequence_dataset
         self.return_sequence = return_sequence
+        self.embedding_dataset = embedding_dataset
+        self.return_embedding = return_embedding
 
     def create_segment(
         self,
@@ -55,6 +64,10 @@ class SegmentDataset(IterableDataset):
         )
         if self.return_sequence:
             segment["sequence"] = self.read_sequence(coor_abs_start, coor_abs_end)
+        if self.return_embedding and self.embedding_dataset is not None:
+            segment["embedding"] = self.embedding_dataset.get_embedding_from_sequence_id_with_relative_coordinates(
+              contig["sequence_id"], coor_rel_start, coor_rel_end
+            )
         return segment
 
     def read_sequence(self, segment_coor_abs_start: int, segment_coor_abs_end: int) -> str:
