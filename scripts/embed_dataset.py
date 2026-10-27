@@ -1,16 +1,13 @@
 #!/usr/bin/env python3
 
-import math
-from typing import Any
-
 import os
 import time
+import math
 import glob
 import yaml
 import argparse
 
 import torch
-import torch.nn.functional as F
 import numpy as np
 from tqdm import tqdm
 
@@ -119,24 +116,31 @@ def create_batches(tokenized_contig, args, pad_id=0):
     input_ids = tokenized_contig["input_ids"].reshape(-1)           # (n_tokens,)
     attention_mask = tokenized_contig["attention_mask"].reshape(-1) # (n_tokens,)
 
-    num_tokens = input_ids.numel() // seq_len
+    n_windows = input_ids.numel() // seq_len
 
-    input_ids_main = input_ids[:num_tokens * seq_len]
-    attention_mask_main = attention_mask[:num_tokens * seq_len]
+    input_ids_main = input_ids[:n_windows * seq_len]
+    attention_mask_main = attention_mask[:n_windows * seq_len]
 
-    batch = {
-        "input_ids": input_ids_main.reshape(-1, seq_len), # (n_batches, seq_len)
-        "attention_mask": attention_mask_main.reshape(-1, seq_len), # (n_batches, seq_len)
-    }
+    batch = None
+    # only build the main batch if the contig has at least one full window of seq_len tokens.
+    # A shorter contig (e.g. 200 tokens with seq_len=1000) has no full window: the slice above is
+    # empty and would become a (0, seq_len) tensor, which the model cannot process. In that case
+    # all of the contig's tokens go into batch_rest instead.
+    # (num_tokens here is the number of full windows, not the number of tokens.)
+    if n_windows > 0:
+        batch = {
+            "input_ids": input_ids_main.reshape(-1, seq_len), # (n_windows, seq_len)
+            "attention_mask": attention_mask_main.reshape(-1, seq_len), # (n_windows, seq_len)
+        }
 
     batch_rest = None
     if input_ids.numel() % seq_len != 0:
-        input_ids_rest = input_ids[num_tokens * seq_len:]
-        attention_mask_rest = attention_mask[num_tokens * seq_len:]
+        input_ids_rest = input_ids[n_windows * seq_len:]
+        attention_mask_rest = attention_mask[n_windows * seq_len:]
 
         batch_rest = {
-            "input_ids": input_ids_rest.reshape(1, -1), # (1, input_ids.numel() - num_tokens * seq_len)
-            "attention_mask": attention_mask_rest.reshape(1, -1), # (1, input_ids.numel() - num_tokens * seq_len)
+            "input_ids": input_ids_rest.reshape(1, -1), # (1, input_ids.numel() - n_windows * seq_len)
+            "attention_mask": attention_mask_rest.reshape(1, -1), # (1, input_ids.numel() - n_windows * seq_len)
         }
 
     return batch, batch_rest
@@ -149,12 +153,14 @@ def pooling(embeddings, pooling_strategy, dim=1):
     return embeddings
 
 
-def pool_embeds(batch_embeds: torch.Tensor, batch_embeds_rest: torch.Tensor | None, args):
+def pool_embeds(batch_embeds: torch.Tensor | None, batch_embeds_rest: torch.Tensor | None, args):
     pool = args.pooling_len
-    dim = batch_embeds.shape[-1]
+    dim = batch_embeds.shape[-1] if batch_embeds is not None else batch_embeds_rest.shape[-1]
 
-    # main part: every window is a multiple of pooling_len, so it splits into full blocks
-    pooled = pooling(batch_embeds.reshape(-1, pool, dim), args.pooling_strategy, dim=1)
+    pooled = None
+    if batch_embeds is not None:
+        # main part: every window is a multiple of pooling_len, so it splits into full blocks
+        pooled = pooling(batch_embeds.reshape(-1, pool, dim), args.pooling_strategy, dim=1)
 
     if batch_embeds_rest is not None:
         rest = batch_embeds_rest.reshape(-1, dim)                 # (n_rest_tokens, dim)
@@ -162,7 +168,7 @@ def pool_embeds(batch_embeds: torch.Tensor, batch_embeds_rest: torch.Tensor | No
         # (e.g. 1551 tokens with pooling_len=100 (seq_len=2000) -> 15 blocks of 100 + 1 block of 51 -> 16 rows)
         blocks = torch.split(rest, pool, dim=0)
         rest_pooled = torch.stack([pooling(b, args.pooling_strategy, dim=0) for b in blocks])
-        pooled = torch.cat([pooled, rest_pooled], dim=0)
+        pooled = torch.cat([pooled, rest_pooled], dim=0) if pooled is not None else rest_pooled
 
     if args.verbose: print(f"pooled batch final shape: {pooled.shape}")
     return pooled
@@ -191,7 +197,7 @@ def process(sequence_dataset: SequenceDataset, model, tokenizer, args) -> None:
         if isinstance(sequence, np.ndarray):
             sequence = sequence.tobytes().decode("ascii")
 
-        if args.verbose: print(f"sequence: {sequence}")
+        # if args.verbose: print(f"sequence: {sequence}")
 
         tokenized_contig = tokenizer( # (1, seq_len)
             sequence, return_tensors="pt", padding=False,
@@ -209,7 +215,7 @@ def process(sequence_dataset: SequenceDataset, model, tokenizer, args) -> None:
         # amit majd hozzáfőzünk a fő batch-hez.
         batch, batch_rest = create_batches(tokenized_contig, args)
 
-        batch_embeds = embed(batch, model, args) # (n_batches, seq_len)
+        batch_embeds = embed(batch, model, args) if batch is not None else None # (n_windows, seq_len)
         batch_embeds_rest = embed(batch_rest, model, args) if batch_rest is not None else None # (1, m)
 
         batch_embeds = pool_embeds(batch_embeds, batch_embeds_rest, args)
