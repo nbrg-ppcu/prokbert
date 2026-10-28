@@ -205,6 +205,18 @@ class SequenceDataset(object):
             sequence = sequence.tobytes().decode("ascii")
         return sequence.translate(RC_TABLE)[::-1] # translate then reverse
 
+    def get_contig_coordinates(self) -> tuple[np.ndarray, np.ndarray]:
+        """Absolute start and end coordinates of every contig as arrays, indexed by sequence_id.
+
+        Used for vectorized lookups (e.g. mapping many positions to contigs at once with np.searchsorted).
+        """
+        sequence_ids = np.array([contig["sequence_id"] for contig in self.metadata])
+        if not np.array_equal(sequence_ids, np.arange(len(self.metadata))):
+            raise ValueError("Expected sequence_ids 0, 1, 2, ... in metadata order.")
+
+        coordinates = np.array([contig["coordinate"] for contig in self.metadata], dtype=np.int64).reshape(-1, 2)
+        return coordinates[:, 0], coordinates[:, 1]
+
     def get_sequence_len(self) -> int:
         return len(self.sequence) if isinstance(self.sequence, str) else self.sequence.shape[0]
 

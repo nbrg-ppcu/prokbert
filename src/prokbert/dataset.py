@@ -1,6 +1,5 @@
 from typing import Iterator
 
-import random
 import itertools
 
 import numpy as np
@@ -78,41 +77,86 @@ class SegmentDataset(IterableDataset):
 
 
 class RandomSegmentDataset(SegmentDataset):
+    """Random segments, sampled the same way as ``sequtils.segment_sequences_random``.
+
+    - ceil(coverage * total_length / max_segment_length) start positions are drawn uniformly
+      over the concatenated sequence, then sorted (so contigs are hit proportionally to their length)
+    - a segment starts at its sampled position and runs max_segment_length bases or until the
+      end of its contig, whichever comes first (segments never cross contigs)
+    - segments shorter than min_segment_length are dropped
+    - segment_ids are 0, 1, 2, ... over the kept segments, in position order, like
+      ``segment_sequences(..., AsDataFrame=True)``
+
+    With the same seed, iterating with shuffle=False and num_workers=0 yields exactly the segments of
+    ``np.random.seed(seed); segment_sequences(df, {"type": "random", ...}, AsDataFrame=True)``, in the same order.
+    The segments are sampled once, in __init__, so every epoch uses the same segments (as the old pipeline did).
+
+    Args:
+        coverage: Expected number of times each base is covered; sets the number of sampled positions.
+        seed: Seed of the legacy NumPy RNG (np.random.RandomState), the one np.random.seed() seeds.
+        shuffle: Yield the segments in a random order instead of position order. Use it for training:
+            position order puts segments of the same contig (and label) into the same batch. The order
+            depends on seed and on the epoch set with set_epoch() (the HF Trainer calls it every epoch).
+    """
+
+    def __init__(
+        self,
+        *args,
+        coverage: float = 1.0,
+        seed: int | None = None,
+        shuffle: bool = True,
+        **kwargs,
+    ) -> None:
+        super().__init__(*args, **kwargs)
+
+        if coverage <= 0:
+            raise ValueError(f"Expected coverage > 0, got {coverage}.")
+        self.coverage = coverage
+        self.seed = seed
+        self.shuffle = shuffle
+        self.epoch = 0
+        # every DataLoader worker must shuffle with the same seed, otherwise their shares would overlap
+        self._shuffle_seed = seed if seed is not None else int(np.random.SeedSequence().entropy % 2**32)
+
+        self._sequence_ids, self._starts, self._ends = self._sample_segments()
+
+    def _sample_segments(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Sequence ids and absolute [start, end) coordinates of the kept segments, in position order."""
+        total_len = self.sequence_dataset.get_sequence_len()
+        n_segments = int(np.ceil(self.coverage * total_len / self.max_segment_length))
+
+        # same RNG stream as np.random.seed(seed) followed by np.random.uniform(...)
+        rng = np.random.RandomState(self.seed)
+        positions = np.sort(np.int64(rng.uniform(0, total_len, n_segments)))
+
+        contig_starts, contig_ends = self.sequence_dataset.get_contig_coordinates()
+        # contig of each position: the first contig whose end is after the position
+        sequence_ids = np.searchsorted(contig_ends, positions, side="right")
+        # the segment starts at the position and stops at max_segment_length or at the contig end
+        ends = np.minimum(positions + self.max_segment_length, contig_ends[sequence_ids])
+
+        keep = ends - positions >= self.min_segment_length
+        return sequence_ids[keep], positions[keep], ends[keep]
+
+    def __len__(self) -> int:
+        return len(self._sequence_ids)
+
+    def set_epoch(self, epoch: int) -> None:
+        """Called by the HF Trainer at the start of every epoch; changes the order when shuffle=True."""
+        self.epoch = epoch
 
     def __iter__(self) -> Iterator[Segment | str]:
-
         worker = get_worker_info()
         worker_id, num_workers = (worker.id, worker.num_workers) if worker is not None else (0, 1)
 
-        segment_id = 0
-        total_len = self.sequence_dataset.get_sequence_len()
+        order = np.arange(len(self))
+        if self.shuffle:
+            np.random.RandomState(self._shuffle_seed + self.epoch).shuffle(order)
 
-        while True:
-            pos = random.randrange(0, total_len) # left closed, right open interval
-
-            sequence_id = self.sequence_dataset.get_sequence_id_from_start_coordinate(pos)
-            contig = self.sequence_dataset.get_contig_metadata_from_sequence_id(sequence_id)
-            contig_coor_abs_start, contig_coor_abs_end = contig["coordinate"]
-            contig_len = contig_coor_abs_end - contig_coor_abs_start
-
-            if contig_len < self.min_segment_length:
-                continue # too short, draw again
-            if contig_len <= self.max_segment_length: # whole contig
-                segment_coor_abs_start = contig_coor_abs_start
-                segment_coor_abs_end = contig_coor_abs_end
-            else:
-                segment_coor_abs_start = random.randint( # inclusive
-                    contig_coor_abs_start, contig_coor_abs_end - self.max_segment_length
-                )
-                segment_coor_abs_end = segment_coor_abs_start + self.max_segment_length
-
-            yield self.create_segment(
-                segment_id * num_workers + worker_id, # workers gets different segment_ids
-                contig,
-                segment_coor_abs_start,
-                segment_coor_abs_end,
-            )
-            segment_id += 1
+        # each worker takes every num_workers-th segment of the same order, so together they yield each segment once
+        for k in order[worker_id::num_workers]:
+            contig = self.sequence_dataset.get_contig_metadata_from_sequence_id(int(self._sequence_ids[k]))
+            yield self.create_segment(int(k), contig, int(self._starts[k]), int(self._ends[k]))
 
 
 # TODO shuffling is not implemented. Do we need it here?
