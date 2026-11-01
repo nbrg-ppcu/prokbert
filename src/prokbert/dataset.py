@@ -89,9 +89,11 @@ class RandomSegmentDataset(SegmentDataset):
                 segment_coor_abs_end = contig_coor_abs_end
             else:
                 segment_coor_abs_start = random.randint( # inclusive
-                    contig_coor_abs_start, contig_coor_abs_end - self.max_segment_length
+                    contig_coor_abs_start - (self.max_segment_length - self.min_segment_length),
+                    contig_coor_abs_end - self.min_segment_length,
                 )
-                segment_coor_abs_end = segment_coor_abs_start + self.max_segment_length
+                segment_coor_abs_end = min(segment_coor_abs_start + self.max_segment_length, contig_coor_abs_end)
+                segment_coor_abs_start = max(segment_coor_abs_start, contig_coor_abs_start)
 
             yield self.create_segment(
                 segment_id * num_workers + worker_id, # workers gets different segment_ids
