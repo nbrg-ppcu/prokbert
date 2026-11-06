@@ -327,6 +327,12 @@ class EmbeddingDataset(object):
 
         return self.embedding[offset + start : offset + end]
 
+    def get_embedding_from_sequence_id(self, sequence_id: int) -> torch.Tensor:
+        """all pooled embedding rows of one contig."""
+        offset = int(self.row_offsets[sequence_id]) 
+        n_rows = int(self.seq_rows[sequence_id])
+        return self.embedding[offset : offset + n_rows]
+
     @staticmethod
     def calculate_lca_num_tokens(
         seq_len: int,

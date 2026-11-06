@@ -9,15 +9,17 @@ from prokbert.tokenizer import LCATokenizer
 from prokbert.constants import SEQUENCE, SEGMENT_ID, SEQUENCE_ID, ABSOLUTE_COORDINATE
 
 
-@dataclass
-class SegmentDataCollator:
-    """Turn a list of segments into a padded batch of model inputs.
+from typing import Any, ClassVar
 
-    The segments must contain their sequence, i.e. the dataset has to be
-    created with ``return_sequence=True``. By default only model inputs are
-    returned, because the Hugging Face Trainer passes every key to
-    ``model.forward``. Set ``return_metadata=True`` to also get segment and
-    coordinate information.
+
+@dataclass
+class DataCollator:
+    """Turn a list of items (segments, genomes, ...) into a padded batch of model inputs.
+
+    The items must contain their sequence (dataset created with ``return_sequence=True``) or,
+    with ``has_embedding=True``, their embedding (``return_embedding=True``). By default only
+    model inputs are returned, because the Hugging Face Trainer passes every key to
+    ``model.forward``. Set ``return_metadata=True`` to also get the item's ``metadata_keys``.
     """
     tokenizer: LCATokenizer
     padding: bool = True
@@ -26,36 +28,52 @@ class SegmentDataCollator:
     return_metadata: bool = False
     add_special_tokens: bool = True
 
+    metadata_keys: ClassVar[tuple[str, ...]] = ()
 
     def __call__(self, features: list[dict[str, Any]]) -> dict[str, Any]:
-
         if self.has_embedding and "embedding" not in features[0]:
-            raise KeyError("Segments have no 'embedding'. Create the dataset with return_embedding=True.")
+            raise KeyError("Items have no 'embedding'. Create the dataset with return_embedding=True.")
         if not self.has_embedding and SEQUENCE not in features[0]:
-            raise KeyError("Segments have no 'sequence'. Create the dataset with return_sequence=True.")
+            raise KeyError("Items have no 'sequence'. Create the dataset with return_sequence=True.")
 
         if self.has_embedding:
             batch = {}
-            batch["embeddings"], batch["embedding_mask"] = pad_embeddings(
+            batch["inputs_embeds"], batch["attention_mask"] = pad_embeddings(
                 [feature["embedding"] for feature in features]
             )
         else:
             batch = dict(
                 self.tokenizer(
                     [feature[SEQUENCE] for feature in features],
-                    padding = self.padding,
-                    return_tensors = self.return_tensors,
-                    add_special_tokens = self.add_special_tokens,
+                    padding=self.padding,
+                    return_tensors=self.return_tensors,
+                    add_special_tokens=self.add_special_tokens,
                 )
             )
+
         if "label" in features[0] and features[0]["label"] is not None:
             batch["labels"] = torch.tensor([feature["label"] for feature in features])
 
         if self.return_metadata:
-            batch[SEGMENT_ID] = torch.tensor([feature[SEGMENT_ID] for feature in features])
-            batch[SEQUENCE_ID] = torch.tensor([feature[SEQUENCE_ID] for feature in features])
-            batch[ABSOLUTE_COORDINATE] = torch.tensor([feature[ABSOLUTE_COORDINATE] for feature in features])
+            batch.update(self.collate_metadata(features))
         return batch
+
+    def collate_metadata(self, features: list[dict[str, Any]]) -> dict[str, Any]:
+        """Metadata of the items as plain lists; override to return e.g. tensors."""
+        return {key: [feature[key] for feature in features] for key in self.metadata_keys}
+
+
+class SegmentDataCollator(DataCollator):
+    """DataCollator for segments: the metadata (ids, coordinates) are numbers, returned as tensors."""
+    metadata_keys: ClassVar[tuple[str, ...]] = (SEGMENT_ID, SEQUENCE_ID, ABSOLUTE_COORDINATE)
+
+    def collate_metadata(self, features: list[dict[str, Any]]) -> dict[str, Any]:
+        return {key: torch.tensor([feature[key] for feature in features]) for key in self.metadata_keys}
+
+
+class GenomeDataCollator(DataCollator):
+    """DataCollator for genomes: the metadata (genome id, contig ids) are strings, returned as lists."""
+    metadata_keys: ClassVar[tuple[str, ...]] = ("genome_id", "contig_ids")
 
 
 def pad_embeddings(embeddings: list[torch.Tensor]) -> tuple[torch.Tensor, torch.Tensor]:

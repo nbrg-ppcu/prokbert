@@ -5,7 +5,7 @@ import itertools
 import numpy as np
 from torch.utils.data import IterableDataset, get_worker_info
 
-from prokbert.types import SegmentId, Segment, ContigMetaData, SequenceId
+from prokbert.types import SegmentId, Segment, ContigMetaData, SequenceId, Genome
 from prokbert.sequence_dataset import SequenceDataset, EmbeddingDataset
 
 
@@ -209,3 +209,68 @@ class ContiguousSegmentDataset(SegmentDataset):
 
         for contig in contigs:
             yield from self.create_segments_from_contig(contig["sequence_id"])
+
+
+class RandomGenomeDataset(IterableDataset):
+    """Yields every contig (genome for now) once per epoch, in a random order if shuffle=True.
+
+    The order depends on seed and on the epoch set with set_epoch() (the HF Trainer calls it every epoch).
+    All DataLoader workers use the same order and each takes every num_workers-th contig of it,
+    so together they yield every contig exactly once.
+    """
+
+    def __init__(
+        self,
+        sequence_dataset: SequenceDataset,
+        embedding_dataset: EmbeddingDataset | None = None,
+        return_sequence: bool = False,
+        return_embedding: bool = False,
+        shuffle: bool = True,
+        seed: int | None = None,
+    ) -> None:
+        super().__init__()
+        if embedding_dataset is None and return_embedding:
+            raise ValueError("Cannot return embedding when embedding_dataset is not provided.")
+
+        self.sequence_dataset = sequence_dataset
+        self.embedding_dataset = embedding_dataset
+        self.return_sequence = return_sequence
+        self.return_embedding = return_embedding
+
+        self.shuffle = shuffle
+        self.epoch = 0
+        # every worker must shuffle with the same seed, otherwise their shares would overlap
+        self.seed = seed if seed is not None else int(np.random.SeedSequence().entropy % 2**32)
+
+    def __len__(self) -> int:
+        return len(self.sequence_dataset.metadata)
+
+    def set_epoch(self, epoch: int) -> None:
+        """called by the hf trainer at the start of every epoch, i.e. a new order every epoch."""
+        self.epoch = epoch
+
+    def __iter__(self) -> Iterator[Genome]:
+
+        worker = get_worker_info()
+        worker_id, num_workers = (worker.id, worker.num_workers) if worker is not None else (0, 1)
+        order = np.arange(len(self))
+        if self.shuffle:
+            np.random.RandomState(self.seed + self.epoch).shuffle(order)
+
+        metadata = self.sequence_dataset.metadata
+        for i in order[worker_id::num_workers]:
+            contig = metadata[i]
+
+            genome: Genome = {
+                "genome_id": contig["genome_id"],
+                "contig_ids": [contig["contig_id"]], # list is 1 element long for now
+                "label": contig.get("label"),
+            }
+            if self.return_sequence:
+                sequence = self.sequence_dataset.get_sequence_by_absolute_coordinates(*contig["coordinate"])
+                genome["sequence"] = sequence.tobytes().decode("ascii") if isinstance(sequence, np.ndarray) else sequence
+            if self.return_embedding:
+                assert self.embedding_dataset is not None # checked in __init__; tells Pyright it isn't None
+                genome["embedding"] = self.embedding_dataset.get_embedding_from_sequence_id(contig["sequence_id"])
+
+            yield genome

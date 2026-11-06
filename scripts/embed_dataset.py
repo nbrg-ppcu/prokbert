@@ -264,9 +264,12 @@ def process(sequence_dataset: SequenceDataset, model, tokenizer, args) -> None:
     os.makedirs(args.output_dir, exist_ok=True)
 
     t0 = time.perf_counter()
-    print(f"Processing shard {args.shard_id}/{args.num_shards}")
     # this shard handles every num_shards-th contig, starting at shard_id
     contigs = sequence_dataset.metadata[args.shard_id::args.num_shards]
+
+    print(f"Total contigs in dataset: {len(sequence_dataset.metadata)}")
+    print(f"Contigs to process in this shard: {len(contigs)}")
+    print(f"Processing shard {args.shard_id}/{args.num_shards}")
 
     for contig in tqdm(contigs, desc=f"shard {args.shard_id}/{args.num_shards}"):
 

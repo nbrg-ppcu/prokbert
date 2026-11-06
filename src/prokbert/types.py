@@ -52,3 +52,11 @@ class Segment(TypedDict):
     sequence: NotRequired[str]
     embedding: NotRequired[torch.Tensor]
     label: NotRequired[int | None]
+
+
+class Genome(TypedDict):
+    genome_id: GenomeId
+    contig_ids: list[ContigId]
+    sequence: NotRequired[str]
+    embedding: NotRequired[torch.Tensor]
+    label: NotRequired[int | None]
