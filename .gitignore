@@ -1,3 +1,5 @@
+logs/
+wandb/
 _build/
 api/
 
@@ -111,5 +113,3 @@ target/
 
 # Jupyter Notebook
 .ipynb_checkpoints
-
-src/prokbert/dev_notebooks/dev_tokenizer.ipynb
