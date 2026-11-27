@@ -6,7 +6,7 @@ import numpy as np
 from torch.utils.data import IterableDataset, get_worker_info
 
 from prokbert.types import SegmentId, Segment, ContigMetaData, SequenceId, Genome
-from prokbert.sequence_dataset import SequenceDataset, EmbeddingDataset
+from prokbert.database import SequenceDatabase, EmbeddingDatabase
 
 
 __all__ = ["RandomSegmentDataset", "ContiguousSegmentDataset"]
@@ -15,10 +15,10 @@ __all__ = ["RandomSegmentDataset", "ContiguousSegmentDataset"]
 class SegmentDataset(IterableDataset):
     def __init__(
         self,
-        sequence_dataset: SequenceDataset,
+        sequence_dataset: SequenceDatabase,
         min_segment_length: int,
         max_segment_length: int,
-        embedding_dataset: EmbeddingDataset | None = None,
+        embedding_dataset: EmbeddingDatabase | None = None,
         return_sequence: bool = False,
         return_embedding: bool = False
     ) -> None:
@@ -221,8 +221,8 @@ class RandomGenomeDataset(IterableDataset):
 
     def __init__(
         self,
-        sequence_dataset: SequenceDataset,
-        embedding_dataset: EmbeddingDataset | None = None,
+        sequence_dataset: SequenceDatabase,
+        embedding_dataset: EmbeddingDatabase | None = None,
         return_sequence: bool = False,
         return_embedding: bool = False,
         shuffle: bool = True,

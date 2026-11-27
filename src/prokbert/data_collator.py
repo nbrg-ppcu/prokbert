@@ -14,7 +14,7 @@ from typing import Any, ClassVar
 
 @dataclass
 class DataCollator:
-    """Turn a list of items (segments, genomes, ...) into a padded batch of model inputs.
+    """Turn a list of items (e.g. segments or genomes) into a padded batch of model inputs.
 
     The items must contain their sequence (dataset created with ``return_sequence=True``) or,
     with ``has_embedding=True``, their embedding (``return_embedding=True``). By default only
@@ -27,8 +27,16 @@ class DataCollator:
     has_embedding: bool = False
     return_metadata: bool = False
     add_special_tokens: bool = True
+    pooling: str | None = None    # "mean", "sum": pool the embedding rows again, before padding the batch
+    pooling_len: int = 1          # number of consecutive rows pooled into one
 
     metadata_keys: ClassVar[tuple[str, ...]] = ()
+
+    def __post_init__(self) -> None:
+        if self.pooling not in (None, "mean", "sum", "full"):
+            raise ValueError(f"pooling must be None, 'mean' or 'sum', got {self.pooling!r}")
+        if self.pooling is not None and self.pooling_len < 1:
+            raise ValueError(f"pooling_len must be at least 1, got {self.pooling_len}")
 
     def __call__(self, features: list[dict[str, Any]]) -> dict[str, Any]:
         if self.has_embedding and "embedding" not in features[0]:
@@ -37,10 +45,12 @@ class DataCollator:
             raise KeyError("Items have no 'sequence'. Create the dataset with return_sequence=True.")
 
         if self.has_embedding:
+            embeddings = [torch.as_tensor(feature["embedding"]) for feature in features]
+            if self.pooling is not None:
+                embeddings = [pool_rows(e, self.pooling_len, self.pooling) for e in embeddings]
+
             batch = {}
-            batch["inputs_embeds"], batch["attention_mask"] = pad_embeddings(
-                [feature["embedding"] for feature in features]
-            )
+            batch["inputs_embeds"], batch["attention_mask"] = pad_embeddings(embeddings)
         else:
             batch = dict(
                 self.tokenizer(
@@ -93,13 +103,33 @@ def pad_embeddings(embeddings: list[torch.Tensor]) -> tuple[torch.Tensor, torch.
     embeddings = [torch.as_tensor(e) for e in embeddings]
     lengths = torch.tensor([e.shape[0] for e in embeddings]) # number of rows per segment
 
-    # a szegmensek beágyazásainak eltérő hossza lehet,
-    # ezért a szegmensekhez hozzáadunk annyi nullvektort, amennyi szükséges
-    # (mivel az nn.Embedding-be a padding_idx alapértelmezetten nulla, és ahhoz
-    # egy nullvektor tartozik (amit nem tanítunk), ezért elegendő szintén nullvektort készíteni)
+    # a beágyazások eltérő számú sorból állhatnak, ezért a rövidebbeket nullvektorokkal
+    # egészítjük ki a batch leghosszabbjáig; a nullák értéke nem számít, mert a maszk
+    # (0 = padding) alapján a további feldolgozás figyelmen kívül hagyja őket
     padded = pad_sequence(embeddings, batch_first=True, padding_value=0.0)
     max_rows = padded.shape[1]
     # így a  további feldolgozás szükségessé válik a beágyazásokhoz is külön maszkot készíteni
     mask = (torch.arange(max_rows)[None, :] < lengths[:, None]).long()
     return padded, mask
+
+def pool_rows(embedding: torch.Tensor, pooling_len: int, pooling: str) -> torch.Tensor:
+    """
+    Pool every pooling_len consecutive rows of one item: (n_rows, dim) -> (ceil(n_rows / pooling_len), dim).
+
+    The last block may have fewer than pooling_len rows; it is pooled over its own rows, without padding.
+    E.g. with pooling_len=5: (100, dim) -> (20, dim), (101, dim) -> (21, dim) where the last row pools 1 row.
+    """
+    n_rows, dim = embedding.shape
+    n_full = (n_rows // pooling_len) * pooling_len       # rows that fill complete blocks
+    parts = []
+
+    if n_full > 0:
+        full = embedding[:n_full].reshape(-1, pooling_len, dim)                      # (n_full_blocks, pooling_len, dim)
+        parts.append(full.mean(dim=1) if pooling == "mean" else full.sum(dim=1))     # (n_full_blocks, dim)
+
+    if n_full < n_rows:
+        rest = embedding[n_full:]                                                     # (n_rest_rows, dim), < pooling_len rows
+        parts.append((rest.mean(dim=0) if pooling == "mean" else rest.sum(dim=0)).unsqueeze(0))   # (1, dim)
+
+    return torch.cat(parts, dim=0) if parts else embedding.new_zeros(0, dim)
 

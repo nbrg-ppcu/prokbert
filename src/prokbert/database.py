@@ -28,8 +28,7 @@ from prokbert.constants import RC_TABLE, FORWARD, REVERSE
 logger = logging.getLogger(__name__)
 
 
-# TODO should be renamed the SequenceDatabase, also rename the file to database.py
-class SequenceDataset(object):
+class SequenceDatabase(object):
     def __init__(self) -> None:
         self.sequence: Sequence | np.ndarray = ""
         self.metadata: list[ContigMetaData] = []
@@ -47,8 +46,10 @@ class SequenceDataset(object):
         t0 = time.perf_counter()
 
         contigs = helper.load_file(file_path)
+        print(f"Loaded {len(contigs)} contigs from {file_path}.")
 
         data = [self._create_contig(contig) if isinstance(contig, SeqRecord) else contig for contig in contigs]
+        print(f"Converted {len(data)} contigs to Contig format.")
 
         if utils.profiling_enabled():
             seconds = time.perf_counter() - t0
@@ -84,6 +85,7 @@ class SequenceDataset(object):
         t0 = time.perf_counter()
 
         dataset = self.load_contigs(file_paths)
+        print("hello there")
 
         offset = 0
         sequences = []
@@ -96,7 +98,8 @@ class SequenceDataset(object):
                 contig_id = record["contig_id"],
                 sequence_id = i,
                 coordinate = (offset, end),
-                orientation = record["orientation"],
+                # orientation = record["orientation"],
+                orientation = record.get("orientation", FORWARD),
                 description = record.get("description"),
                 label = record.get("label"),
             ))
@@ -229,8 +232,7 @@ class SequenceDataset(object):
         return self.sequence[start:end]
 
 
-# TODO should be renamed the EmbeddingDatabase, also rename the file to database.py
-class EmbeddingDataset(object):
+class EmbeddingDatabase(object):
     def __init__(self, sequence_dataset, config_path, embedding_file, seq_tokens_file) -> None:
         super().__init__()
         self.sequence_dataset = sequence_dataset
@@ -329,7 +331,7 @@ class EmbeddingDataset(object):
 
     def get_embedding_from_sequence_id(self, sequence_id: int) -> torch.Tensor:
         """all pooled embedding rows of one contig."""
-        offset = int(self.row_offsets[sequence_id]) 
+        offset = int(self.row_offsets[sequence_id])
         n_rows = int(self.seq_rows[sequence_id])
         return self.embedding[offset : offset + n_rows]
 

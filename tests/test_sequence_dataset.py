@@ -17,7 +17,7 @@ import torch
 import yaml
 
 from prokbert.constants import REVERSE, FORWARD
-from prokbert.sequence_dataset import EmbeddingDataset, SequenceDataset
+from prokbert.database import EmbeddingDatabase, SequenceDatabase
 
 
 DATA_PATH = str(pathlib.Path(__file__).parent / "data" / "extremophiles_mini.fasta")
@@ -39,8 +39,8 @@ TOTAL_LENGTH = 115
 # --------------------------------------------------------------------------- #
 
 @pytest.fixture
-def seq_ds() -> SequenceDataset:
-    ds = SequenceDataset()
+def seq_ds() -> SequenceDatabase:
+    ds = SequenceDatabase()
     ds.create_dataset([DATA_PATH])
     return ds
 
@@ -71,10 +71,10 @@ def _write_index_embedding(path: pathlib.Path, n_rows: int, dim: int = 4) -> str
 
 
 @pytest.fixture
-def emb_ds(seq_ds, tmp_path) -> EmbeddingDataset:
+def emb_ds(seq_ds, tmp_path) -> EmbeddingDatabase:
     """kmer=6, shift=2, pooling_length=5, no special tokens -> 55 tokens, 11 pooled rows."""
-    n_tokens = EmbeddingDataset.calculate_lca_num_tokens(TOTAL_LENGTH, 6, 2, special_tokens=0)
-    return EmbeddingDataset(
+    n_tokens = EmbeddingDatabase.calculate_lca_num_tokens(TOTAL_LENGTH, 6, 2, special_tokens=0)
+    return EmbeddingDatabase(
         sequence_dataset=seq_ds,
         config_path=_write_config(tmp_path, pooling_length=5, special_tokens=[]),
         embedding_file=_write_index_embedding(tmp_path, n_tokens // 5),
@@ -90,7 +90,7 @@ def _rows(embedding: torch.Tensor) -> list:
 # --------------------------------------------------------------------------- #
 
 def test_load_contig_reads_all_records():
-    contigs = SequenceDataset().load_contig(DATA_PATH)
+    contigs = SequenceDatabase().load_contig(DATA_PATH)
 
     assert [c["contig_id"] for c in contigs] == CONTIG_IDS
     assert [c["sequence"] for c in contigs] == SEQUENCES
@@ -98,17 +98,17 @@ def test_load_contig_reads_all_records():
 
 
 def test_load_contig_uppercases_sequence():
-    contigs = SequenceDataset().load_contig(DATA_PATH)
+    contigs = SequenceDatabase().load_contig(DATA_PATH)
     assert contigs[3]["sequence"] == "ACGTNACGTNGGATCCTTAAA"
 
 
 def test_load_contig_keeps_description():
-    contigs = SequenceDataset().load_contig(DATA_PATH)
+    contigs = SequenceDatabase().load_contig(DATA_PATH)
     assert contigs[0]["description"] == "OM913597.1 Aeromonas phage vB_AspA_Bolek, synthetic genome"
 
 
 def test_load_contigs_concatenates_files():
-    contigs = SequenceDataset().load_contigs([DATA_PATH, DATA_PATH])
+    contigs = SequenceDatabase().load_contigs([DATA_PATH, DATA_PATH])
     assert [c["contig_id"] for c in contigs] == CONTIG_IDS * 2
 
 
@@ -141,7 +141,7 @@ def test_create_dataset_slices_give_back_contigs(seq_ds):
 
 
 def test_create_dataset_sequence_ids_unique_across_files():
-    ds = SequenceDataset()
+    ds = SequenceDatabase()
     ds.create_dataset([DATA_PATH, DATA_PATH])
 
     assert [m["sequence_id"] for m in ds.metadata] == list(range(10))
@@ -150,7 +150,7 @@ def test_create_dataset_sequence_ids_unique_across_files():
 
 
 def test_create_dataset_twice_replaces_previous_data():
-    ds = SequenceDataset()
+    ds = SequenceDatabase()
     ds.create_dataset([DATA_PATH, DATA_PATH])
     ds.create_dataset([DATA_PATH])
 
@@ -165,7 +165,7 @@ def test_create_dataset_twice_replaces_previous_data():
 
 def test_save_creates_files(tmp_path):
     save_dir = tmp_path / "dataset"
-    SequenceDataset().create_dataset([DATA_PATH], save_dir=str(save_dir))
+    SequenceDatabase().create_dataset([DATA_PATH], save_dir=str(save_dir))
 
     assert (save_dir / "sequence.npy").exists()
     assert (save_dir / "metadata.json").exists()
@@ -173,10 +173,10 @@ def test_save_creates_files(tmp_path):
 
 def test_save_and_load_roundtrip_as_string(tmp_path):
     save_dir = str(tmp_path / "dataset")
-    original = SequenceDataset()
+    original = SequenceDatabase()
     original.create_dataset([DATA_PATH], save_dir=save_dir)
 
-    loaded = SequenceDataset()
+    loaded = SequenceDatabase()
     loaded.load_dataset(save_dir, to_string=True)
 
     assert loaded.sequence == original.sequence
@@ -189,10 +189,10 @@ def test_save_and_load_roundtrip_as_string(tmp_path):
 
 def test_save_and_load_roundtrip_as_array(tmp_path):
     save_dir = str(tmp_path / "dataset")
-    original = SequenceDataset()
+    original = SequenceDatabase()
     original.create_dataset([DATA_PATH], save_dir=save_dir)
 
-    loaded = SequenceDataset()
+    loaded = SequenceDatabase()
     loaded.load_dataset(save_dir, to_string=False)
 
     assert len(loaded.sequence) == TOTAL_LENGTH
@@ -201,9 +201,9 @@ def test_save_and_load_roundtrip_as_array(tmp_path):
 
 def test_loaded_dataset_supports_queries(tmp_path):
     save_dir = str(tmp_path / "dataset")
-    SequenceDataset().create_dataset([DATA_PATH], save_dir=save_dir)
+    SequenceDatabase().create_dataset([DATA_PATH], save_dir=save_dir)
 
-    loaded = SequenceDataset()
+    loaded = SequenceDatabase()
     loaded.load_dataset(save_dir, to_string=True)
 
     assert tuple(loaded.get_coordinates_from_sequence_id(1)) == (30, 54)
@@ -251,7 +251,7 @@ def test_get_sequence_id_from_start_coordinate_out_of_range(seq_ds, position):
 
 def test_get_sequence_id_from_start_coordinate_empty_dataset():
     with pytest.raises(ValueError):
-        SequenceDataset().get_sequence_id_from_start_coordinate(0)
+        SequenceDatabase().get_sequence_id_from_start_coordinate(0)
 
 
 def test_every_position_maps_to_its_contig(seq_ds):
@@ -369,7 +369,7 @@ def test_get_sequence_from_metadata_invalid_sequence_id(seq_ds):
     ],
 )
 def test_calculate_lca_num_tokens(seq_len, kmer, shift, special_tokens, expected):
-    assert EmbeddingDataset.calculate_lca_num_tokens(seq_len, kmer, shift, special_tokens) == expected
+    assert EmbeddingDatabase.calculate_lca_num_tokens(seq_len, kmer, shift, special_tokens) == expected
 
 
 def test_calculate_lca_num_tokens_matches_explicit_kmers():
@@ -377,7 +377,7 @@ def test_calculate_lca_num_tokens_matches_explicit_kmers():
     for kmer in range(1, 8):
         for shift in range(1, 4):
             kmers = [sequence[i:i + kmer] for i in range(0, len(sequence) - kmer + 1, shift)]
-            n_tokens = EmbeddingDataset.calculate_lca_num_tokens(
+            n_tokens = EmbeddingDatabase.calculate_lca_num_tokens(
                 len(sequence), kmer, shift, special_tokens=0
             )
             assert n_tokens == len(kmers), f"kmer={kmer}, shift={shift}"
@@ -408,7 +408,7 @@ def test_embedding_dataset_missing_config_key_raises(seq_ds, tmp_path):
         yaml.safe_dump({"kmer": 6, "shift": 2}, f)
 
     with pytest.raises(KeyError):
-        EmbeddingDataset(seq_ds, str(config_path), _write_index_embedding(tmp_path, 11))
+        EmbeddingDatabase(seq_ds, str(config_path), _write_index_embedding(tmp_path, 11))
 
 
 @pytest.mark.parametrize(
@@ -473,8 +473,8 @@ def test_get_embedding_invalid_sequence_id(emb_ds):
 def test_get_embedding_with_special_tokens_and_no_pooling(seq_ds, tmp_path):
     # with [CLS] and [SEP] every token index is shifted by 2, and without pooling
     # (pooling_length=1) there is one row per token
-    n_tokens = EmbeddingDataset.calculate_lca_num_tokens(TOTAL_LENGTH, 6, 2, special_tokens=2)
-    emb_ds = EmbeddingDataset(
+    n_tokens = EmbeddingDatabase.calculate_lca_num_tokens(TOTAL_LENGTH, 6, 2, special_tokens=2)
+    emb_ds = EmbeddingDatabase(
         sequence_dataset=seq_ds,
         config_path=_write_config(tmp_path, pooling_length=1, special_tokens=["[CLS]", "[SEP]"]),
         embedding_file=_write_index_embedding(tmp_path, n_tokens),

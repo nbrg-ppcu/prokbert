@@ -12,26 +12,31 @@ import numpy as np
 from tqdm import tqdm
 
 from prokbert.tokenizer import LCATokenizer
-from prokbert.sequence_dataset import SequenceDataset
+from prokbert.database import SequenceDatabase
 
 
-__doc__ = """
+__doc__ = r"""
 Compute pooled embeddings of every contig with a ProkBERT model and save them for EmbeddingDataset.
 
-Every contig is tokenized, split into windows of --seq-len tokens (the rest goes into one shorter
-window, without padding), run through the model, and mean/sum pooled in blocks of --pooling-len tokens.
-Each contig is first saved to its own emb_{sequence_id}.pt file; the concat step joins them, in
-sequence_id order, into embeddings_forward.pt and seq_tokens.pt, and writes config.yaml.
+Each contig is tokenized and split into windows of --seq-len tokens; the leftover tokens go into one
+shorter window, without padding. The windows are run through the model, and the token embeddings are
+pooled (mean or sum) in blocks of --pooling-len tokens. Each contig is first saved to its own
+emb_{sequence_id}.pt file. The concat step joins these files, in sequence_id order, into
+embeddings_forward.pt and seq_tokens.pt, deletes the emb_*.pt files, and writes config.yaml.
 
 The contigs can be split across several processes (e.g. one per GPU) with --shard-id and --num-shards.
-Each shard only writes its own emb_*.pt files; run the concat step once, after all shards finished,
-with --concat-only. With --num-shards 1 (the default) the concat step runs automatically at the end.
+Each shard writes only its own emb_*.pt files. After all shards have finished, run the concat step once
+with --concat-only, using the same --model, --output-dir, --kmer, --shift, --pooling-strategy and
+--pooling-len as the shard runs, since these are written to config.yaml. With --num-shards 1 (the
+default), the concat step runs automatically at the end.
+
+The script assumes that --batch-size windows of one contig fit into GPU memory at once.
 
 Example (one GPU):
 python3 scripts/embed_dataset.py \
     --model neuralbioinfo/prokbert-mini-long \
-    --input-dir /home/osvathm/prokbert/examples/outputs/toy_example/ \
-    --output-dir /home/osvathm/prokbert/examples/outputs/toy_example \
+    --input-dir examples/outputs/toy_example \
+    --output-dir examples/outputs/toy_example \
     --seq-len 2000 \
     --pooling-strategy mean \
     --pooling-len 2 \
@@ -43,48 +48,45 @@ Example (8 shards, then concat):
 python3 scripts/embed_dataset.py ... --shard-id 0 --num-shards 8    # ... up to --shard-id 7
 python3 scripts/embed_dataset.py ... --concat-only
 
-A szkript feltételezi, hogy egy contig --batch-size darab ablaka egyszerre befér a GPU memóriájába.
-
-
-Slurm command:
-srun --job-name=ncbi-db-test-create-embedding-with-mini-long \
+Slurm example (one shard per GPU task):
+srun --job-name=create-embeddings \
      --nodes=1 \
-     --nodelist=bolka \
-     --ntasks=8 \
+     --ntasks=6 \
      --gpus-per-task=1 \
      --cpus-per-task=4 \
-     --mem=200G \
-     --time=7-00:00:00 \
-     --partition=hi \
-     --output=/home/osvathm/prokbert/logs-embeds/%x_%j_%t.out \
-     --error=/home/osvathm/prokbert/logs-embeds/%x_%j_%t.err \
-     bash -c 'python3 /home/osvathm/prokbert/scripts/embed_dataset.py \
-        --model /home/datasets/experiments/experiment-bioinfo/models/prokbert-mini-long \
-        --input-dir /home/datasets/experiments/experiment-bioinfo/fine-tuning/ncbi-test-sequence-dataset-for-madin-categorical-gram-stain \
-        --output-dir /home/datasets/experiments/experiment-bioinfo/fine-tuning/ncbi-test-sequence-dataset-for-madin-categorical-gram-stain \
+     --mem=300G \
+     --time=5-00:00:00 \
+     --partition=<partition> \
+     --output=<log-dir>/%x_%j_%t.out \
+     --error=<log-dir>/%x_%j_%t.err \
+     bash -c 'python3 scripts/embed_dataset.py \
+        --model <models-dir>/mini2-c \
+        --input-dir <data-dir>/sequence-dataset \
+        --output-dir <data-dir>/embedding-dataset-mini2-c \
         --seq-len 2000 \
         --pooling-len 100 \
         --batch-size 32 \
-        --kmer 6 \
-        --shift 2 \
+        --kmer 1 \
+        --shift 1 \
         --pooling-strategy mean \
         --shard-id $SLURM_PROCID \
-        --num-shards $SLURM_NTASKS' \
-        --verbose
+        --num-shards $SLURM_NTASKS \
+        --verbose'
 
-Ha minden shard végzett, egyszer futtasd az összefűzést. Ehhez nem kell GPU:
-srun --job-name=ncbi-db-test-concat-embeddings \
+Once all shards have finished, run the concat step once (no GPU needed):
+
+srun --job-name=concat-embeddings \
      --nodes=1 \
      --cpus-per-task=4 \
      --mem=150G \
-     --partition=hi \
-     --output=/home/osvathm/prokbert/logs-embeds/%x_%j_%t.out \
-     --error=/home/osvathm/prokbert/logs-embeds/%x_%j_%t.err \
-     python3 /home/osvathm/prokbert/scripts/embed_dataset.py \
-        --model /home/datasets/experiments/experiment-bioinfo/models/prokbert-mini-long \
-        --input-dir /home/datasets/experiments/experiment-bioinfo/fine-tuning/ncbi-test-sequence-dataset-for-madin-categorical-gram-stain \
-        --output-dir /home/datasets/experiments/experiment-bioinfo/fine-tuning/ncbi-test-sequence-dataset-for-madin-categorical-gram-stain \
-        --seq-len 2000 --pooling-len 100 --kmer 6 --shift 2 --pooling-strategy mean \
+     --partition=<partition> \
+     --output=<log-dir>/%x_%j_%t.out \
+     --error=<log-dir>/%x_%j_%t.err \
+     python3 scripts/embed_dataset.py \
+        --model <models-dir>/mini2-c \
+        --input-dir <data-dir>/sequence-dataset \
+        --output-dir <data-dir>/embedding-dataset-mini2-c \
+        --seq-len 2000 --pooling-len 100 --kmer 1 --shift 1 --pooling-strategy mean \
         --concat-only
 """
 
@@ -259,7 +261,7 @@ def contig_path(args, sequence_id) -> str:
     return os.path.join(args.output_dir, f"emb_{sequence_id}.pt")
 
 
-def process(sequence_dataset: SequenceDataset, model, tokenizer, args) -> None:
+def process(sequence_dataset: SequenceDatabase, model, tokenizer, args) -> None:
 
     os.makedirs(args.output_dir, exist_ok=True)
 
@@ -322,7 +324,7 @@ def process(sequence_dataset: SequenceDataset, model, tokenizer, args) -> None:
     if args.verbose: print(f"Shard {args.shard_id} finished in {time.perf_counter() - t0:.4f} seconds.")
 
 
-def concat_embeddings(sequence_dataset: SequenceDataset, args) -> None:
+def concat_embeddings(sequence_dataset: SequenceDatabase, args) -> None:
     """Join the emb_*.pt files of all shards, in sequence_id order, and rebuild seq_tokens from them."""
     files = glob.glob(os.path.join(args.output_dir, "emb_*.pt"))
     # sort numerically by sequence_id, not alphabetically ("emb_10" must come after "emb_2")
@@ -369,7 +371,7 @@ def main() -> None:
 
     args = parse_args()
 
-    sequence_dataset = SequenceDataset()
+    sequence_dataset = SequenceDatabase()
     sequence_dataset.load_dataset(args.input_dir, to_string=False)
 
     if not args.concat_only:

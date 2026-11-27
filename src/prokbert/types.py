@@ -24,9 +24,9 @@ class Contig(TypedDict):
     genome_id: NotRequired[GenomeId]
     contig_id: ContigId
     sequence: str
-    orientation: Orientation
+    orientation: NotRequired[Orientation]
     description: NotRequired[Description]
-    label: NotRequired[int | None]
+    label: NotRequired[int | float | None]
 
 class ContigMetaData(TypedDict):
     """Metadata for a contig inside the concatenated sequence."""
@@ -37,7 +37,7 @@ class ContigMetaData(TypedDict):
     coordinate: SequenceInterval
     orientation: Orientation
     description: NotRequired[Description]
-    label: NotRequired[int | None]
+    label: NotRequired[int | float | None]
 
 
 class Segment(TypedDict):
@@ -51,7 +51,7 @@ class Segment(TypedDict):
     orientation: Orientation
     sequence: NotRequired[str]
     embedding: NotRequired[torch.Tensor]
-    label: NotRequired[int | None]
+    label: NotRequired[int | float | None]
 
 
 class Genome(TypedDict):
@@ -59,4 +59,4 @@ class Genome(TypedDict):
     contig_ids: list[ContigId]
     sequence: NotRequired[str]
     embedding: NotRequired[torch.Tensor]
-    label: NotRequired[int | None]
+    label: NotRequired[int | float | None]
